@@ -53,8 +53,9 @@ player chat ─► ConversationManager ─► LLM (local llama.cpp / any OpenAI-
 | **Command reliability** | Robust JSON parsing (strips code fences, extracts the outermost object, lenient reader), raw-response logging on parse failure, and a graceful fallback that speaks a non-JSON reply instead of dropping the turn. |
 | **Equip** | Extended `equip` to wield **tools/weapons in the main hand** (new `HoldItemTask`), not just armor; the agent's held item is now part of its perceived status so the LLM can confirm equips. |
 | **Frontier A/B testing** | Config lever to point at a hosted API (e.g. xAI/Grok) via a bearer API key (env-var preferred), while keeping Player2 cloud coupling off. |
-| **Cost guardrail** | `llm.maxRequests` — a hard per-session request cap that fails fast before any HTTP call, so a runaway loop can't rack up spend on a paid endpoint. |
-| **Recall** | `/companion come` (recall to owner, interrupts the current task) and `/companion where` (report coordinates + distance) for a companion that wandered off. |
+| **Spend visibility** | Token usage is accumulated from the response `usage` object and reported to the owner (chat + log) every `llm.usageReportEveryTokens` tokens — informational, never blocking. `llm.maxRequests` remains as an opt-in *hard* per-session cap (default off). |
+| **Chat gating** | `behavior.triggerPrefix` (blank = answer all nearby chat) and `behavior.thinkThrottleSeconds` (minimum gap between LLM turns; queued, not dropped) — both previously config-only, now actually wired. |
+| **Recall & cleanup** | `/companion come` (recall to owner, interrupts the current task), `/companion where` (coordinates + distance), and `/companion despawn` (remove a stuck companion, and drop its conversation state so the manager doesn't leak). |
 | **Voice output** | Repointed the engine's TTS path from Player2 cloud to a **local Kokoro** OpenAI-compatible endpoint. Audio is still fetched and played **client-side**; only the `message` field is ever voiced. See **[tts/](tts/)**. |
 
 ### Licensing
@@ -152,12 +153,70 @@ command discipline — treat it as a floor, not a recommendation; a **much more 
 
 ---
 
-## Configuration (sysadmin-editable)
+## Configuration
 
-A config file (default practical, override freely) — see **[docs/config.example.json](docs/config.example.json)**:
-`companion.name`, `companion.skin` (username → Mojang skin, or file), `companion.description`,
-`companion.systemPrompt` (defaults sensibly), and `llm.endpoint/model/temperature/timeout`,
-`behavior.triggerPrefix/thinkThrottle`.
+The mod writes `config/aicompanion.json` inside your Minecraft instance folder on first launch, with
+comments (`_help` keys) explaining every setting. Full schema:
+**[docs/config.example.json](docs/config.example.json)**. Edit it and restart the game.
+
+Sections: `companion.{name,description,systemPrompt,skin}` · `llm.{endpoint,model,…}` ·
+`tts.{enabled,endpoint,voice,…}` · `behavior.{triggerPrefix,thinkThrottleSeconds}`.
+
+### Choosing a brain
+
+Only the `llm` block differs between a local model and a hosted one.
+
+**Local — llama.cpp (free, private, default):**
+
+```json
+"llm": {
+  "endpoint": "http://localhost:3030",
+  "model": "local",
+  "temperature": 0.7,
+  "maxTokens": 200,
+  "apiKey": ""
+}
+```
+
+Start the server yourself (see [The LLM backend](#the-llm-backend) above). `model` is ignored by
+llama.cpp — it serves whatever GGUF you loaded — and `apiKey` stays blank because there's no auth.
+
+**Hosted — xAI / Grok (paid, much more capable):**
+
+```json
+"llm": {
+  "endpoint": "https://api.x.ai",
+  "model": "grok-4-1-fast-non-reasoning",
+  "temperature": 0.7,
+  "maxTokens": 200,
+  "apiKey": "xai-your-key-here",
+  "usageReportEveryTokens": 100000
+}
+```
+
+Get a key from <https://console.x.ai>. Three things that will bite you if you skip them:
+
+- **`endpoint` is the base URL only** — no trailing slash, no `/v1`. The mod appends
+  `/v1/chat/completions` itself, so `https://api.x.ai/v1/` becomes a 404.
+- **Use a *non-reasoning* model.** Reasoning models are slower and bill you for thinking tokens the
+  companion never uses. `grok-4-1-fast-non-reasoning` is the sane default.
+- **Prefer the environment variable to the config file** for the key —
+  set `AICOMPANION_LLM_APIKEY` and leave `apiKey` blank, and the secret never touches disk. The env
+  var wins when both are set.
+
+Any other OpenAI-compatible provider works the same way: base URL, model id, key.
+
+### Keeping an eye on cost
+
+On a paid endpoint the companion reports its running token usage to chat and the log every
+`llm.usageReportEveryTokens` tokens (default `100000`; `0` silences it). Two optional brakes, both
+off by default:
+
+| Setting | Effect |
+|---|---|
+| `behavior.triggerPrefix` | Set to e.g. `"@"` and only messages starting with it reach the model — ambient chat becomes free. Blank = it answers everything nearby. |
+| `behavior.thinkThrottleSeconds` | Minimum gap between LLM turns. Messages arriving inside the window are queued and folded into the next turn, not dropped. |
+| `llm.maxRequests` | Hard per-session request cap. Once hit the companion stops responding until restart — a stop, not a throttle. `0` = unlimited. |
 
 ---
 
@@ -207,14 +266,14 @@ and defines the entity/spawn/config — exactly how Player2NPC consumes PlayerEn
 ## Building
 
 **JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`. The jar version
-comes from `engine/gradle.properties` (currently **1.0.11**); adjust the filename if you bump it.
+comes from `engine/gradle.properties` (currently **1.0.12**); adjust the filename if you bump it.
 
 ```bash
 # macOS / Linux
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17          # or your JDK 17 path
 
 # 1. Build the engine (our PlayerEngine fork) and stage its jar for the consumer
-cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.11.jar ../aicompanion/libs/ && cd ..
+cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.12.jar ../aicompanion/libs/ && cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion && ./gradlew build      # → build/libs/*.jar
@@ -224,7 +283,7 @@ cd aicompanion && ./gradlew build      # → build/libs/*.jar
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # adjust to your JDK 17 install
 
 # 1. Build the engine fork and stage its jar for the consumer
-cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.11.jar ..\aicompanion\libs\; cd ..
+cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.12.jar ..\aicompanion\libs\; cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar
@@ -234,7 +293,20 @@ cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar
 > defeats Loom's flatDir remap cache, which will otherwise silently reuse the old engine.
 
 ## Status
-Phases 0–3 are done: the companion is spawned, rendered (with skins and held items), and driven by a
-local llama.cpp brain through a hardened prompt with robust JSON command parsing. A frontier A/B lever
-and a per-session request cap are in place for paid-endpoint testing. Voice output (local Kokoro TTS)
-is wired — see **[tts/](tts/)**.
+
+**Alpha — singleplayer and trusted LAN only.** The companion spawns, renders (with skins and held
+items), and is driven by a local llama.cpp brain through a hardened prompt with robust JSON command
+parsing. A frontier A/B lever, running token-usage reporting, an opt-in request cap, and chat gating
+(`behavior.triggerPrefix` / `thinkThrottleSeconds`) are in place for paid endpoints. Voice output
+(local Kokoro TTS) is wired — see **[tts/](tts/)**.
+
+**Not ready for a public multiplayer server**, and deliberately so:
+
+- The companion is a `LivingEntity`, not a player, so land-claim mods that hook player block-break
+  events can't see it — it could plausibly dig through claimed land.
+- Companion identity is a single server-global config block, so every player would share one persona.
+- The companion's chat lines are broadcast to all players regardless of distance.
+- The request cap is a process-wide counter, not per-player.
+
+These are the 1.0 milestone. On a dedicated server `/companion` is op-gated, so nothing surprises you
+in the meantime.

@@ -1,6 +1,7 @@
 package com.neovetta.aicompanion;
 
 import adris.altoclef.AltoClefController;
+import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.tasks.movement.GetToBlockTask;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -39,7 +40,8 @@ public final class CompanionCommands {
                                         .executes(ctx -> goTo(ctx.getSource(),
                                                 BlockPosArgumentType.getBlockPos(ctx, "pos")))))
                         .then(CommandManager.literal("come").executes(ctx -> come(ctx.getSource())))
-                        .then(CommandManager.literal("where").executes(ctx -> where(ctx.getSource())))));
+                        .then(CommandManager.literal("where").executes(ctx -> where(ctx.getSource())))
+                        .then(CommandManager.literal("despawn").executes(ctx -> despawn(ctx.getSource())))));
     }
 
     /**
@@ -87,6 +89,26 @@ public final class CompanionCommands {
             companion.goTo(target);
         }
         source.sendFeedback(() -> Text.literal("Companion coming to " + target.toShortString()), false);
+        return 1;
+    }
+
+    /**
+     * Remove the companion from the world. Without this a companion that gets stuck (wedged in
+     * terrain, or pathing somewhere unreachable) can only be cleared with {@code /kill}, which needs
+     * cheats and takes the wrong entity as easily as the right one.
+     */
+    private static int despawn(ServerCommandSource source) {
+        CompanionEntity companion = findCompanion(source);
+        if (companion == null) {
+            source.sendError(Text.literal("No companion found nearby (it may be in an unloaded area)."));
+            return 0;
+        }
+        // Drop its brain state too — ConversationManager keys on the entity UUID and never cleans up
+        // on its own, so a spawn/despawn cycle would otherwise leak conversation data.
+        ConversationManager.forget(companion.getUuid());
+        companion.discard();
+        source.sendFeedback(() -> Text.literal("Companion despawned."), false);
+        AiCompanion.LOGGER.info("[{}] despawned companion id {}", AiCompanion.MOD_ID, companion.getId());
         return 1;
     }
 

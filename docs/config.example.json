@@ -19,7 +19,8 @@
     "timeoutMs": 90000,
     "useGrammar": false,
     "apiKey": "",
-    "maxRequests": 0
+    "maxRequests": 0,
+    "usageReportEveryTokens": 100000
   },
   "tts": {
     "_help": "Local voice output via Kokoro (see tts/README.md). Start the stack — 'cd tts && docker compose up -d' — then set enabled=true. The MINECRAFT CLIENT fetches the audio from this endpoint (the server only sends it the text), so it must be reachable from the client machine, not just the server. List voices: curl http://localhost:8880/v1/audio/voices. Only the companion's spoken 'message' is voiced — never commands or reasoning. A persona's Character.voiceIds()[0] overrides 'voice'.",
@@ -30,8 +31,9 @@
     "speed": 1.0
   },
   "behavior": {
-    "triggerPrefix": "@",
-    "thinkThrottleSeconds": 3,
+    "_help": "triggerPrefix: when set (e.g. \"@\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank = answers all nearby chat (the singleplayer default). thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit); messages arriving inside the window are queued, not dropped.",
+    "triggerPrefix": "",
+    "thinkThrottleSeconds": 0,
     "cannedFallback": [
       "...",
       "Give me a second.",

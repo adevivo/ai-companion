@@ -53,7 +53,14 @@ public class AgentConversationData {
         if (!enabled || isProcessing || eventQueue.isEmpty()) {
             return 0;
         }
-        return System.nanoTime() - lastProcessTime;
+        long sinceLast = System.nanoTime() - lastProcessTime;
+        // behavior.thinkThrottleSeconds: rate-limit LLM turns. Returning 0 defers rather than drops —
+        // the events stay queued and fold into the next turn once the window passes.
+        double throttle = BehaviorConfig.thinkThrottleSeconds;
+        if (throttle > 0 && lastProcessTime != 0L && sinceLast < (long) (throttle * 1_000_000_000L)) {
+            return 0;
+        }
+        return sinceLast;
     }
 
     // get LLM response and add to conversation history

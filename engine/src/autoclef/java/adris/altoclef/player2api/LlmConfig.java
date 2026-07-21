@@ -72,6 +72,16 @@ public final class LlmConfig {
     public static volatile int maxRequests =
             Integer.parseInt(resolve("aicompanion.llm.maxRequests", "AICOMPANION_LLM_MAXREQUESTS", "0"));
 
+    /**
+     * Report cumulative token usage to the owner every N total tokens ({@code <= 0} = never). Unlike
+     * {@link #maxRequests} this never blocks a call — it just keeps you aware of spend on a paid
+     * endpoint. Counts come from the {@code usage} object OpenAI-compatible servers return (llama.cpp
+     * and xAI both do); if a server omits it, no report is emitted.
+     */
+    public static volatile long usageReportEveryTokens =
+            Long.parseLong(resolve("aicompanion.llm.usageReportEveryTokens",
+                    "AICOMPANION_LLM_USAGEREPORTEVERYTOKENS", "100000"));
+
     private static String resolve(String property, String env, String fallback) {
         String v = System.getProperty(property);
         if (v == null || v.isBlank()) {

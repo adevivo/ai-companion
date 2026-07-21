@@ -46,6 +46,15 @@ processResources {
     filesMatching("fabric.mod.json") { expand "version": project.version }
 }
 
+// LGPL-3.0 requires the license text to travel with the binary, not just the source repo.
+// LGPL-3.0 is drafted as an addendum to GPL-3.0, so both texts must ship.
+tasks.named('jar') {
+    from(projectDir) {
+        include 'LICENSE', 'LICENSE.GPL-3.0.txt'
+        into 'META-INF'
+    }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 17

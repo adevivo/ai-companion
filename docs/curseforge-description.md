@@ -8,7 +8,7 @@
 
 ## Summary (short field)
 
-A self-contained autonomous AI companion for Minecraft, driven by **your own** LLM — it lives in the world, has goals, navigates, gathers, crafts, builds on request, and fights. Runs fully local with llama.cpp, or point it at a hosted frontier model. No data leaves your network unless you choose a cloud endpoint.
+A self-contained autonomous AI companion for Minecraft, driven by **your own** LLM — it lives in the world, has goals, navigates, gathers, crafts, builds on request, and fights. Runs fully local with llama.cpp, or point it at a hosted frontier model. **Singleplayer & LAN** (see notes); no data leaves your network unless you choose a cloud endpoint.
 
 ---
 
@@ -17,6 +17,17 @@ A self-contained autonomous AI companion for Minecraft, driven by **your own** L
 A single dedicated **AI friend** for your Minecraft world — not a static NPC, but an **active participant**. It has objectives, tells friend from threat, **autonomously navigates**, gathers and crafts, **builds structures on request**, and fights alongside you. Its "voice and judgment" come from a large language model that **you** run — a **local llama.cpp** server on your own machine, or any hosted **OpenAI-compatible** API (e.g. xAI/Grok, OpenAI) if you'd rather trade privacy for frontier-model quality.
 
 The LLM decides *what to do and what to say*. The heavy lifting — pathfinding, task execution, world interaction — lives in engine code and **keeps working even if the LLM is offline**.
+
+## ⚠️ Scope — singleplayer and LAN, not public servers
+
+This is an **alpha**, and it is built and tested for **singleplayer** and **Open to LAN** worlds played with people you trust. It is **not ready for a public multiplayer server**, and I'd rather tell you why than let you find out:
+
+- **The companion is not a player, so land-claim and protection mods can't see it.** Claim mods hook player-specific block-break events; a companion is a `LivingEntity` and never fires them. On a protected server it could plausibly dig through claimed land.
+- **One companion identity, server-wide.** Name and persona come from a single server config file, so every player would get the same character.
+- **Replies go to everyone.** The companion's chat lines are sent to all online players regardless of distance.
+- **Cost caps are per-server, not per-player.** One person's conversation spends everyone's budget.
+
+Fixing these properly is the 1.0 milestone. Until then: singleplayer and trusted LAN. On a dedicated server the `/companion` command is op-gated, so it won't surprise you.
 
 ## ⚠️ Requirements — read this first
 
@@ -37,7 +48,7 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 - **Persona & identity** — set the companion's name, description, and personality in config; the persona is injected into a hardened prompt scaffold (it shapes voice, it doesn't get to override safety structure).
 - **Held tools & weapons** — the companion visibly wields tools/weapons in its main hand, and its held item is part of what the LLM "sees," so equips are confirmable.
 - **Reliable command output** — tolerant JSON parsing with graceful fallback: a malformed model reply is spoken as chat instead of dropping the turn.
-- **Cost guardrail** — `llm.maxRequests` sets a hard per-session cap that fails fast *before* any network call, protecting you on paid endpoints.
+- **Know what you're spending** — the companion reports its running token usage (in / out / total) to chat and the log every 100k tokens, so a paid endpoint never surprises you. Optional hard caps and a chat trigger prefix are there if you want them; both are off by default.
 - **Recall commands** — call a wandered-off companion back, or ask where it is.
 - **Optional local voice** — route spoken lines to a local Kokoro TTS endpoint; only the companion's spoken `message` is ever voiced, never its reasoning or commands.
 
@@ -49,6 +60,7 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 | `/companion goto <x> <y> <z>` | Send it to specific coordinates. |
 | `/companion come` | Recall it to you, interrupting its current task. |
 | `/companion where` | Report its coordinates and distance from you. |
+| `/companion despawn` | Remove it from the world (e.g. if it gets stuck). |
 
 Beyond commands, just **talk to it in chat** — that's the primary way you direct it.
 
@@ -58,7 +70,25 @@ On first launch the mod writes `config/aicompanion.json` with documented default
 
 - **Identity:** companion `name`, `description`, `persona`.
 - **LLM:** `endpoint` (default `http://localhost:3030`), `model`, `temperature`, `maxTokens`, request `timeout`.
-- **Cloud/frontier:** set `endpoint` to a hosted API and supply the key via the **`AICOMPANION_LLM_APIKEY` environment variable** (preferred) or an `apiKey` field. Set `maxRequests` as a spend cap.
+- **Cloud/frontier:** set `endpoint` to a hosted API and supply the key via the **`AICOMPANION_LLM_APIKEY` environment variable** (preferred) or the `apiKey` field. Worked example for xAI/Grok:
+
+```json
+"llm": {
+  "endpoint": "https://api.x.ai",
+  "model": "grok-4-1-fast-non-reasoning",
+  "temperature": 0.7,
+  "maxTokens": 200,
+  "apiKey": "xai-your-key-here"
+}
+```
+
+> `endpoint` is the **base URL only** — no trailing slash and no `/v1`; the mod appends
+> `/v1/chat/completions` itself. And pick a **non-reasoning** model: reasoning models are slower and
+> bill you for thinking tokens the companion never uses. Any other OpenAI-compatible provider works
+> the same way.
+
+- **Spend awareness:** `llm.usageReportEveryTokens` (default `100000`) prints a running token total to chat; `0` silences it. `llm.maxRequests` is a separate, opt-in *hard* cap that makes the companion stop responding once hit — leave it at `0` unless you want a hard stop.
+- **Chat gating:** `behavior.triggerPrefix` (blank by default) makes the companion answer only messages starting with that prefix, so ambient chat costs nothing. `behavior.thinkThrottleSeconds` sets a minimum gap between LLM turns — messages inside the window are queued, not dropped.
 - **Voice (optional):** enable TTS and point it at a local Kokoro endpoint (client-side playback).
 
 ## What's bundled

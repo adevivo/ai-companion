@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion;
 
+import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Prompts;
@@ -114,10 +115,19 @@ public final class CompanionConfig {
             LlmConfig.timeoutMs = intVal(llm, "timeoutMs", LlmConfig.timeoutMs);
             LlmConfig.useGrammar = bool(llm, "useGrammar", LlmConfig.useGrammar);
             LlmConfig.maxRequests = intVal(llm, "maxRequests", LlmConfig.maxRequests);
+            LlmConfig.usageReportEveryTokens =
+                    longVal(llm, "usageReportEveryTokens", LlmConfig.usageReportEveryTokens);
             // API key: env/sysprop wins (so the secret need not live on disk); config is the fallback.
             if (LlmConfig.apiKey == null || LlmConfig.apiKey.isBlank()) {
                 LlmConfig.apiKey = str(llm, "apiKey", "");
             }
+        }
+
+        JsonObject behavior = obj(root, "behavior");
+        if (behavior != null) {
+            BehaviorConfig.triggerPrefix = str(behavior, "triggerPrefix", BehaviorConfig.triggerPrefix);
+            BehaviorConfig.thinkThrottleSeconds =
+                    dbl(behavior, "thinkThrottleSeconds", BehaviorConfig.thinkThrottleSeconds);
         }
 
         JsonObject tts = obj(root, "tts");
@@ -160,6 +170,14 @@ public final class CompanionConfig {
         }
     }
 
+    private static long longVal(JsonObject o, String key, long def) {
+        try {
+            return o.has(key) && !o.get(key).isJsonNull() ? o.get(key).getAsLong() : def;
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
     private static boolean bool(JsonObject o, String key, boolean def) {
         try {
             return o.has(key) && !o.get(key).isJsonNull() ? o.get(key).getAsBoolean() : def;
@@ -184,8 +202,12 @@ public final class CompanionConfig {
                 "maxTokens": 200,
                 "timeoutMs": 90000,
                 "useGrammar": false,
+                "apiKey": "",
                 "maxRequests": 0,
-                "_frontier": "To A/B a hosted OpenAI-compatible model (e.g. xAI/Grok): set endpoint (e.g. https://api.x.ai), model (e.g. a non-reasoning grok id), and provide the key via the AICOMPANION_LLM_APIKEY env var (preferred) or an 'apiKey' field here. Set maxRequests (e.g. 50) as a spend cap."
+                "usageReportEveryTokens": 100000,
+                "_usage": "usageReportEveryTokens: print a running token-usage total to chat and the log every N tokens (0 = never). Purely informational — it never blocks a reply. maxRequests is the opposite: a hard per-session request cap that makes the companion stop responding once hit (0 = unlimited, the default). Leave maxRequests at 0 unless you are on a paid endpoint and want a hard stop.",
+                "_apiKey": "Leave blank for a local llama.cpp server (no auth). For a paid hosted API, paste the key here — or better, leave this blank and set the AICOMPANION_LLM_APIKEY environment variable so the secret never lands on disk. The env var wins if both are set.",
+                "_frontier": "To use a hosted OpenAI-compatible model instead of a local one, e.g. xAI/Grok: { \\"endpoint\\": \\"https://api.x.ai\\", \\"model\\": \\"grok-4-1-fast-non-reasoning\\", \\"apiKey\\": \\"xai-...\\" }. NOTE: endpoint is the base URL with NO trailing slash and NO /v1 — the mod appends /v1/chat/completions itself. Pick a non-reasoning model: reasoning models are slower and burn tokens on thinking the companion never uses."
               },
               "tts": {
                 "enabled": false,
@@ -196,8 +218,9 @@ public final class CompanionConfig {
                 "_help": "Local voice output via Kokoro. Start the stack first: 'cd tts && docker compose up -d', then set enabled=true. The MINECRAFT CLIENT calls this endpoint (the server only sends it the text), so it must be reachable from the client machine. Voices: curl http://localhost:8880/v1/audio/voices. Only the companion's spoken 'message' is voiced — never commands or reasoning."
               },
               "behavior": {
-                "triggerPrefix": "@",
-                "thinkThrottleSeconds": 3
+                "triggerPrefix": "",
+                "thinkThrottleSeconds": 0,
+                "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn."
               }
             }
             """;

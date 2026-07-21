@@ -10,6 +10,7 @@ import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import adris.altoclef.player2api.AgentSideEffects;
+import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.Event;
 import adris.altoclef.player2api.LLMCompleter;
@@ -46,7 +47,13 @@ public class ConversationManager {
             // unused but need to keep this so subscribes to events
             // TODO: figure out what to do w. fabric here:
             ServerMessageEvents.CHAT_MESSAGE.register((ChatMessage) (evt, senderEntity, params) -> {
-                String message = evt.signedContent();
+                // behavior.triggerPrefix: when set, only prefixed messages reach the brain (and the
+                // prefix is stripped). Blank = respond to all nearby chat. This is the cheapest cost
+                // control there is — an unaddressed message costs nothing.
+                String message = BehaviorConfig.applyTriggerPrefix(evt.signedContent());
+                if (message == null) {
+                    return;
+                }
                 String sender = senderEntity.getName().getString();
                 ConversationManager.onUserChatMessage(new UserMessage(message, sender));
             });
@@ -63,6 +70,17 @@ public class ConversationManager {
                     mod.getPlayer().getStringUUID());
             return new AgentConversationData(mod);
         });
+    }
+
+    /**
+     * Drop a companion's conversation state. Must be called when its entity goes away — nothing else
+     * removes from {@code queueData}, so without this a spawn/despawn cycle leaks an entry and leaves
+     * stale data whose distance checks reference a discarded entity.
+     */
+    public static void forget(UUID companionUuid) {
+        if (queueData.remove(companionUuid) != null) {
+            LOGGER.info("ConversationManager/forget: dropped conversation data for {}", companionUuid);
+        }
     }
 
     private static Stream<AgentConversationData> filterQueueData(Predicate<AgentConversationData> pred) {

@@ -21,6 +21,7 @@ import java.net.HttpURLConnection;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -34,6 +35,18 @@ public class Player2APIService {
    /** Counts LLM requests this session for the {@link LlmConfig#maxRequests} cost guardrail. */
    private static final java.util.concurrent.atomic.AtomicInteger requestCount =
          new java.util.concurrent.atomic.AtomicInteger(0);
+
+   // Cumulative token usage this session, summed from the `usage` object OpenAI-compatible servers
+   // return. Static (not per-companion) because what a player wants to know is total session spend.
+   private static final java.util.concurrent.atomic.AtomicLong promptTokens =
+         new java.util.concurrent.atomic.AtomicLong(0);
+   private static final java.util.concurrent.atomic.AtomicLong completionTokens =
+         new java.util.concurrent.atomic.AtomicLong(0);
+   private static final java.util.concurrent.atomic.AtomicLong totalTokens =
+         new java.util.concurrent.atomic.AtomicLong(0);
+   /** Highest {@code totalTokens / usageReportEveryTokens} milestone already reported. */
+   private static final java.util.concurrent.atomic.AtomicLong reportedMilestone =
+         new java.util.concurrent.atomic.AtomicLong(0);
 
    private String clientId;
    private AltoClefController controller;
@@ -55,16 +68,65 @@ public class Player2APIService {
     * is exceeded, so a runaway loop cannot keep spending on a paid endpoint. {@code <= 0} = unlimited.
     */
    private static void enforceRequestCap() throws Exception {
+      // Count every request, cap or no cap — the usage report reads this counter too.
+      int n = requestCount.incrementAndGet();
       int max = LlmConfig.maxRequests;
       if (max <= 0) {
          return;
       }
-      int n = requestCount.incrementAndGet();
       if (n > max) {
          throw new Exception("LLM request cap reached (" + max
                + "). Raise llm.maxRequests or restart the server to continue (cost guardrail).");
       }
       LOGGER.info("LLM request {}/{} (cost guardrail)", n, max);
+   }
+
+   /**
+    * Accumulate token usage from an OpenAI-compatible response and, every
+    * {@link LlmConfig#usageReportEveryTokens} tokens, tell the owner where they stand. Purely
+    * informational — it never blocks a call. Servers that omit {@code usage} (some proxies do) simply
+    * contribute nothing rather than erroring.
+    */
+   private void recordUsage(Map<String, JsonElement> responseMap) {
+      try {
+         JsonElement usageEl = responseMap.get("usage");
+         if (usageEl == null || !usageEl.isJsonObject()) {
+            return;
+         }
+         JsonObject usage = usageEl.getAsJsonObject();
+         long in = usage.has("prompt_tokens") ? usage.get("prompt_tokens").getAsLong() : 0;
+         long out = usage.has("completion_tokens") ? usage.get("completion_tokens").getAsLong() : 0;
+         // Prefer the server's own total; fall back to the parts when it isn't reported.
+         long tot = usage.has("total_tokens") ? usage.get("total_tokens").getAsLong() : in + out;
+
+         promptTokens.addAndGet(in);
+         completionTokens.addAndGet(out);
+         long runningTotal = totalTokens.addAndGet(tot);
+
+         long every = LlmConfig.usageReportEveryTokens;
+         if (every <= 0) {
+            return;
+         }
+         long milestone = runningTotal / every;
+         long alreadyReported = reportedMilestone.get();
+         // CAS so concurrent completions can't double-report the same milestone.
+         if (milestone > alreadyReported && reportedMilestone.compareAndSet(alreadyReported, milestone)) {
+            reportUsage(runningTotal);
+         }
+      } catch (Exception e) {
+         // Usage reporting must never break a working conversation.
+         LOGGER.debug("Could not record LLM token usage: {}", e.toString());
+      }
+   }
+
+   private void reportUsage(long runningTotal) {
+      String summary = String.format(
+            "LLM usage this session: %,d tokens (%,d in / %,d out) over %,d requests.",
+            runningTotal, promptTokens.get(), completionTokens.get(), requestCount.get());
+      LOGGER.info(summary);
+      if (controller != null && controller.getOwner() instanceof ServerPlayer owner) {
+         owner.displayClientMessage(Component.literal("[companion] " + summary), false);
+      }
    }
 
    private static void applyLlmParams(JsonObject requestBody) {
@@ -102,6 +164,7 @@ public class Player2APIService {
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
       Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
             "/v1/chat/completions", true, requestBody);
+      recordUsage(responseMap);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
@@ -147,6 +210,7 @@ public class Player2APIService {
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
       Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
             "/v1/chat/completions", true, requestBody);
+      recordUsage(responseMap);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
