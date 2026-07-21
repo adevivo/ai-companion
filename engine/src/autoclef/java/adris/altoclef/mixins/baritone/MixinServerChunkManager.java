@@ -50,7 +50,11 @@ public abstract class MixinServerChunkManager implements ServerChunkManagerAcces
     * <p>Vanilla's contract here is "load the chunk, however long that takes", and honouring it from the
     * server thread is a self-deadlock: the load can only be executed by the very thread now parked
     * waiting for it. The task engine reads blocks at arbitrary remembered positions from inside the
-    * tick, so it hits this constantly during world load and shutdown, when chunks are in flux.
+    * tick, and any of those positions may legitimately be unloaded.
+    *
+    * <p>The worst form of this was a read reaching a <em>stopped</em> server's chunk cache, whose
+    * future nothing will ever complete — see {@code BaritoneComponents}, which fixes that cause at
+    * source. This mixin remains the backstop for the ordinary case.
     *
     * <p>The companion consequently sees unloaded terrain as air, which is exactly how Baritone's
     * {@code BlockStateInterface} already presents it — pathing treats it as unknown and re-plans once
