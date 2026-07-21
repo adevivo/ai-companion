@@ -5,6 +5,8 @@ import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.tasks.movement.GetToBlockTask;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.command.argument.BlockPosArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
@@ -41,7 +43,9 @@ public final class CompanionCommands {
                                                 BlockPosArgumentType.getBlockPos(ctx, "pos")))))
                         .then(CommandManager.literal("come").executes(ctx -> come(ctx.getSource())))
                         .then(CommandManager.literal("where").executes(ctx -> where(ctx.getSource())))
-                        .then(CommandManager.literal("despawn").executes(ctx -> despawn(ctx.getSource())))));
+                        .then(CommandManager.literal("despawn").executes(ctx -> despawn(ctx.getSource())))
+                        .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
+                        .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))));
     }
 
     /**
@@ -109,6 +113,40 @@ public final class CompanionCommands {
         companion.discard();
         source.sendFeedback(() -> Text.literal("Companion despawned."), false);
         AiCompanion.LOGGER.info("[{}] despawned companion id {}", AiCompanion.MOD_ID, companion.getId());
+        return 1;
+    }
+
+    /**
+     * Re-read {@code config/aicompanion.json} and apply it without a restart. LLM/TTS/behavior
+     * settings are volatile statics read at call time, so they take effect on the next request; the
+     * persona is re-applied to every live companion's brain via
+     * {@code AIPersistantData.updateSystemPrompt()}. Only name/description/skin stay baked into the
+     * entity — those need a despawn/spawn cycle, which the feedback says explicitly.
+     */
+    private static int reload(ServerCommandSource source) {
+        final int count = CompanionConfig.reloadAndApply(source.getServer());
+        source.sendFeedback(() -> Text.literal(String.format(
+                "Config reloaded. LLM/TTS/behavior settings apply from the next reply; persona re-applied to %d live companion(s).",
+                count)), false);
+        source.sendFeedback(() -> Text.literal(
+                "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
+        AiCompanion.LOGGER.info("[{}] config reloaded via /companion reload ({} live companion(s) updated)",
+                AiCompanion.MOD_ID, count);
+        return 1;
+    }
+
+    /**
+     * Pop the in-game config screen on the caller's client. The command itself is server-side (see
+     * {@link AiCompanion#OPEN_CONFIG_SCREEN} for why it can't be a client command), so it just sends
+     * the empty S2C packet; the client receiver opens the Cloth Config screen.
+     */
+    private static int config(ServerCommandSource source) {
+        ServerPlayerEntity player = source.getPlayer();
+        if (player == null) {
+            source.sendError(Text.literal("/companion config must be run by a player (it opens a screen)."));
+            return 0;
+        }
+        ServerPlayNetworking.send(player, AiCompanion.OPEN_CONFIG_SCREEN, PacketByteBufs.empty());
         return 1;
     }
 

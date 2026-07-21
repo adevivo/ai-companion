@@ -27,6 +27,14 @@ public class AiCompanion implements ModInitializer {
         return new Identifier(MOD_ID, path);
     }
 
+    /**
+     * S2C packet (empty payload): tells the client to open the config screen. Sent by
+     * {@code /companion config} — the command must live server-side because a client-registered
+     * {@code /companion} root would shadow the server tree and break every other subcommand
+     * (Fabric only forwards to the server when the ROOT literal is unknown to the client).
+     */
+    public static final Identifier OPEN_CONFIG_SCREEN = id("open_config_screen");
+
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
     public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
             .<CompanionEntity>createLiving()

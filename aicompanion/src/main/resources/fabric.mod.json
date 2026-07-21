@@ -15,12 +15,17 @@
   "environment": "*",
   "entrypoints": {
     "main": ["com.neovetta.aicompanion.AiCompanion"],
-    "client": ["com.neovetta.aicompanion.client.AiCompanionClient"]
+    "client": ["com.neovetta.aicompanion.client.AiCompanionClient"],
+    "modmenu": ["com.neovetta.aicompanion.client.ModMenuIntegration"]
   },
   "depends": {
     "fabricloader": ">=0.15.0",
     "fabric": "*",
     "minecraft": "~1.20.1",
-    "automatone": "*"
+    "automatone": "*",
+    "cloth-config": "*"
+  },
+  "suggests": {
+    "modmenu": "*"
   }
 }

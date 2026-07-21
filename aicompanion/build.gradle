@@ -23,6 +23,13 @@ repositories {
     mavenCentral()
     maven { name = 'Quilt Releases'; url = 'https://maven.quiltmc.org/repository/release/' }
     maven { name = 'Quilt Snapshots'; url = 'https://maven.quiltmc.org/repository/snapshot/' }
+    maven { name = 'Shedaniel'; url = 'https://maven.shedaniel.me/' }   // Cloth Config
+    maven {
+        // Mod Menu (Terraformers' own maven 502s intermittently; Modrinth mirrors releases)
+        name = 'Modrinth'
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
     flatDir { dir 'libs' }   // engine/ PlayerEngine jar staged here
 }
 
@@ -39,6 +46,20 @@ dependencies {
     include(modImplementation("libs:PlayerEngine:+"))
 
     implementation 'com.google.code.findbugs:jsr305:3.0.2'
+
+    // In-game config screen. Cloth Config builds the screen and is JiJ'd (include) so the
+    // CurseForge jar stays self-contained; its POM pulls fabric-api, excluded to avoid clashing
+    // with the version pinned above.
+    modApi("me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}") {
+        exclude group: 'net.fabricmc.fabric-api'
+    }
+    include "me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}"
+
+    // Mod Menu is compile-time only: we implement its ModMenuApi entrypoint, but the class is
+    // loaded solely BY Mod Menu, so shipping without it is safe (fabric.mod.json 'suggests' it).
+    // modLocalRuntime puts it in the dev client so the Mods-screen path is testable.
+    modCompileOnly "maven.modrinth:modmenu:${modmenu_version}"
+    modLocalRuntime "maven.modrinth:modmenu:${modmenu_version}"
 }
 
 processResources {

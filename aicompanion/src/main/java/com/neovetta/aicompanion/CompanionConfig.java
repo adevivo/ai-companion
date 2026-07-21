@@ -5,12 +5,17 @@ import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.TtsConfig;
+import adris.altoclef.AltoClefController;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.entity.Entity;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.world.ServerWorld;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -56,6 +61,11 @@ public final class CompanionConfig {
         return FabricLoader.getInstance().getConfigDir().resolve("aicompanion").resolve("skins");
     }
 
+    /** Path of the config file ({@code config/aicompanion.json}). The config screen edits it in place. */
+    public static Path configPath() {
+        return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+    }
+
     /**
      * The engine-facing identity (LLM name/description) built from current config. Rebuilt rather than
      * persisted, so config stays the single source of truth: editing {@code aicompanion.json} and
@@ -89,6 +99,32 @@ public final class CompanionConfig {
             AiCompanion.LOGGER.warn("[{}] failed to load {} ({}) — using built-in defaults",
                     AiCompanion.MOD_ID, path, e.toString());
         }
+    }
+
+    /**
+     * Re-read the config file and apply it to a running server: the engine statics (LLM/TTS/behavior)
+     * take effect on the next call that reads them, and the rebuilt persona is pushed into every live
+     * companion's brain. Returns how many live companions were updated. Only companions in loaded
+     * chunks are reached — one parked in an unloaded area keeps the old persona until reloaded again.
+     *
+     * <p>Shared "apply" step for {@code /companion reload} and the config screen's save hook. Call on
+     * the server thread.
+     */
+    public static int reloadAndApply(MinecraftServer server) {
+        load();
+        int updated = 0;
+        for (ServerWorld world : server.getWorlds()) {
+            for (Entity entity : world.iterateEntities()) {
+                if (entity instanceof CompanionEntity companion) {
+                    AltoClefController ctrl = companion.getController();
+                    if (ctrl != null && ctrl.getAIPersistantData() != null) {
+                        ctrl.getAIPersistantData().updateSystemPrompt();
+                        updated++;
+                    }
+                }
+            }
+        }
+        return updated;
     }
 
     /** Pretty-printer for the rewritten config. HTML escaping OFF, or URLs and help text get mangled. */
@@ -177,8 +213,11 @@ public final class CompanionConfig {
             LlmConfig.maxRequests = intVal(llm, "maxRequests", LlmConfig.maxRequests);
             LlmConfig.usageReportEveryTokens =
                     longVal(llm, "usageReportEveryTokens", LlmConfig.usageReportEveryTokens);
-            // API key: env/sysprop wins (so the secret need not live on disk); config is the fallback.
-            if (LlmConfig.apiKey == null || LlmConfig.apiKey.isBlank()) {
+            // API key: env/sysprop wins (so the secret need not live on disk); otherwise the file
+            // value applies unconditionally. The check must be "did the env supply it?", not "is the
+            // current value blank?" — after the first load the static holds the file's key, and a
+            // blankness check would make /companion reload ignore any later edit to it.
+            if (!apiKeySuppliedByEnv()) {
                 LlmConfig.apiKey = str(llm, "apiKey", "");
             }
         }
@@ -198,6 +237,15 @@ public final class CompanionConfig {
             TtsConfig.voice = str(tts, "voice", TtsConfig.voice);
             TtsConfig.speed = dbl(tts, "speed", TtsConfig.speed);
         }
+    }
+
+    /** Whether the LLM API key came from the launch environment (mirrors {@code LlmConfig.resolve}). */
+    private static boolean apiKeySuppliedByEnv() {
+        String v = System.getProperty("aicompanion.llm.apiKey");
+        if (v == null || v.isBlank()) {
+            v = System.getenv("AICOMPANION_LLM_APIKEY");
+        }
+        return v != null && !v.isBlank();
     }
 
     // ## JSON helpers (missing/mistyped fields fall back to the passed default)
