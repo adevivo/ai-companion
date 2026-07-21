@@ -5,6 +5,8 @@ import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.TtsConfig;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -12,6 +14,9 @@ import net.fabricmc.loader.api.FabricLoader;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Sysadmin-editable config for the AI companion (Phase 3). Loaded once at mod init from
@@ -72,7 +77,9 @@ public final class CompanionConfig {
             }
             Files.createDirectories(skinsDir()); // so admins have somewhere to drop skin PNGs
             String raw = Files.readString(path);
-            apply(JsonParser.parseString(raw).getAsJsonObject());
+            JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
+            mergeMissingKeys(root, path, raw);
+            apply(root);
             AiCompanion.LOGGER.info(
                     "[{}] config loaded: name='{}', skin='{}', llm.endpoint={}, model={}, maxTokens={}, tts={}. Skins dir: {}",
                     AiCompanion.MOD_ID, name, skinFile.isBlank() ? "(default)" : skinFile, LlmConfig.baseUrl,
@@ -81,6 +88,59 @@ public final class CompanionConfig {
         } catch (Exception e) {
             AiCompanion.LOGGER.warn("[{}] failed to load {} ({}) — using built-in defaults",
                     AiCompanion.MOD_ID, path, e.toString());
+        }
+    }
+
+    /** Pretty-printer for the rewritten config. HTML escaping OFF, or URLs and help text get mangled. */
+    private static final Gson PRETTY =
+            new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+
+    /**
+     * Fold any keys added since this config file was written into it, then rewrite it.
+     *
+     * <p>Without this, {@link #DEFAULT_JSON} is only ever written when the file is <em>absent</em>, so
+     * every new setting is silently missing for anyone with an existing config — invisible in the file,
+     * quietly falling back to its code default. That is exactly how {@code tts} once shipped without
+     * anyone noticing it existed.
+     *
+     * <p>Strictly additive: existing values are never overwritten, only absent keys are filled in. The
+     * previous file is kept as {@code aicompanion.json.bak} before any rewrite.
+     */
+    private static void mergeMissingKeys(JsonObject config, Path path, String originalRaw) {
+        List<String> added = new ArrayList<>();
+        addMissingRecursive(JsonParser.parseString(DEFAULT_JSON).getAsJsonObject(), config, "", added);
+        if (added.isEmpty()) {
+            return;
+        }
+        AiCompanion.LOGGER.info("[{}] config is missing {} setting(s) added in a newer version: {} — "
+                        + "filling in defaults (your existing values are untouched)",
+                AiCompanion.MOD_ID, added.size(), String.join(", ", added));
+        try {
+            Path backup = path.resolveSibling(FILE_NAME + ".bak");
+            Files.writeString(backup, originalRaw);
+            Files.writeString(path, PRETTY.toJson(config) + System.lineSeparator());
+            AiCompanion.LOGGER.info("[{}] updated {} (previous version saved as {})",
+                    AiCompanion.MOD_ID, path, backup.getFileName());
+        } catch (Exception e) {
+            // The in-memory merge already succeeded, so this run behaves correctly either way — only
+            // the on-disk update (and therefore discoverability) is lost.
+            AiCompanion.LOGGER.warn("[{}] could not rewrite {} ({}) — running with merged defaults in memory",
+                    AiCompanion.MOD_ID, path, e.toString());
+        }
+    }
+
+    /** Copy keys present in {@code defaults} but absent from {@code target}, recursing into objects. */
+    private static void addMissingRecursive(JsonObject defaults, JsonObject target, String prefix,
+                                            List<String> added) {
+        for (Map.Entry<String, JsonElement> entry : defaults.entrySet()) {
+            String key = entry.getKey();
+            String path = prefix.isEmpty() ? key : prefix + "." + key;
+            if (!target.has(key)) {
+                target.add(key, entry.getValue().deepCopy());
+                added.add(path);
+            } else if (entry.getValue().isJsonObject() && target.get(key).isJsonObject()) {
+                addMissingRecursive(entry.getValue().getAsJsonObject(), target.getAsJsonObject(key), path, added);
+            }
         }
     }
 
