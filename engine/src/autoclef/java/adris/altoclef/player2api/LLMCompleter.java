@@ -107,6 +107,16 @@ public class LLMCompleter {
                 player2apiService::completeConversationToString, isConversation);
     }
 
+    /**
+     * Clear the in-flight flag. The completer list is {@code static}, so a world that stops while a
+     * request is outstanding leaves {@code isProcessing} stuck true — {@link #isAvailible()} then
+     * returns false for the rest of the game process and the companion silently never thinks again,
+     * in this world or any other. Called from {@code ConversationManager.onServerStopping()}.
+     */
+    public void reset() {
+        isProcessing = false;
+    }
+
     public boolean isAvailible() {
         return !isProcessing;
     }

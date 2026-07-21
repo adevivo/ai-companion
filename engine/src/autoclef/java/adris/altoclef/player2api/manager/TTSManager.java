@@ -67,6 +67,16 @@ public class TTSManager {
         });
     }
 
+    /**
+     * Release the speech lock. A world that stops mid-utterance would otherwise leave {@code TTSLocked}
+     * set with an {@code estimatedEndTime} in the past-or-future belonging to a dead session, which
+     * gates conversation processing in the next world.
+     */
+    public static void reset() {
+        TTSLocked = false;
+        estimatedEndTime = 0;
+    }
+
     public static boolean isLocked() {
         return TTSLocked;
     }

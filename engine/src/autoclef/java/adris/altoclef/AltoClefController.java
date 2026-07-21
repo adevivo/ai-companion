@@ -33,6 +33,7 @@ import adris.altoclef.trackers.storage.ContainerSubTracker;
 import adris.altoclef.trackers.storage.ItemStorageTracker;
 import baritone.Baritone;
 import baritone.api.IBaritone;
+import baritone.api.component.BaritoneComponents;
 import baritone.api.entity.LivingEntityInventory;
 import baritone.api.utils.IEntityContext;
 import baritone.api.utils.IInteractionController;
@@ -42,6 +43,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -148,6 +150,13 @@ public class AltoClefController {
 
    static {
       ServerTickEvents.END_SERVER_TICK.register(AltoClefController::staticServerTick);
+      // Everything the tick hook above touches is static and would otherwise survive into the next
+      // world loaded in this game process — see ConversationManager.onServerStopping() and
+      // BaritoneComponents.clearAll().
+      ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+         ConversationManager.onServerStopping();
+         BaritoneComponents.clearAll();
+      });
    }
 
    public static void staticServerTick(MinecraftServer server) {

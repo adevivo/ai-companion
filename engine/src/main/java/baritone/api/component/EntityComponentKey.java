@@ -34,6 +34,23 @@ public class EntityComponentKey<C> {
       }
    }
 
+   /**
+    * Forget every component. Must be called when a world stops.
+    *
+    * <p>Components are keyed by entity <em>UUID</em>, and a UUID survives in the save file, but the
+    * component instance holds a hard reference to the {@code LivingEntity} object it was built for.
+    * Rejoining a world therefore hands back a component bound to the previous session's entity — which
+    * is discarded, and whose {@code level()} is a stopped {@code ServerLevel}. Everything downstream
+    * then reads a dead world: player lookups come back empty, and chunk reads on a stopped server's
+    * chunk cache take the off-thread branch and park the server thread forever.
+    *
+    * <p>It is also an unbounded leak: without this, every entity that ever touched a component is
+    * retained for the lifetime of the game process.
+    */
+   public final void clear() {
+      this.storage.clear();
+   }
+
    public final Optional<C> maybeGet(@Nullable Object object) {
       if (object instanceof LivingEntity provider) {
          return this.storage.get(provider.getUUID()) == null ? Optional.empty() : Optional.of(this.storage.get(provider.getUUID()));

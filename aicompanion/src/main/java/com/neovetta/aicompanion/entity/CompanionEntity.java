@@ -2,6 +2,7 @@ package com.neovetta.aicompanion.entity;
 
 import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.Character;
+import adris.altoclef.util.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
 import baritone.api.IBaritone;
@@ -13,6 +14,7 @@ import baritone.api.entity.IInventoryProvider;
 import baritone.api.entity.LivingEntityHungerManager;
 import baritone.api.entity.LivingEntityInteractionManager;
 import baritone.api.entity.LivingEntityInventory;
+import baritone.utils.accessor.ServerChunkManagerAccessor;
 import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
@@ -28,6 +30,8 @@ import net.minecraft.util.Arm;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3i;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
 
@@ -64,6 +68,16 @@ public class CompanionEntity extends LivingEntity
 
     /** Ticks until the next {@link #maintainBrain()} check — no need to re-resolve the owner 20x/sec. */
     private int brainCheckCooldown = 0;
+
+    /**
+     * Chunk radius around the companion that must be loaded before the AI may tick. Baritone raytraces
+     * out to the companion's reach (a few blocks) each tick, so the immediate 3×3 neighbourhood is
+     * ample — the entity could be standing at a chunk edge and still only reach one chunk over.
+     */
+    private static final int AI_TICK_GUARD_CHUNKS = 1;
+
+    /** Consecutive ticks the AI has been held back by {@link #areSurroundingsLoaded()}. */
+    private int ticksWaitingForChunks = 0;
 
     public CompanionEntity(EntityType<? extends CompanionEntity> type, World world) {
         super(type, world);
@@ -121,18 +135,90 @@ public class CompanionEntity extends LivingEntity
         this.interactionManager.update();
         this.inventory.updateItems();
         lastAttackedTicks++; // LivingEntities don't tick attack cooldown by default
-        if (!this.getWorld().isClient) {
-            maintainBrain();
-            if (this.controller != null) {
-                // Full agent: AltoClef tasks + Automatone nav + (on chat) the llama.cpp brain.
-                this.controller.serverTick();
-            } else {
-                // Before a brain is attached, still drive Baritone so /companion goto works.
-                IBaritone.KEY.get(this).serverTick();
+        if (!this.getWorld().isClient && isServerRunning() && areSurroundingsLoaded()) {
+            // Inside this window the chunk source answers reads from memory instead of blocking on a
+            // load — see CompanionTickGuard. Scoped to the AI only: super.tick() below must keep
+            // vanilla's normal world access for physics and collision.
+            CompanionTickGuard.begin();
+            try {
+                maintainBrain();
+                if (this.controller != null) {
+                    // Full agent: AltoClef tasks + Automatone nav + (on chat) the llama.cpp brain.
+                    this.controller.serverTick();
+                } else {
+                    // Before a brain is attached, still drive Baritone so /companion goto works.
+                    IBaritone.KEY.get(this).serverTick();
+                }
+            } finally {
+                CompanionTickGuard.end();
             }
         }
         super.tick();
         this.tickHandSwing();
+    }
+
+    /**
+     * Whether the server is in normal running state — false once a quit has been requested.
+     *
+     * <p>"Save and Quit" sets the server's running flag false and begins unloading chunks while the
+     * tick loop is still draining. An AI tick landing in that window calls {@code getBlockState} on a
+     * chunk that is on its way out, and the chunk cache blocks the server thread waiting for a load
+     * that will never be scheduled — the game hangs on the "Saving world" screen. The AI has nothing
+     * useful to contribute during shutdown, so the cheapest correct answer is not to run it.
+     */
+    private boolean isServerRunning() {
+        MinecraftServer server = this.getWorld().getServer();
+        return server != null && server.isRunning() && !server.isStopping() && !server.isStopped();
+    }
+
+    /**
+     * Whether it is safe to tick the AI this tick — i.e. the chunks Baritone may touch are loaded.
+     *
+     * <p><b>Why this exists.</b> Every AI tick Baritone raytraces from the companion to find what it is
+     * looking at ({@code BlockBreakHelper} → {@code EntityContext.objectMouseOver} →
+     * {@code RayTraceUtils}). That raytrace calls {@code getBlockState}, and on an <em>unloaded</em>
+     * chunk the server chunk cache answers by blocking the calling thread on a {@code CompletableFuture}
+     * that only the server thread can complete — so the server thread deadlocks against itself.
+     *
+     * <p>It bites on world load: a companion restored from the save starts ticking while the chunks
+     * around it are still loading, and the world never finishes loading (the player never joins, the
+     * progress bar stops short, and there is no exception to explain it — just silence).
+     *
+     * <p>Two independent gates, because one was not enough:
+     * <ol>
+     *   <li><b>A player must be in the world.</b> The deadlock happens during login, before the joining
+     *       player exists, so there is nothing for the companion to usefully do yet anyway.</li>
+     *   <li><b>The 3×3 chunk neighbourhood must be <em>present</em></b>, tested with Baritone's own
+     *       {@code automatone$getChunkNow} — a nullable, genuinely non-blocking lookup.
+     *       {@code World.isChunkLoaded} is <em>not</em> an adequate substitute: it returned {@code true}
+     *       for chunks that {@code getBlockState} then went and blocked on, which is how the first
+     *       attempt at this guard failed.</li>
+     * </ol>
+     */
+    private boolean areSurroundingsLoaded() {
+        BlockPos pos = this.getBlockPos();
+        if (!(this.getWorld() instanceof ServerWorld serverWorld) || serverWorld.getPlayers().isEmpty()) {
+            return false;
+        }
+        int chunkX = pos.getX() >> 4;
+        int chunkZ = pos.getZ() >> 4;
+        ServerChunkManagerAccessor chunks = (ServerChunkManagerAccessor) serverWorld.getChunkManager();
+        boolean loaded = true;
+        for (int dx = -AI_TICK_GUARD_CHUNKS; dx <= AI_TICK_GUARD_CHUNKS && loaded; dx++) {
+            for (int dz = -AI_TICK_GUARD_CHUNKS; dz <= AI_TICK_GUARD_CHUNKS && loaded; dz++) {
+                loaded = chunks.automatone$getChunkNow(chunkX + dx, chunkZ + dz) != null;
+            }
+        }
+        if (loaded) {
+            ticksWaitingForChunks = 0;
+        } else if (++ticksWaitingForChunks == 200) {
+            // Ten seconds of waiting is no longer "the world is still loading". Say so once, so a
+            // permanently idle companion is a diagnosable condition rather than a mystery.
+            AiCompanion.LOGGER.warn("[{}] companion at {} has been waiting {} ticks for its surrounding "
+                    + "chunks to load; AI is paused until they do",
+                    AiCompanion.MOD_ID, pos.toShortString(), ticksWaitingForChunks);
+        }
+        return loaded;
     }
 
     /** Attach the agent brain (AltoClef controller) to this companion, owned by {@code owner}. */

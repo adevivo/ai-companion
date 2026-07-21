@@ -51,8 +51,6 @@ public class Player2APIService {
    private String clientId;
    private AltoClefController controller;
 
-   private static MinecraftServer server;
-
    public Player2APIService(AltoClefController controller, String clientId) {
       this.clientId = clientId;
       this.controller = controller;
@@ -79,6 +77,19 @@ public class Player2APIService {
                + "). Raise llm.maxRequests or restart the server to continue (cost guardrail).");
       }
       LOGGER.info("LLM request {}/{} (cost guardrail)", n, max);
+   }
+
+   /**
+    * Reset the per-session request count and token totals. Called when a world stops, which makes
+    * "session" mean "world session" — exactly what {@link LlmConfig#maxRequests} already promises the
+    * player ("restart the world to continue").
+    */
+   public static void resetSessionCounters() {
+      requestCount.set(0);
+      promptTokens.set(0);
+      completionTokens.set(0);
+      totalTokens.set(0);
+      reportedMilestone.set(0);
    }
 
    /**

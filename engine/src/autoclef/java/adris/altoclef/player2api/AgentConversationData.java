@@ -237,6 +237,22 @@ public class AgentConversationData {
         return mod.getPlayer();
     }
 
+    /** Whether messages are waiting to be sent to the model. */
+    public boolean hasPendingEvents() {
+        return !eventQueue.isEmpty();
+    }
+
+    /**
+     * One-line dump of everything {@link #getPriority()} consults, so a companion that has queued a
+     * message but is not acting on it can be diagnosed from a log rather than a debugger.
+     */
+    public String describeState() {
+        return String.format("%s{enabled=%s, processing=%s, queued=%d, msSinceLastProcess=%d, priority=%d}",
+                getName(), enabled, isProcessing, eventQueue.size(),
+                lastProcessTime == 0L ? -1 : (System.nanoTime() - lastProcessTime) / 1_000_000L,
+                getPriority());
+    }
+
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
     }
