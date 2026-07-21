@@ -8,7 +8,10 @@
 
 ## Summary (short field)
 
-A self-contained autonomous AI companion for Minecraft, driven by **your own** LLM — it lives in the world, has goals, navigates, gathers, crafts, builds on request, and fights. Runs fully local with llama.cpp, or point it at a hosted frontier model. **Singleplayer & LAN** (see notes); no data leaves your network unless you choose a cloud endpoint.
+CurseForge caps this field at **256 characters** and renders it as **plain text** — no
+Markdown, so no `**bold**`. The line below is 245 characters.
+
+An autonomous AI companion driven by your own LLM. It navigates, gathers, crafts, builds on request, and fights alongside you. Runs fully local with llama.cpp (nothing leaves your network) or any hosted OpenAI-compatible API. Singleplayer & LAN.
 
 ---
 
@@ -50,6 +53,7 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 - **Reliable command output** — tolerant JSON parsing with graceful fallback: a malformed model reply is spoken as chat instead of dropping the turn.
 - **Know what you're spending** — the companion reports its running token usage (in / out / total) to chat and the log every 100k tokens, so a paid endpoint never surprises you. Optional hard caps and a chat trigger prefix are there if you want them; both are off by default.
 - **Recall commands** — call a wandered-off companion back, or ask where it is.
+- **In-game config screen** — `/companion config` opens a settings UI (identity, LLM, voice, behavior) right in the client; edits apply live, no restart. `/companion reload` re-reads the JSON file if you prefer editing by hand. With [Mod Menu](https://www.curseforge.com/minecraft/mc-mods/modmenu) installed you also get a config button there (optional — nothing breaks without it).
 - **Optional local voice** — route spoken lines to a local Kokoro TTS endpoint; only the companion's spoken `message` is ever voiced, never its reasoning or commands.
 
 ## Commands
@@ -61,12 +65,14 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 | `/companion come` | Recall it to you, interrupting its current task. |
 | `/companion where` | Report its coordinates and distance from you. |
 | `/companion despawn` | Remove it from the world (e.g. if it gets stuck). |
+| `/companion config` | Open the in-game settings screen. |
+| `/companion reload` | Re-read `config/aicompanion.json` and apply it live. |
 
 Beyond commands, just **talk to it in chat** — that's the primary way you direct it.
 
 ## Configuration
 
-On first launch the mod writes `config/aicompanion.json` with documented defaults. Key settings:
+On first launch the mod writes `config/aicompanion.json` with documented defaults. You can edit it two ways: the **in-game screen** (`/companion config`, or the Mod Menu gear button) which applies changes live, or the JSON file by hand followed by `/companion reload`. Key settings:
 
 - **Identity:** companion `name`, `description`, `persona`.
 - **LLM:** `endpoint` (default `http://localhost:3030`), `model`, `temperature`, `maxTokens`, request `timeout`.
@@ -93,7 +99,7 @@ On first launch the mod writes `config/aicompanion.json` with documented default
 
 ## What's bundled
 
-This download is **self-contained**. It nests the mod's forked **PlayerEngine** (pathfinding + task engine) inside its own jar — no separate engine download.
+This download is **self-contained**. It nests the mod's forked **PlayerEngine** (pathfinding + task engine) and the **Cloth Config** library (for the settings screen) inside its own jar — no separate downloads.
 
 > **Do not** also install a standalone PlayerEngine jar in your `mods/` folder — two copies of the engine will collide on load.
 
