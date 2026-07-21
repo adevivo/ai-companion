@@ -17,6 +17,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -86,6 +87,7 @@ public final class CompanionConfig {
                 AiCompanion.LOGGER.info("[{}] wrote default config to {}", AiCompanion.MOD_ID, path);
             }
             Files.createDirectories(skinsDir()); // so admins have somewhere to drop skin PNGs
+            extractTtsSetup();
             String raw = Files.readString(path);
             JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
             mergeMissingKeys(root, path, raw);
@@ -98,6 +100,36 @@ public final class CompanionConfig {
         } catch (Exception e) {
             AiCompanion.LOGGER.warn("[{}] failed to load {} ({}) — using built-in defaults",
                     AiCompanion.MOD_ID, path, e.toString());
+        }
+    }
+
+    /**
+     * Unpack the bundled TTS setup files (docker-compose.yml + README.md, shipped in the jar under
+     * {@code aicompanion/tts/}) to {@code config/aicompanion/tts/}. Existing files are never
+     * overwritten — admins edit ports/images in place. Best-effort: a failure here must not block
+     * config loading.
+     */
+    private static void extractTtsSetup() {
+        Path ttsDir = FabricLoader.getInstance().getConfigDir().resolve("aicompanion").resolve("tts");
+        try {
+            Files.createDirectories(ttsDir);
+            for (String fileName : new String[] {"docker-compose.yml", "README.md"}) {
+                Path target = ttsDir.resolve(fileName);
+                if (Files.exists(target)) {
+                    continue;
+                }
+                try (InputStream in = CompanionConfig.class.getResourceAsStream("/aicompanion/tts/" + fileName)) {
+                    if (in == null) {
+                        AiCompanion.LOGGER.warn("[{}] bundled TTS file missing from jar: {}", AiCompanion.MOD_ID, fileName);
+                        continue;
+                    }
+                    Files.copy(in, target);
+                    AiCompanion.LOGGER.info("[{}] wrote TTS setup file {}", AiCompanion.MOD_ID, target);
+                }
+            }
+        } catch (Exception e) {
+            AiCompanion.LOGGER.warn("[{}] failed to unpack TTS setup files to {} ({})",
+                    AiCompanion.MOD_ID, ttsDir, e.toString());
         }
     }
 
