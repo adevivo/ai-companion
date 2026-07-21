@@ -1,0 +1,41 @@
+{
+  "_notes": "companion.systemPrompt is a PERSONA block injected into the engine's hardened prompt (it does NOT replace the RULES/JSON-schema/valid-commands scaffolding). llm.* is applied to the engine at mod init. temperature<0 or maxTokens<=0 => omitted (server default). companion.skin + behavior.* below are documented for Phase 3b and are not wired yet.",
+  "_frontierTesting": "To test a hosted OpenAI-compatible model (xAI/Grok, OpenAI, etc.): set llm.endpoint (e.g. https://api.x.ai), llm.model (e.g. a NON-reasoning grok id), and supply the bearer key via env AICOMPANION_LLM_APIKEY (preferred, keeps it off disk) or llm.apiKey below. Keep localMode on. Set llm.maxRequests (e.g. 50) as a hard per-session spend cap. Do not commit a real apiKey.",
+  "companion": {
+    "name": "Vetta",
+    "description": "A loyal, level-headed companion who watches your back and speaks plainly.",
+    "systemPrompt": "You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.",
+    "skin": {
+      "file": "",
+      "slim": false,
+      "_help": "Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name (e.g. vetta.png). Blank = default Steve. slim = 3px (Alex) arms."
+    }
+  },
+  "llm": {
+    "endpoint": "http://localhost:3030",
+    "model": "local",
+    "temperature": 0.7,
+    "maxTokens": 200,
+    "timeoutMs": 90000,
+    "useGrammar": false,
+    "apiKey": "",
+    "maxRequests": 0
+  },
+  "tts": {
+    "_help": "Local voice output via Kokoro (see tts/README.md). Start the stack — 'cd tts && docker compose up -d' — then set enabled=true. The MINECRAFT CLIENT fetches the audio from this endpoint (the server only sends it the text), so it must be reachable from the client machine, not just the server. List voices: curl http://localhost:8880/v1/audio/voices. Only the companion's spoken 'message' is voiced — never commands or reasoning. A persona's Character.voiceIds()[0] overrides 'voice'.",
+    "enabled": false,
+    "endpoint": "http://localhost:8880",
+    "model": "kokoro",
+    "voice": "af_heart",
+    "speed": 1.0
+  },
+  "behavior": {
+    "triggerPrefix": "@",
+    "thinkThrottleSeconds": 3,
+    "cannedFallback": [
+      "...",
+      "Give me a second.",
+      "I'm here."
+    ]
+  }
+}

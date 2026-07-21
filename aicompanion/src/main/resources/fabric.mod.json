@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "aicompanion",
+  "version": "${version}",
+  "name": "AI Companion",
+  "description": "An autonomous companion for Minecraft that navigates, gathers, crafts, builds, and fights on its own — driven by any OpenAI-compatible LLM. Run it fully local and private with llama.cpp, or point it at a hosted frontier model (xAI, OpenAI, …) for maximum capability. Self-contained: bundles a forked PlayerEngine (Automatone + ChatClef).",
+  "authors": ["NeoVetta"],
+  "contact": {
+    "homepage": "https://github.com/adevivo/ai-companion",
+    "sources": "https://github.com/adevivo/ai-companion",
+    "issues": "https://github.com/adevivo/ai-companion/issues"
+  },
+  "license": "LGPL-3.0-or-later",
+  "icon": "assets/aicompanion/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.neovetta.aicompanion.AiCompanion"],
+    "client": ["com.neovetta.aicompanion.client.AiCompanionClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric": "*",
+    "minecraft": "~1.20.1"
+  }
+}

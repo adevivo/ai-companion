@@ -1,0 +1,25 @@
+# Local voice output for the AI Companion — Kokoro-82M behind an OpenAI-compatible API.
+#
+#   docker compose up -d      # start (first run pulls ~2GB and downloads model weights)
+#   docker compose logs -f    # watch startup
+#   docker compose down       # stop
+#
+# The companion's CLIENT calls this endpoint directly (the server only sends it the text), so this
+# must be reachable from the machine running the Minecraft client. See README.md in this directory.
+
+services:
+  kokoro:
+    # CPU image: multi-arch (linux/amd64 + linux/arm64), so it runs natively on Apple Silicon.
+    # The GPU image is CUDA-only — it will NOT use Metal on a Mac. Pinned deliberately; bump
+    # after testing rather than tracking :latest.
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.6.0
+    container_name: aicompanion-tts
+    ports:
+      - "8880:8880"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8880/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s

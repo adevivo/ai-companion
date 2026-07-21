@@ -1,0 +1,52 @@
+plugins {
+    id 'fabric-loom' version '1.6-SNAPSHOT'
+}
+
+group = project.maven_group
+version = project.mod_version
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+loom {
+    runs {
+        client {
+            // Pin the dev username. Loom otherwise picks a random 'Player###' per launch, and an
+            // offline-mode UUID is derived from the username — so every run is a different player.
+            // That silently breaks anything keyed to player identity across a save/load, e.g. the
+            // companion persists its owner's UUID and re-attaches its brain only for that player.
+            programArgs '--username', 'Dev'
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { name = 'Quilt Releases'; url = 'https://maven.quiltmc.org/repository/release/' }
+    maven { name = 'Quilt Snapshots'; url = 'https://maven.quiltmc.org/repository/snapshot/' }
+    flatDir { dir 'libs' }   // engine/ PlayerEngine jar staged here
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings "org.quiltmc:quilt-mappings:${minecraft_version}+build.${quilt_mappings}:intermediary-v2"
+    modImplementation "net.fabricmc:fabric-loader:0.15.6"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
+
+    // Our forked PlayerEngine (built from ../engine, staged into libs/) — provides
+    // baritone/automatone + adris.altoclef (AltoClefController, IAutomatone, etc.).
+    // include(...) nests it into the built jar (JiJ) so the CurseForge download runs
+    // standalone; the nested jar keeps its own LGPL-3.0 license (META-INF/LICENSE).
+    include(modImplementation("libs:PlayerEngine:+"))
+
+    implementation 'com.google.code.findbugs:jsr305:3.0.2'
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") { expand "version": project.version }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}

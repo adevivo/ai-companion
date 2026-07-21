@@ -1,0 +1,3 @@
+Forked from Goodbird-git/PlayerEngine (LGPL-3.0) on 2026-07-14.
+Upstream commit: 13fddc140a7ffd60b6bc9d1f084b36adc0674510
+We modify the adris.altoclef.player2api brain package to target local llama.cpp.

@@ -1,0 +1,33 @@
+{
+  "required": true,
+  "package": "adris.altoclef.mixins",
+  "compatibilityLevel": "JAVA_17",
+  "verbose": false,
+  "injectors": {
+    "maxShiftBy": 2,
+    "defaultRequire": 1
+  },
+  "client": [
+  ],
+  "mixins": [
+    "ClientBlockBreakMixin",
+    "ClientConnectionAccessor",
+    "EntityAccessor",
+    "EntityAnimationSwungMixin",
+    "LivingEntityMixin",
+    "MixinAbstractFurnaceBlockEntity",
+    "PersistentProjectileEntityAccessor",
+    "PlayerCollidesWithEntityMixin",
+    "PlayerDamageMixin",
+    "WorldBlockModifiedMixin",
+    "baritone.MixinBucketItem",
+    "baritone.MixinEntity",
+    "baritone.MixinItemStack",
+    "baritone.MixinLivingEntity",
+    "baritone.MixinMobEntity",
+    "baritone.MixinServerChunkManager",
+    "baritone.MixinServerCommandSource",
+    "baritone.MixinUtil"
+  ],
+  "refmap": "autoclef-playerengine-refmap.json"
+}

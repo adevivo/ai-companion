@@ -1,0 +1,30 @@
+.gradle/
+build/
+bin/
+out/
+
+*.DS_Store
+
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Loom-generated IDE run configs (regenerated on IDE sync; the run args live in build.gradle)
+**/.vscode/launch.json
+
+run/
+
+# Vendored upstream reference (read-only, not part of our mod)
+reference/
+
+# Engine jar staged into the consumer — a build artifact of ../engine, rebuild don't commit
+aicompanion/libs/*.jar
+
+# Internal planning/design notes — kept locally, not published in the public repo
+PLAN.md
+readme_ai_mod.md
+REFERENCES.md
+docs/brain-contract.md
+docs/spike-playerengine.md
+docs/spike-fakeplayer.md
