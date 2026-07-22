@@ -141,14 +141,23 @@ public class Player2APIService {
    }
 
    private static void applyLlmParams(JsonObject requestBody) {
-      if (LlmConfig.model != null && !LlmConfig.model.isBlank()) {
-         requestBody.addProperty("model", LlmConfig.model);
+      String model = LlmConfig.model;
+      boolean openAi = LlmConfig.baseUrl != null && LlmConfig.baseUrl.contains("api.openai.com");
+      // OpenAI's gpt-5.x and o-series lock temperature to the default and 400 on any override;
+      // their older gpt-4.x models still honor it, as do llama.cpp/xAI/Anthropic-compat.
+      boolean fixedTemperature = openAi && model != null
+            && (model.startsWith("gpt-5") || model.matches("^o\\d.*"));
+      if (model != null && !model.isBlank()) {
+         requestBody.addProperty("model", model);
       }
-      if (LlmConfig.temperature >= 0) {
+      if (LlmConfig.temperature >= 0 && !fixedTemperature) {
          requestBody.addProperty("temperature", LlmConfig.temperature);
       }
       if (LlmConfig.maxTokens > 0) {
-         requestBody.addProperty("max_tokens", LlmConfig.maxTokens);
+         // OpenAI retired max_tokens on newer models ("use max_completion_tokens instead") but
+         // accepts the new name on ALL its current chat models — so switch on endpoint, not model.
+         // Every other OpenAI-compatible backend (llama.cpp, xAI, Anthropic) expects max_tokens.
+         requestBody.addProperty(openAi ? "max_completion_tokens" : "max_tokens", LlmConfig.maxTokens);
       }
       if (LlmConfig.useGrammar) {
          // OpenAI-compatible JSON mode: forces the model to emit a JSON object instead of prose.
