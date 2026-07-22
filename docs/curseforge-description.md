@@ -93,6 +93,11 @@ On first launch the mod writes `config/aicompanion.json` with documented default
 > bill you for thinking tokens the companion never uses. Any other OpenAI-compatible provider works
 > the same way.
 
+> **Using OpenAI?** Prefer `gpt-4.1-nano`, `gpt-4o-mini`, or `gpt-4.1`. The `gpt-5.x` and `o`-series
+> models are *reasoning* models whose hidden thinking counts against `maxTokens` — at the default
+> `200` they can burn the entire budget thinking and return an **empty reply with no error**, so the
+> companion simply goes quiet. Give them `maxTokens` of `1000`+ or stay on a non-reasoning model.
+
 - **Spend awareness:** `llm.usageReportEveryTokens` (default `100000`) prints a running token total to chat; `0` silences it. `llm.maxRequests` is a separate, opt-in *hard* cap that makes the companion stop responding once hit — leave it at `0` unless you want a hard stop.
 - **Chat gating:** `behavior.triggerPrefix` (blank by default) makes the companion answer only messages starting with that prefix, so ambient chat costs nothing. `behavior.thinkThrottleSeconds` sets a minimum gap between LLM turns — messages inside the window are queued, not dropped.
 - **Voice (optional):** enable TTS and point it at a local Kokoro endpoint (client-side playback).

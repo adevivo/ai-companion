@@ -236,7 +236,10 @@ public final class CompanionConfigScreen {
                 .setTooltip(
                         Text.literal("Cap on tokens generated per reply. Keep small —"),
                         Text.literal("replies are spoken dialogue, not essays."),
-                        Text.literal("Zero or negative = server default."))
+                        Text.literal("Zero or negative = server default."),
+                        Text.literal("Reasoning models (gpt-5.x, o-series) count hidden"),
+                        Text.literal("thinking here and can return an EMPTY reply at 200 —"),
+                        Text.literal("give them 1000+, or pick a non-reasoning model."))
                 .setSaveConsumer(v -> llm.addProperty("maxTokens", v))
                 .build());
         if (envApiKeySet()) {
