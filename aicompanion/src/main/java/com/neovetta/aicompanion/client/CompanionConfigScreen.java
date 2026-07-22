@@ -45,6 +45,21 @@ public final class CompanionConfigScreen {
     /** Skin dropdown sentinel for "no custom skin" — maps to {@code ""} in the file. */
     private static final String DEFAULT_SKIN = "(default)";
 
+    /**
+     * Endpoint suggestions for the LLM combobox — OpenAI-compatible base URLs, WITHOUT {@code /v1}
+     * because the engine appends {@code /v1/chat/completions}. Gemini is deliberately absent: its
+     * compat path is {@code /v1beta/openai/chat/completions}, which no base URL can produce under
+     * that convention.
+     */
+    private static final List<String> LLM_ENDPOINT_SUGGESTIONS = List.of(
+            "http://localhost:3030",        // local llama.cpp
+            "https://api.openai.com",       // OpenAI
+            "https://api.anthropic.com",    // Anthropic (OpenAI-compat layer)
+            "https://api.mistral.ai",       // Mistral
+            "https://api.groq.com/openai",  // Groq
+            "https://openrouter.ai/api",    // OpenRouter
+            "https://api.x.ai");            // xAI
+
     private CompanionConfigScreen() {}
 
     public static Screen create(Screen parent) {
@@ -118,10 +133,27 @@ public final class CompanionConfigScreen {
 
     private static void buildLlm(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
         JsonObject llm = section(config, "llm");
-        cat.addEntry(eb.startStrField(Text.literal("Endpoint"), str(llm, "endpoint", "http://localhost:3030"))
+        // Combobox: type any URL, or pick a common provider from the dropdown. Suggestion mode
+        // keeps free entry working; the list is just a convenience for first-time setup.
+        cat.addEntry(eb.startStringDropdownMenu(Text.literal("Endpoint"), str(llm, "endpoint", "http://localhost:3030"))
+                .setSelections(LLM_ENDPOINT_SUGGESTIONS)
+                .setSuggestionMode(true)
                 .setDefaultValue("http://localhost:3030")
-                .setTooltip(Text.literal("OpenAI-compatible base URL — NO trailing slash, NO /v1 (the mod appends /v1/chat/completions). Local llama.cpp: http://localhost:3030. Hosted, e.g. xAI: https://api.x.ai"))
-                .setSaveConsumer(v -> llm.addProperty("endpoint", v))
+                .setTooltip(Text.literal("OpenAI-compatible base URL — NO trailing slash, NO /v1 (the mod appends /v1/chat/completions). Pick a suggestion or type your own. Hosted endpoints also need a Model name and API Key below. Gemini is not supported (non-standard URL layout)."))
+                .setErrorSupplier(v -> {
+                    String s = String.valueOf(v).trim();
+                    if (s.isEmpty()) {
+                        return java.util.Optional.of(Text.literal("Endpoint is required"));
+                    }
+                    if (!s.startsWith("http://") && !s.startsWith("https://")) {
+                        return java.util.Optional.of(Text.literal("Must start with http:// or https://"));
+                    }
+                    if (s.endsWith("/") || s.endsWith("/v1")) {
+                        return java.util.Optional.of(Text.literal("Drop the trailing " + (s.endsWith("/v1") ? "/v1" : "slash") + " — the mod appends /v1/chat/completions"));
+                    }
+                    return java.util.Optional.empty();
+                })
+                .setSaveConsumer(v -> llm.addProperty("endpoint", String.valueOf(v)))
                 .build());
         cat.addEntry(eb.startStrField(Text.literal("Model"), str(llm, "model", "local"))
                 .setDefaultValue("local")
