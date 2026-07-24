@@ -8,17 +8,24 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.command.argument.BlockPosArgumentType;
+import net.minecraft.entity.EquipmentSlot;
+import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Dev/admin commands for the companion. Phase 1: {@code /companion spawn} drops a companion at the
@@ -43,6 +50,7 @@ public final class CompanionCommands {
                                                 BlockPosArgumentType.getBlockPos(ctx, "pos")))))
                         .then(CommandManager.literal("come").executes(ctx -> come(ctx.getSource())))
                         .then(CommandManager.literal("where").executes(ctx -> where(ctx.getSource())))
+                        .then(CommandManager.literal("stats").executes(ctx -> stats(ctx.getSource())))
                         .then(CommandManager.literal("despawn").executes(ctx -> despawn(ctx.getSource())))
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
                         .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))));
@@ -163,6 +171,89 @@ public final class CompanionCommands {
                 () -> Text.literal(String.format("Companion at %s (%.0f blocks away)", pos.toShortString(), dist)),
                 false);
         return 1;
+    }
+
+    /**
+     * Print a readout of the companion's vitals and gear: HP, food, armor, hands, and an aggregated
+     * inventory list. Food comes straight off the entity's own hunger manager (the same instance the
+     * engine drives), so it's available even before a brain/controller is attached. The companion has
+     * no XP — it's a {@link net.minecraft.entity.LivingEntity}, not a player — so none is shown.
+     */
+    private static int stats(ServerCommandSource source) {
+        CompanionEntity companion = findCompanion(source);
+        if (companion == null) {
+            source.sendError(Text.literal("No companion found nearby (it may be in an unloaded area)."));
+            return 0;
+        }
+
+        // Header: custom name (or configured name), gold + bold.
+        String name = companion.getCustomName() != null
+                ? companion.getCustomName().getString() : CompanionConfig.name();
+        source.sendFeedback(() -> Text.literal("— " + name + " —")
+                .formatted(Formatting.GOLD, Formatting.BOLD), false);
+
+        // Health + food on one line.
+        int food = companion.getHungerManager().getFoodLevel();
+        float sat = companion.getHungerManager().getSaturationLevel();
+        source.sendFeedback(() -> Text.literal(String.format("Health: %.1f/%.0f   Food: %d/20 (sat %.1f)",
+                companion.getHealth(), companion.getMaxHealth(), food, sat)), false);
+
+        // Armor: helmet → boots, non-empty only.
+        List<String> armor = new ArrayList<>();
+        for (EquipmentSlot slot : new EquipmentSlot[]{
+                EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+            String d = describe(companion.getEquippedStack(slot));
+            if (d != null) {
+                armor.add(d);
+            }
+        }
+        source.sendFeedback(() -> Text.literal(
+                "Armor: " + (armor.isEmpty() ? "none" : String.join(", ", armor))), false);
+
+        // Hands.
+        String main = describe(companion.getEquippedStack(EquipmentSlot.MAINHAND));
+        String off = describe(companion.getEquippedStack(EquipmentSlot.OFFHAND));
+        source.sendFeedback(() -> Text.literal("Hands: main = " + (main == null ? "empty" : main)
+                + ", off = " + (off == null ? "empty" : off)), false);
+
+        // Inventory: aggregate counts per item, most first.
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        int usedSlots = 0;
+        int totalSlots = companion.inventory.main.size();
+        for (ItemStack stack : companion.inventory.main) {
+            if (stack.isEmpty()) {
+                continue;
+            }
+            usedSlots++;
+            String path = Registries.ITEM.getId(stack.getItem()).getPath();
+            counts.merge(path, stack.getCount(), Integer::sum);
+        }
+        final int used = usedSlots;
+        source.sendFeedback(() -> Text.literal(
+                String.format("Inventory (%d/%d slots):", used, totalSlots)), false);
+        if (!counts.isEmpty()) {
+            String list = counts.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+                    .map(e -> e.getValue() + "× " + e.getKey())
+                    .reduce((a, b) -> a + ", " + b).orElse("");
+            source.sendFeedback(() -> Text.literal("  " + list).formatted(Formatting.GRAY), false);
+        }
+        return 1;
+    }
+
+    /**
+     * Human-readable one-item summary: {@code item_path} plus {@code (remaining/max)} durability for
+     * damageable items. Returns null for an empty stack so callers can render "empty"/"none".
+     */
+    private static String describe(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return null;
+        }
+        String path = Registries.ITEM.getId(stack.getItem()).getPath();
+        if (stack.isDamageable()) {
+            return path + " (" + (stack.getMaxDamage() - stack.getDamage()) + "/" + stack.getMaxDamage() + ")";
+        }
+        return path;
     }
 
     /** Send the nearest companion (within 256 blocks of the caller) walking to a block position. */
