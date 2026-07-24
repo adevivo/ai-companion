@@ -53,7 +53,8 @@ public final class CompanionCommands {
                         .then(CommandManager.literal("stats").executes(ctx -> stats(ctx.getSource())))
                         .then(CommandManager.literal("despawn").executes(ctx -> despawn(ctx.getSource())))
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
-                        .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))));
+                        .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
+                        .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))));
     }
 
     /**
@@ -155,6 +156,21 @@ public final class CompanionCommands {
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.OPEN_CONFIG_SCREEN, PacketByteBufs.empty());
+        return 1;
+    }
+
+    /**
+     * Cycle the caller's radar HUD mode (AUTO → ON → OFF). Like {@link #config}, the actual mode lives
+     * client-side; this just sends the empty toggle packet and the client cycles + echoes the new mode
+     * in chat. A client keybind cycles the same state.
+     */
+    private static int radar(ServerCommandSource source) {
+        ServerPlayerEntity player = source.getPlayer();
+        if (player == null) {
+            source.sendError(Text.literal("/companion radar must be run by a player (it toggles a HUD)."));
+            return 0;
+        }
+        ServerPlayNetworking.send(player, AiCompanion.RADAR_TOGGLE, PacketByteBufs.empty());
         return 1;
     }
 

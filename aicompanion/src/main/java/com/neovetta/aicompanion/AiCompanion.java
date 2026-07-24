@@ -35,6 +35,21 @@ public class AiCompanion implements ModInitializer {
      */
     public static final Identifier OPEN_CONFIG_SCREEN = id("open_config_screen");
 
+    /**
+     * S2C packet: the companion's live position/health for the radar HUD. Sent every ~10 ticks to the
+     * owner only (see {@code CompanionEntity#maybeSendRadar}). Payload: double x,y,z; Identifier world
+     * id; float health, maxHealth. The client keeps the last snapshot and handles staleness itself —
+     * the server holds no last-known store (the companion simply stops sending in unloaded chunks).
+     */
+    public static final Identifier RADAR_UPDATE = id("radar_update");
+
+    /**
+     * S2C packet (empty payload): {@code /companion radar} tells the client to cycle its radar
+     * visibility mode (AUTO → ON → OFF). Server-side for the same reason as {@link #OPEN_CONFIG_SCREEN}
+     * — the client cycles the static mode and echoes it in chat.
+     */
+    public static final Identifier RADAR_TOGGLE = id("radar_toggle");
+
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
     public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
             .<CompanionEntity>createLiving()

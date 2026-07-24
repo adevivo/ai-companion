@@ -14,7 +14,11 @@ import baritone.api.entity.IInventoryProvider;
 import baritone.api.entity.LivingEntityHungerManager;
 import baritone.api.entity.LivingEntityInteractionManager;
 import baritone.api.entity.LivingEntityInventory;
+import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.enchantment.EnchantmentHelper;
+import net.minecraft.network.PacketByteBuf;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EquipmentSlot;
@@ -145,6 +149,38 @@ public class CompanionEntity extends LivingEntity
         }
         super.tick();
         this.tickHandSwing();
+        if (!this.getWorld().isClient) {
+            maybeSendRadar();
+        }
+    }
+
+    /**
+     * Push a radar snapshot to the owner every 10 ticks: position, dimension, and health. Only when a
+     * brain is attached and the owner is online — no owner, no packet. The client keeps the last
+     * snapshot and decides when to draw it (distance/staleness/dimension), so there is nothing to send
+     * or store when the companion is idle in an unloaded chunk: it simply stops ticking and the client
+     * ages the snapshot out. See {@link AiCompanion#RADAR_UPDATE}.
+     */
+    private void maybeSendRadar() {
+        if (this.controller == null || this.ownerUuid == null || this.age % 10 != 0) {
+            return;
+        }
+        MinecraftServer server = this.getWorld().getServer();
+        if (server == null) {
+            return;
+        }
+        ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
+        if (owner == null) {
+            return; // owner offline — nothing to draw a radar for
+        }
+        PacketByteBuf buf = PacketByteBufs.create();
+        buf.writeDouble(this.getX());
+        buf.writeDouble(this.getY());
+        buf.writeDouble(this.getZ());
+        buf.writeIdentifier(this.getWorld().getRegistryKey().getValue());
+        buf.writeFloat(this.getHealth());
+        buf.writeFloat(this.getMaxHealth());
+        ServerPlayNetworking.send(owner, AiCompanion.RADAR_UPDATE, buf);
     }
 
     /**

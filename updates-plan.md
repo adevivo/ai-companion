@@ -9,10 +9,10 @@ implementation brief; it assumes no context beyond what's written here plus the 
 **We do NOT use `runClient`.** The implementing agent compiles the consumer jar; the **user** installs it
 into their local CurseForge instance and runs it manually. So for every phase:
 
-1. **Bump `mod_version` in `aicompanion/gradle.properties` before building.** One patch bump per phase:
-   - Phase 1 → `0.1.3`
-   - Phase 2 → `0.1.4`
-   - Phase 3 → `0.1.5`
+1. **Bump `mod_version` in `aicompanion/gradle.properties` before building.** Patch bumps:
+   - Phases 1 **and 2** → `0.1.3` (radar was folded into the stats release by user decision — no
+     separate bump)
+   - Phase 3 → `0.1.4`
    (Current baseline is `0.1.2`.)
 2. Build with `cd aicompanion && ./gradlew build`; the deliverable is `aicompanion/build/libs/aicompanion-<version>.jar`.
 3. Hand the user that jar path plus the phase's test checklist. **The user runs the checklist in
@@ -23,9 +23,18 @@ into their local CurseForge instance and runs it manually. So for every phase:
 
 ## Ground rules for the implementing agent
 
-- **This repo is MC 1.20.1 Fabric.** The consumer mod `aicompanion/` uses **Quilt/Yarn-style names**
-  (`ServerPlayerEntity`, `Text`, `Identifier`, `MinecraftClient`, `DrawContext`). The parent-directory
-  `CLAUDE.md` (HandyDandy, MC 26.1.2, Mojmap) **does not apply here** — ignore its translation tables.
+- **This repo is MC 1.20.1 Fabric with Quilt Mappings (`quilt_mappings = 7`).** The consumer mod
+  `aicompanion/` uses **Quilt-mapped names** (`ServerPlayerEntity`, `Text`, `Identifier`,
+  `MinecraftClient`). The parent-directory `CLAUDE.md` (HandyDandy, MC 26.1.2, Mojmap) **does not apply
+  here** — ignore its translation tables.
+  - **Quilt ≠ Yarn on several client names** (learned in Phase 2). Yarn's `DrawContext` is
+    **`GuiGraphics`** (`net.minecraft.client.gui.GuiGraphics`), with `drawShadowedText` /
+    `drawCenteredShadowedText` instead of `drawTextWithShadow` / `drawCenteredTextWithShadow`. Yarn's
+    `KeyBinding` is **`KeyBind`** (`net.minecraft.client.option.KeyBind`), `InputUtil` lives at
+    **`com.mojang.blaze3d.platform.InputUtil`**, and `InputUtil.Key.getCode()` is **`getKeyCode()`**.
+    When a client class won't resolve, javap the Quilt-mapped merged jar under
+    `~/.gradle/caches/fabric-loom/minecraftMaven/.../minecraft-merged-*quilt-mappings*.jar` — don't
+    trust Yarn names.
 - **Build:** `export JAVA_HOME=/opt/homebrew/opt/openjdk@17` (Java 25 fails with "major version 69").
   Consumer: `cd aicompanion && ./gradlew build`. (We do **not** use `runClient` — see the Testing &
   versioning convention above; the user installs the built jar into CurseForge and tests manually.)
@@ -143,8 +152,9 @@ whole point — so the client cannot rely on having the entity; the server must 
 
 ### 2.3 Visibility modes
 
-Three modes, client-side static enum: **AUTO** (default — bar shows only when distance > 16 blocks or
-stale/cross-dimension, hides when the companion is right next to you), **ON** (always), **OFF**.
+Three modes, client-side static enum: **ON** (default, per user decision — bar always visible whenever a
+companion is reporting in), **AUTO** (shows only when distance > 16 blocks or stale/cross-dimension,
+hides when the companion is right next to you), **OFF**.
 - `/companion radar` server subcommand cycles the mode by sending a tiny S2C packet
   (`RADAR_TOGGLE`) the client acts on, echoing the new mode in chat — same idiom as `config`.
 - Also register a client keybind (`KeyBindingHelper`, category `AI Companion`, default **unbound** to
