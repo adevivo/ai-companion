@@ -1,62 +1,41 @@
 # Fishing
-Sit and fish until the owner says stop or your inventory fills up.
+Sit and fish until told to stop or your inventory fills up.
 
-## What you can actually do
-Fishing is ONE command: `fish`. It takes no arguments. It finds its own water nearby, casts, waits for
-a bite, and reels in — over and over, on its own. You do not cast, wait or reel yourself, and there is
-no command for those. Never describe yourself doing them step by step.
+## Check before every reply
+Read `taskStatus` in agentStatus — it is the only truth about whether you are working.
 
-**You need a fishing rod.** Check your inventory first. If you do not have `fishing_rod`, run
-`get fishing_rod 1` and wait for it to finish before you try to fish — without one, `fish` just stands
-there reporting it cannot fish.
+- Starts with `<Fishing` → you really are fishing.
+- `<Idle>` or `No tasks currently running` → you are NOT fishing. Issue `fish` now, this turn.
 
-**You need water within a short walk.** If you are nowhere near any, run `scan water` and `goto` those
-coordinates first, then fish. Do not cast in the desert and report success.
+Never say you are fishing while idle.
 
-## Steps
-1. No rod? `get fishing_rod 1` first.
-2. No water nearby? `scan water`, then `goto <x> <y> <z>`.
-3. Issue `fish`. That is the whole job.
-4. Tell the owner you are fishing and where.
+## The job
+Fishing is one command: `fish`, no arguments. It finds water, casts, waits and reels on its own —
+never describe doing those yourself.
 
-## Check this before every single reply
-Read `taskStatus` in agentStatus. It is the only truth about whether you are working.
+- No `fishing_rod` in your inventory → `get fishing_rod 1` first and wait for it.
+- No water nearby → `scan water`, then `goto <x> <y> <z>`.
 
-- It says `<Fishing...` → you really are fishing. Follow the rules below.
-- It says `<Idle>`, `No tasks currently running`, or anything else → **you are NOT fishing.** Issue
-  `fish` right now, this turn, whatever you said last time.
-
-Never claim to be fishing while `taskStatus` is `<Idle>` — you would be standing still describing work
-that is not happening.
+Then `fish`, and tell the owner where you are.
 
 ## While it runs
-`fish` never finishes on its own. It keeps going until another command replaces it, so leave it alone.
+`fish` never finishes, and any command replaces it.
 
-**If the owner asks a question** ("catch anything yet?", "how's it going?") — answer with an EMPTY
-command. Do not issue `idle`, `bodylang` or another `fish`: every command replaces the fishing.
+- Owner asks a question → reply with an EMPTY command. Not `idle`, not `bodylang`, not another `fish`.
+- Owner tells you to do something, including "stop" → do it. `stop` ends fishing.
 
-**If the owner tells you to do something** — including "stop fishing" — DO IT. Issue the command they
-asked for. To stop fishing, issue `stop`. Never answer an instruction with an empty command.
+Bites are random, so long stretches with no catch are normal. Do not restart because nothing has
+happened yet.
 
-Bites are random and can take a while, so a long stretch with no new fish is normal. Do not restart the
-command because nothing has happened yet.
+## Filling up
+Nothing stops you automatically — watch your own inventory. You are full at roughly 30 stacks, or when
+counts stop rising while you are still fishing.
 
-## Knowing when you are full
-Nothing stops you automatically — you have to watch this yourself. Look at your inventory in
-agentStatus each time you speak. You are full when it holds about 30 different stacks, or when your
-counts stop rising even though you are still fishing.
+When full, or when asked:
 
-When you are full, or when the owner asks:
-1. `stop` to end the fishing.
-2. `deposit cod 64` and `deposit salmon 64` for what you actually caught — deposit each catch type by
-   name, never a bare `deposit`, or you will hand over your fishing rod too.
-3. Say what you caught, then `fish` again if the owner wants you to carry on.
+1. `stop`
+2. `deposit cod 64`, `deposit salmon 64` — by name, never a bare `deposit`, or you hand over your rod.
+3. Say what you caught, then `fish` again if the owner wants more.
 
-If there is no chest within about 20 blocks the deposit will fail — say so and keep the fish rather
-than wandering off to look for one.
-
-## What you will catch
-Mostly `cod` and `salmon`, sometimes `tropical_fish` or `pufferfish`. You will also pull up junk —
-`stick`, `string`, `leather`, `bone`, `bowl`, `rotten_flesh` — and very occasionally treasure such as
-`name_tag`, `saddle`, `nautilus_shell` or an enchanted book. Mention treasure to the owner; it is the
-interesting part. Do not deposit the treasure without asking first.
+Catch is mostly `cod` and `salmon`, plus junk, and occasionally treasure such as `name_tag`, `saddle`,
+`nautilus_shell` or an enchanted book. Mention treasure; do not deposit it without asking.
