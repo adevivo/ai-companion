@@ -5,6 +5,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +36,14 @@ public final class CompanionSkills {
 
     /** Hard cap on body length, to protect the context window. Longer files are truncated + logged. */
     private static final int MAX_BODY = 4000;
+
+    /**
+     * The example skills shipped in the jar. Unpacked on first run and restorable with
+     * {@code /companion skills reset} — a user file is never silently overwritten, because these are
+     * meant to be edited.
+     */
+    private static final String[] BUNDLED =
+            {"lumberjack.md", "home-guard.md", "farming.md", "harvest.md", "fishing.md"};
 
     // Insertion-ordered so listings/suggestions read in filename order. Guarded by the class monitor.
     private static final Map<String, Skill> SKILLS = new LinkedHashMap<>();
@@ -182,11 +192,77 @@ public final class CompanionSkills {
      * Unpack the bundled example skills to the skills dir if absent (same best-effort, per-file idiom
      * as {@link CompanionConfig#extractTtsSetup}). Never overwrites a file the user has edited.
      */
+    /** Outcome of one {@link #resetBundled} attempt, for the command to report back. */
+    public record ResetResult(String fileName, boolean restored, String detail) {}
+
+    /**
+     * Overwrite bundled example skills on disk with the versions from the jar, backing up whatever was
+     * there to {@code <name>.md.bak} first, then re-scan so the change is live without a restart.
+     *
+     * <p>Exists because {@link #extractExamples()} deliberately never overwrites an existing file — that
+     * protects user edits, but it also means a mod update silently leaves everyone on the old skill text
+     * with no signal. Deleting the file and restarting worked, but "delete and restart" is not
+     * discoverable, and doing only half of it (delete, then {@code /companion reload}) makes the skill
+     * vanish until the next launch.
+     *
+     * @param key invocation key of a single bundled skill, or {@code null} to restore all of them
+     */
+    public static synchronized List<ResetResult> resetBundled(String key) {
+        List<ResetResult> results = new ArrayList<>();
+        Path dir = skillsDir();
+        try {
+            Files.createDirectories(dir);
+        } catch (Exception e) {
+            results.add(new ResetResult("(skills dir)", false, "could not create " + dir + ": " + e));
+            return results;
+        }
+        for (String fileName : BUNDLED) {
+            if (key != null && !key.equals(key(fileName.substring(0, fileName.length() - 3)))) {
+                continue;
+            }
+            Path target = dir.resolve(fileName);
+            try (InputStream in = CompanionSkills.class.getResourceAsStream("/aicompanion/skills/" + fileName)) {
+                if (in == null) {
+                    results.add(new ResetResult(fileName, false, "missing from the jar"));
+                    continue;
+                }
+                String detail = "restored";
+                if (Files.exists(target)) {
+                    // Keep the user's version rather than destroying it — same .bak convention the
+                    // config upgrade path uses, so there is always exactly one way to get edits back.
+                    Path backup = dir.resolve(fileName + ".bak");
+                    Files.copy(target, backup, StandardCopyOption.REPLACE_EXISTING);
+                    detail = "restored (previous saved as " + backup.getFileName() + ")";
+                }
+                Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+                results.add(new ResetResult(fileName, true, detail));
+                AiCompanion.LOGGER.info("[{}] reset skill {} from the jar", AiCompanion.MOD_ID, fileName);
+            } catch (Exception e) {
+                results.add(new ResetResult(fileName, false, e.toString()));
+                AiCompanion.LOGGER.warn("[{}] failed to reset skill {} ({})",
+                        AiCompanion.MOD_ID, fileName, e.toString());
+            }
+        }
+        if (results.stream().anyMatch(ResetResult::restored)) {
+            reload(); // pick the new text up immediately; the caller re-advertises it in the persona
+        }
+        return results;
+    }
+
+    /** The bundled skill keys, for tab-completion on {@code /companion skills reset}. */
+    public static List<String> bundledKeys() {
+        List<String> keys = new ArrayList<>();
+        for (String fileName : BUNDLED) {
+            keys.add(key(fileName.substring(0, fileName.length() - 3)));
+        }
+        return keys;
+    }
+
     private static void extractExamples() {
         Path dir = skillsDir();
         try {
             Files.createDirectories(dir);
-            for (String fileName : new String[] {"lumberjack.md", "home-guard.md", "farming.md", "harvest.md"}) {
+            for (String fileName : BUNDLED) {
                 Path target = dir.resolve(fileName);
                 if (Files.exists(target)) {
                     continue;

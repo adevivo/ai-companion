@@ -85,6 +85,20 @@ public class AgentSideEffects {
         } else {
             mod.isStopping = false;
         }
+        // `idle` and `bodylang` are the model's two ways of saying "nothing to do here" — one stands by,
+        // the other waves. Both used to run through the task chain, which REPLACES whatever work is in
+        // flight, and the LookAtOwnerTask that follows then leaves the agent idle for good. So a nod
+        // hello or an "I'm already on it" in reply to small talk would silently kill a 20-minute `farm`
+        // or `get`, and the model would keep reporting progress on a task that no longer existed.
+        //
+        // Neither is worth cancelling real work for. Skip them while a non-idle user task is running;
+        // the spoken reply still goes out, only the gesture is dropped. `stop` remains the way to
+        // actually abort a task.
+        boolean cosmetic = commandWithPrefix.contains("idle") || commandWithPrefix.startsWith("@bodylang");
+        if (cosmetic && mod.getUserTaskChain().isActive() && !mod.getUserTaskChain().isRunningIdleTask()) {
+            LOGGER.info("Skipping cosmetic {} — a user task is already running", commandWithPrefix);
+            return;
+        }
         if (commandWithPrefix.contains("idle")) {
             mod.runUserTask(new LookAtOwnerTask());
             return;

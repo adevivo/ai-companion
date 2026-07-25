@@ -58,6 +58,7 @@ player chat ─► ConversationManager ─► LLM (local llama.cpp / any OpenAI-
 | **Recall & cleanup** | `/companion come` (recall to owner, interrupts the current task), `/companion where` (coordinates + distance), and `/companion despawn` (remove a stuck companion, and drop its conversation state so the manager doesn't leak). |
 | **Stats readout** | `/companion stats` prints the companion's HP, food/saturation, worn armor, held items (with durability), and an aggregated inventory list to chat. |
 | **Radar HUD** | A client-side locator bar that points toward the companion so you can walk to it past entity-tracking range — the server pushes its position/health, so it works even when the entity isn't loaded. `/companion radar` (or an unbound keybind) cycles ON / AUTO / OFF; default ON, with cross-dimension and staleness handling. |
+| **Token HUD** | A client-side panel (top-left) showing the session's running token spend — total, the in/out split, request count, and a 30-minute **tokens-per-minute** bar graph. Visible only while a companion is spawned and reporting in; hidden by F1 and while the F3 overlay is up. The server pushes cumulative totals once a second and the client derives the graph by diffing them, so nothing extra is tracked server-side. |
 | **Skills** | User-authored markdown procedures in `config/aicompanion/skills/*.md`, invoked with `/companion skill <name>` — the file's body is injected into that companion's LLM queue and run with its normal command loop. `/companion skills` lists them; names/descriptions are advertised in the persona so they can also be asked for in chat. Ships with four examples (lumberjack, home-guard, farming, harvest) and hot-reloads via `/companion reload`. |
 | **Voice output** | Repointed the engine's TTS path from Player2 cloud to a **local Kokoro** OpenAI-compatible endpoint. Audio is still fetched and played **client-side**; only the `message` field is ever voiced. See **[tts/](tts/)**. |
 
@@ -212,7 +213,14 @@ Any other OpenAI-compatible provider works the same way: base URL, model id, key
 
 ### Keeping an eye on cost
 
-On a paid endpoint the companion reports its running token usage to chat and the log every
+Whenever a companion is spawned, a small panel in the **top-left** shows the session's token spend
+live: the running total, the input/output split, the request count, and a bar graph of
+**tokens per minute** over the last 30 minutes. The graph is the useful part — a companion answering
+the occasional question looks nothing like one stuck in a think loop, and you'll see the difference
+within a minute instead of at the next milestone report. It disappears when the companion despawns,
+and F1 hides it with the rest of the HUD.
+
+Behind it, the companion also reports its running token usage to chat and the log every
 `llm.usageReportEveryTokens` tokens (default `100000`; `0` silences it). Two optional brakes, both
 off by default:
 
@@ -270,14 +278,14 @@ and defines the entity/spawn/config — exactly how Player2NPC consumes PlayerEn
 ## Building
 
 **JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`. The jar version
-comes from `engine/gradle.properties` (currently **1.0.20**); adjust the filename if you bump it.
+comes from `engine/gradle.properties` (currently **1.0.27**); adjust the filename if you bump it.
 
 ```bash
 # macOS / Linux
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17          # or your JDK 17 path
 
 # 1. Build the engine (our PlayerEngine fork) and stage its jar for the consumer
-cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.20.jar ../aicompanion/libs/ && cd ..
+cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.27.jar ../aicompanion/libs/ && cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion && ./gradlew build      # → build/libs/*.jar
@@ -287,7 +295,7 @@ cd aicompanion && ./gradlew build      # → build/libs/*.jar
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # adjust to your JDK 17 install
 
 # 1. Build the engine fork and stage its jar for the consumer
-cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.20.jar ..\aicompanion\libs\; cd ..
+cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.27.jar ..\aicompanion\libs\; cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar
@@ -303,8 +311,9 @@ items), and is driven by a local llama.cpp brain through a hardened prompt with 
 parsing. A frontier A/B lever, running token-usage reporting, an opt-in request cap, and chat gating
 (`behavior.triggerPrefix` / `thinkThrottleSeconds`) are in place for paid endpoints. Voice output
 (local Kokoro TTS) is wired — see **[tts/](tts/)**. Quality-of-life additions: a `/companion stats`
-readout, a client radar HUD that locates the companion past tracking range, and a **skills** system —
-markdown procedures in `config/aicompanion/skills/` invoked with `/companion skill <name>`.
+readout, a client radar HUD that locates the companion past tracking range, a live token-usage HUD
+with a per-minute burn graph, and a **skills** system — markdown procedures in
+`config/aicompanion/skills/` invoked with `/companion skill <name>`.
 
 **Not ready for a public multiplayer server**, and deliberately so:
 

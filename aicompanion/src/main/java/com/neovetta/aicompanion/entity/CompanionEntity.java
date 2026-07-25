@@ -2,6 +2,7 @@ package com.neovetta.aicompanion.entity;
 
 import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.Character;
+import adris.altoclef.player2api.Player2APIService;
 import adris.altoclef.util.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
@@ -151,6 +152,7 @@ public class CompanionEntity extends LivingEntity
         this.tickHandSwing();
         if (!this.getWorld().isClient) {
             maybeSendRadar();
+            maybeSendTokens();
         }
     }
 
@@ -181,6 +183,37 @@ public class CompanionEntity extends LivingEntity
         buf.writeFloat(this.getHealth());
         buf.writeFloat(this.getMaxHealth());
         ServerPlayNetworking.send(owner, AiCompanion.RADAR_UPDATE, buf);
+    }
+
+    /**
+     * Push this session's cumulative LLM token spend to the owner every 20 ticks (~1s), on the same
+     * "brain attached and owner online" gate as {@link #maybeSendRadar()} — that gate is what makes the
+     * HUD appear only while a companion is actually spawned and thinking, with no separate liveness
+     * signal to maintain.
+     *
+     * <p>The counters in {@code Player2APIService} are static and session-wide, so with two companions
+     * out both push identical numbers and the client just takes the last one. Offset from the radar's
+     * tick so the two packets don't land together. See {@link AiCompanion#TOKEN_USAGE}.
+     */
+    private void maybeSendTokens() {
+        if (this.controller == null || this.ownerUuid == null || this.age % 20 != 5) {
+            return;
+        }
+        MinecraftServer server = this.getWorld().getServer();
+        if (server == null) {
+            return;
+        }
+        ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
+        if (owner == null) {
+            return; // owner offline — nobody to show a HUD to
+        }
+        Player2APIService.UsageSnapshot usage = Player2APIService.usageSnapshot();
+        PacketByteBuf buf = PacketByteBufs.create();
+        buf.writeLong(usage.promptTokens());
+        buf.writeLong(usage.completionTokens());
+        buf.writeLong(usage.totalTokens());
+        buf.writeVarInt(usage.requests());
+        ServerPlayNetworking.send(owner, AiCompanion.TOKEN_USAGE, buf);
     }
 
     /**

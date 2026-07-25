@@ -92,6 +92,19 @@ public class Player2APIService {
       reportedMilestone.set(0);
    }
 
+   /** Immutable view of this session's LLM spend. */
+   public record UsageSnapshot(long promptTokens, long completionTokens, long totalTokens, int requests) {}
+
+   /**
+    * Read the session counters for display. The four values are read independently, so a snapshot
+    * taken mid-{@link #recordUsage} can show a total that lags its parts by one request — acceptable
+    * for a HUD that refreshes every second, and not worth a lock on the LLM path.
+    */
+   public static UsageSnapshot usageSnapshot() {
+      return new UsageSnapshot(promptTokens.get(), completionTokens.get(), totalTokens.get(),
+            requestCount.get());
+   }
+
    /**
     * Accumulate token usage from an OpenAI-compatible response and, every
     * {@link LlmConfig#usageReportEveryTokens} tokens, tell the owner where they stand. Purely

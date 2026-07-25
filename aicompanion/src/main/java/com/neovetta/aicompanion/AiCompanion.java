@@ -50,6 +50,15 @@ public class AiCompanion implements ModInitializer {
      */
     public static final Identifier RADAR_TOGGLE = id("radar_toggle");
 
+    /**
+     * S2C packet: this session's cumulative LLM token spend, for the usage HUD. Sent every ~20 ticks
+     * to the owner only (see {@code CompanionEntity#maybeSendTokens}). Payload: long promptTokens,
+     * completionTokens, totalTokens; varint requests. The values are cumulative rather than per-turn
+     * deltas, so a dropped packet costs nothing — the client derives its per-minute burn graph by
+     * diffing consecutive snapshots and simply sees a bigger jump after a gap.
+     */
+    public static final Identifier TOKEN_USAGE = id("token_usage");
+
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
     public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
             .<CompanionEntity>createLiving()

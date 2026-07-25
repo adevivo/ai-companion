@@ -123,6 +123,9 @@ public class Prompts {
                               - For buildings when it makes sense, add rooms instead of having a big empty space. Make sure the rooms are different too, maybe a kitchen, bedroom, bathroom, etc. Try not to just make a rectangle/cube as well, maybe make the building an L shape, or add multiple sections, or something similar.
                               - Make sure any torches are attached to a block, and not floating in the air.
                               - A player is 2x1, so make sure structures are the appropriate size.
+                              - GROUND LEVEL: the Y in the description is the bot's own feet position, which is the AIR block above the ground. The ground surface block is at Y-1. Set `let baseY = <Y> - 1;` and treat baseY as the surface layer you REPLACE. Never lay a "foundation" slab of dirt/stone on top of the existing ground first — that leaves the build standing proud of the terrain on a visible pedestal. Floors, fields, paths and roads all overwrite baseY; only walls and upper storeys go at baseY+1 and above.
+                              - WATER AND LAVA SPILL. Only place "water" or "lava" where it is fully contained: flush with the surrounding ground (at baseY, never on a raised platform) AND with solid blocks on all four sides. If you cannot guarantee both, place a solid block instead. A single exposed water source on a raised platform will flood everything around it.
+                              - Not every request is a building. Fields, farms, paths, walls and bridges should be simple, flat, and functional — for those, ignore the guidance above about rooms, furniture and decoration.
                               ##  Output Rules (critical)
                               Output only the final DSL program as plain text, each statement on its own line.
                               Every statement ends with ; (except }).

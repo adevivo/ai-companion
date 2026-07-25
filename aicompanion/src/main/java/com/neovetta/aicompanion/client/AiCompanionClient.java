@@ -40,7 +40,18 @@ public class AiCompanionClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.RADAR_TOGGLE,
                 (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::cycleRadarAndEcho));
 
+        // Cumulative session token spend for the usage HUD. Same no-hop reasoning as the radar.
+        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.TOKEN_USAGE,
+                (client, handler, buf, responseSender) -> {
+                    long promptTokens = buf.readLong();
+                    long completionTokens = buf.readLong();
+                    long totalTokens = buf.readLong();
+                    int requests = buf.readVarInt();
+                    CompanionTokenHud.update(promptTokens, completionTokens, totalTokens, requests);
+                });
+
         HudRenderCallback.EVENT.register(CompanionRadarHud::render);
+        HudRenderCallback.EVENT.register(CompanionTokenHud::render);
 
         // Client keybind that cycles the same mode. Default unbound to avoid conflicts — the user can
         // assign it in Controls, or just use /companion radar.

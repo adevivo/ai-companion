@@ -10,11 +10,17 @@ import adris.altoclef.tasksystem.Task;
 import net.minecraft.core.BlockPos;
 
 public class FarmCommand extends Command {
+   private static final int DEFAULT_RANGE = 16;
+
    public FarmCommand() throws CommandException {
       super(
          "farm",
-         "Starts farming nearby crops automatically within range.  Example: `farm 10` to farm crops withing a range of 10 blocks",
-         new Arg<>(Integer.class, "range")
+         "Harvests and replants EXISTING nearby crops within range. This does NOT create a farm — it only tends"
+            + " one that is already planted. To build a new field, use build_structure instead."
+            + " Range is optional and defaults to 16. Example: `farm 10` to tend crops within 10 blocks",
+         // Optional: models routinely emit a bare `farm`, which used to hard-fail on a missing argument and
+         // burn a whole LLM round-trip recovering. minArgCountToUseDefault=0 => applies when nothing is given.
+         new Arg<>(Integer.class, "range", DEFAULT_RANGE, 0)
       );
    }
 

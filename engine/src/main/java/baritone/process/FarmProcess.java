@@ -47,6 +47,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
    private boolean active;
    private List<BlockPos> locations;
    private int tickCount;
+   /** Throttle for the "nothing to do" diagnostic; reset whenever there is real work. */
+   private int idleLogTicks;
    private int range;
    private BlockPos center;
    private static final List<Item> FARMLAND_PLANTABLE = Arrays.asList(
@@ -255,9 +257,22 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                }
             }
 
-            return goalz.isEmpty()
-               ? new PathingCommand(null, PathingCommandType.REQUEST_PAUSE)
-               : new PathingCommand(new GoalComposite(goalz.toArray(new Goal[0])), PathingCommandType.SET_GOAL_AND_PATH);
+            if (goalz.isEmpty()) {
+               // Nothing to break, plant, bonemeal or pick up in range, so we park where we stand. That
+               // is indistinguishable in-world from being stuck — the agent just stops moving forever —
+               // and it is the single hardest farming symptom to diagnose from outside. Say which bucket
+               // came up empty, throttled so a long wait for regrowth doesn't flood the log.
+               if (this.idleLogTicks++ % 200 == 0) {
+                  this.logDirect(String.format(
+                        "Farm idle: nothing to do in range %d of %s — scanned=%d, mature=%d, openFarmland=%d,"
+                              + " bonemealable=%d, hasSeeds=%b. Standing by for regrowth.",
+                        this.range, this.center, this.locations.size(), toBreak.size(), openFarmland.size(),
+                        bonemealable.size(), this.baritone.getInventoryBehavior().throwaway(false, this::isPlantable)));
+               }
+               return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+            }
+            this.idleLogTicks = 0;
+            return new PathingCommand(new GoalComposite(goalz.toArray(new Goal[0])), PathingCommandType.SET_GOAL_AND_PATH);
          }
       }
    }

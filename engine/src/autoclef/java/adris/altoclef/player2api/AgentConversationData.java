@@ -210,10 +210,29 @@ public class AgentConversationData {
                     "Command feedback: %s FAILED. The error was %s.",
                     stopReason.commandName(),
                     ((CommandExecutionStopReason.Error) stopReason).errMsg())));
+        } else if ("@stop".equals(stopReason.commandName().trim())) {
+            // A cancel only happens while an explicit `stop` is in flight, and it fires twice: once for
+            // the task being torn down and once for `@stop` itself. Prompt for a next step on the
+            // `@stop` callback only, so we queue one event rather than two.
+            //
+            // Without this the agent deadlocks: `stop` is a legitimate move when the model wants to
+            // abandon a wrong task and start the right one, but nothing else refills the queue, so it
+            // goes permanently silent mid-plan until the owner types in chat. Skip when the queue is
+            // already non-empty (same rule as the finished case) so a real user message isn't preempted.
+            if (eventQueue.isEmpty()) {
+                LOGGER.info("adding cmd={} to queue so the agent can continue after stopping",
+                        stopReason.commandName());
+                addEventToQueue(new InfoMessage(
+                        "Command feedback: the previous task was stopped. If you stopped it to do something"
+                                + " else, issue that command now. If the owner's request is already complete,"
+                                + " generate empty command `\"\"`."));
+            } else {
+                LOGGER.info("Skipping stop follow-up for cmd={} because queue not empty",
+                        stopReason.commandName());
+            }
         } else {
             LOGGER.info("Skipping command stop for cmd={} because it was cancelled", stopReason.commandName());
         }
-        // (if canceled dont modify queue)
     }
 
     // Utils:

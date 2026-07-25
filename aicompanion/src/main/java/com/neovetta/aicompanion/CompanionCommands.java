@@ -59,7 +59,13 @@ public final class CompanionCommands {
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
                         .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
                         .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))
-                        .then(CommandManager.literal("skills").executes(ctx -> skills(ctx.getSource())))
+                        .then(CommandManager.literal("skills").executes(ctx -> skills(ctx.getSource()))
+                            .then(CommandManager.literal("reset")
+                                    .executes(ctx -> skillsReset(ctx.getSource(), null))
+                                    .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                                            .suggests(BUNDLED_SUGGESTIONS)
+                                            .executes(ctx -> skillsReset(ctx.getSource(),
+                                                    StringArgumentType.getString(ctx, "name"))))))
                         .then(CommandManager.literal("skill")
                                 .then(CommandManager.argument("name", StringArgumentType.greedyString())
                                         .suggests(SKILL_SUGGESTIONS)
@@ -192,6 +198,41 @@ public final class CompanionCommands {
         }
         return builder.buildFuture();
     };
+
+    /** Tab-completion for {@code /companion skills reset [name]}: only the jar-bundled skills. */
+    private static final SuggestionProvider<ServerCommandSource> BUNDLED_SUGGESTIONS = (ctx, builder) -> {
+        for (String key : CompanionSkills.bundledKeys()) {
+            builder.suggest(key);
+        }
+        return builder.buildFuture();
+    };
+
+    /**
+     * Restore bundled example skills from the jar, overwriting local edits (saved to {@code .bak}).
+     * Needed because the unpack-on-first-run path never overwrites, so a mod update otherwise leaves
+     * everyone silently running the old skill text.
+     */
+    private static int skillsReset(ServerCommandSource source, String rawName) {
+        String key = rawName == null ? null : CompanionSkills.key(rawName);
+        if (key != null && !CompanionSkills.bundledKeys().contains(key)) {
+            source.sendError(Text.literal("'" + rawName.strip() + "' is not a bundled skill. Resettable: "
+                    + String.join(", ", CompanionSkills.bundledKeys())));
+            return 0;
+        }
+        var results = CompanionSkills.resetBundled(key);
+        if (results.isEmpty()) {
+            source.sendError(Text.literal("Nothing to reset."));
+            return 0;
+        }
+        source.sendFeedback(() -> Text.literal("Skill reset:").formatted(Formatting.GOLD, Formatting.BOLD), false);
+        for (CompanionSkills.ResetResult r : results) {
+            source.sendFeedback(() -> Text.literal("  " + r.fileName() + " — " + r.detail())
+                    .formatted(r.restored() ? Formatting.GRAY : Formatting.RED), false);
+        }
+        // Names/descriptions are advertised in the persona, so refresh live companions too.
+        CompanionConfig.reloadAndApply(source.getServer());
+        return 1;
+    }
 
     /** List the loaded skills, the directory to edit, and the reload hint. */
     private static int skills(ServerCommandSource source) {

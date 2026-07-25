@@ -58,8 +58,40 @@ public final class FishingProcess extends BaritoneProcessHelper implements IBari
 
    @Override
    public void onLostControl() {
+      this.retractBobber();
       this.active = false;
       this.bobber = null;
+   }
+
+   /**
+    * Reel the line back in when fishing ends for any reason.
+    *
+    * <p>{@link #onLostControl()} used to only null the field, which orphaned the bobber: nothing else
+    * holds a reference to it, so after a {@code stop} the float sat in the water forever with the
+    * companion standing there empty-handed.
+    *
+    * <p>Prefer the real retrieve, so a hooked catch is pulled in and rod durability is spent exactly as
+    * on a normal reel-in. Fall back to removing the entity when there is no rod left to reel with —
+    * that path is reachable, since {@link #onTick} calls this precisely when the rod has gone (broken,
+    * dropped or deposited).
+    */
+   private void retractBobber() {
+      try {
+         CustomFishingBobberEntity cast = this.findOurBobber();
+         if (cast == null) {
+            return;
+         }
+         if (this.findFishingRodSlot() != -1) {
+            this.equipFishingRod();
+            this.useFishingRod(this.ctx.world(), this.ctx.entity(), InteractionHand.MAIN_HAND);
+         } else {
+            cast.discard();
+         }
+      } catch (Exception e) {
+         // Never let cleanup stop the process from shutting down — a stuck bobber is cosmetic, a
+         // process that refuses to stop is not.
+         this.logDirect("Could not retract the fishing line: " + e);
+      }
    }
 
    @Override
