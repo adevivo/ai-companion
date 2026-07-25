@@ -64,6 +64,9 @@ public class AiCompanion implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        // Load skills before config: CompanionConfig.apply() advertises the loaded skills in the
+        // persona, so they must be scanned first.
+        CompanionSkills.load();
         // Load sysadmin config first so LlmConfig (endpoint/model/sampling) + persona are set before spawn.
         CompanionConfig.load();
         Registry.register(Registries.ENTITY_TYPE, id("companion"), COMPANION);

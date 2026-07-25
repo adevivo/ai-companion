@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
+import com.neovetta.aicompanion.CompanionSkills;
 import me.shedaniel.clothconfig2.api.ConfigBuilder;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
@@ -123,6 +124,7 @@ public final class CompanionConfigScreen {
         buildLlm(builder.getOrCreateCategory(Text.literal("LLM")), eb, config);
         buildTts(builder.getOrCreateCategory(Text.literal("Voice (TTS)")), eb, config);
         buildBehavior(builder.getOrCreateCategory(Text.literal("Behavior")), eb, config);
+        buildSkills(builder.getOrCreateCategory(Text.literal("Skills")), eb, config);
 
         return builder.build();
     }
@@ -325,6 +327,37 @@ public final class CompanionConfigScreen {
                         Text.literal("the window queue into the next turn. 0 = no limit."))
                 .setSaveConsumer(v -> behavior.addProperty("thinkThrottleSeconds", v))
                 .build());
+    }
+
+    /**
+     * Read-only view of the loaded skills plus the one editable knob ({@code advertiseInPrompt}).
+     * Editing skills themselves is a files-on-disk workflow (Cloth Config is the wrong tool for
+     * multi-line markdown), matching how skins and TTS are configured — so this tab just lists what's
+     * loaded and points at the folder.
+     */
+    private static void buildSkills(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
+        JsonObject skills = section(config, "skills");
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Advertise In Prompt"), bool(skills, "advertiseInPrompt", true))
+                .setDefaultValue(true)
+                .setTooltip(
+                        Text.literal("Tell the companion each skill's name + description in its"),
+                        Text.literal("system prompt, so you can also ask for one in chat."),
+                        Text.literal("Skill bodies are injected only when invoked."))
+                .setSaveConsumer(v -> skills.addProperty("advertiseInPrompt", v))
+                .build());
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                "Skills are markdown files in " + CompanionSkills.skillsDir()
+                        + ". Edit the .md files, then run /companion reload. The list below is read-only."))
+                .build());
+        var loaded = CompanionSkills.all();
+        if (loaded.isEmpty()) {
+            cat.addEntry(eb.startTextDescription(Text.literal("(no skills loaded)")).build());
+        } else {
+            for (CompanionSkills.Skill s : loaded) {
+                cat.addEntry(eb.startTextDescription(Text.literal(
+                        s.key() + (s.description().isEmpty() ? "" : " — " + s.description()))).build());
+            }
+        }
     }
 
     // ## Save

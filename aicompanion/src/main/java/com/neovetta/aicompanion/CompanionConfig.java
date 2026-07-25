@@ -143,6 +143,7 @@ public final class CompanionConfig {
      * the server thread.
      */
     public static int reloadAndApply(MinecraftServer server) {
+        CompanionSkills.reload(); // pick up edited/added .md files before apply() re-advertises them
         load();
         int updated = 0;
         for (ServerWorld world : server.getWorlds()) {
@@ -220,6 +221,15 @@ public final class CompanionConfig {
             String sysPrompt = str(companion, "systemPrompt", null);
             if (sysPrompt != null) {
                 Prompts.persona = sysPrompt;
+            }
+            // Advertise loaded skills in the persona so the owner can also invoke them in chat.
+            // Rebuilt from the file value each apply(), so it never double-appends across reloads.
+            JsonObject skills = obj(root, "skills");
+            boolean advertise = skills == null || bool(skills, "advertiseInPrompt", true);
+            String advert = advertise ? CompanionSkills.advertisement() : "";
+            if (!advert.isEmpty()) {
+                Prompts.persona = (Prompts.persona == null || Prompts.persona.isBlank())
+                        ? advert : Prompts.persona + "\n\n" + advert;
             }
             // skin: either a plain filename string, or { "file": "...", "slim": bool }.
             if (companion.has("skin") && !companion.get("skin").isJsonNull()) {
@@ -362,6 +372,10 @@ public final class CompanionConfig {
                 "triggerPrefix": "",
                 "thinkThrottleSeconds": 0,
                 "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn."
+              },
+              "skills": {
+                "advertiseInPrompt": true,
+                "_help": "Markdown procedures in config/aicompanion/skills/*.md, invoked with /companion skill <name>. advertiseInPrompt: when true (default), the companion is told each skill's name + description in its system prompt, so you can also ask for one conversationally ('use your lumberjack skill'). Skill bodies are injected only when invoked, never in the standing prompt. Edit the .md files then run /companion reload to pick up changes."
               }
             }
             """;

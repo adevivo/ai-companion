@@ -1,8 +1,12 @@
 package com.neovetta.aicompanion;
 
 import adris.altoclef.AltoClefController;
+import adris.altoclef.player2api.AgentConversationData;
+import adris.altoclef.player2api.Event;
 import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.tasks.movement.GetToBlockTask;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
@@ -54,7 +58,13 @@ public final class CompanionCommands {
                         .then(CommandManager.literal("despawn").executes(ctx -> despawn(ctx.getSource())))
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
                         .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
-                        .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))));
+                        .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))
+                        .then(CommandManager.literal("skills").executes(ctx -> skills(ctx.getSource())))
+                        .then(CommandManager.literal("skill")
+                                .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                                        .suggests(SKILL_SUGGESTIONS)
+                                        .executes(ctx -> skill(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "name")))))));
     }
 
     /**
@@ -134,9 +144,10 @@ public final class CompanionCommands {
      */
     private static int reload(ServerCommandSource source) {
         final int count = CompanionConfig.reloadAndApply(source.getServer());
+        final int skillCount = CompanionSkills.all().size();
         source.sendFeedback(() -> Text.literal(String.format(
-                "Config reloaded. LLM/TTS/behavior settings apply from the next reply; persona re-applied to %d live companion(s).",
-                count)), false);
+                "Config reloaded. LLM/TTS/behavior settings apply from the next reply; persona re-applied to %d live companion(s); %d skill(s) loaded.",
+                count, skillCount)), false);
         source.sendFeedback(() -> Text.literal(
                 "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
         AiCompanion.LOGGER.info("[{}] config reloaded via /companion reload ({} live companion(s) updated)",
@@ -171,6 +182,65 @@ public final class CompanionCommands {
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.RADAR_TOGGLE, PacketByteBufs.empty());
+        return 1;
+    }
+
+    /** Tab-completion for {@code /companion skill <name>}: the loaded skill keys. */
+    private static final SuggestionProvider<ServerCommandSource> SKILL_SUGGESTIONS = (ctx, builder) -> {
+        for (String key : CompanionSkills.keys()) {
+            builder.suggest(key);
+        }
+        return builder.buildFuture();
+    };
+
+    /** List the loaded skills, the directory to edit, and the reload hint. */
+    private static int skills(ServerCommandSource source) {
+        var loaded = CompanionSkills.all();
+        if (loaded.isEmpty()) {
+            source.sendFeedback(() -> Text.literal("No skills loaded. Drop .md files into "
+                    + CompanionSkills.skillsDir() + " and run /companion reload.")
+                    .formatted(Formatting.GRAY), false);
+            return 1;
+        }
+        source.sendFeedback(() -> Text.literal("Loaded skills:").formatted(Formatting.GOLD, Formatting.BOLD), false);
+        for (CompanionSkills.Skill s : loaded) {
+            source.sendFeedback(() -> Text.literal("  " + s.key()
+                    + (s.description().isEmpty() ? "" : " — " + s.description())).formatted(Formatting.GRAY), false);
+        }
+        source.sendFeedback(() -> Text.literal("Files: " + CompanionSkills.skillsDir()
+                + " — edit, then /companion reload to update.").formatted(Formatting.GRAY), false);
+        return 1;
+    }
+
+    /**
+     * Teach the caller's companion a skill: inject its markdown body as a user turn into that specific
+     * companion's brain queue. Targets exactly the caller's companion (unlike nearby-chat fan-out) and
+     * reuses the same queue/lock the chat path uses, so there are no threading concerns. The companion's
+     * spoken reply is the real acknowledgement.
+     */
+    private static int skill(ServerCommandSource source, String rawName) {
+        CompanionEntity companion = findCompanion(source);
+        if (companion == null) {
+            source.sendError(Text.literal("No companion found nearby (it may be in an unloaded area)."));
+            return 0;
+        }
+        AltoClefController ctrl = companion.getController();
+        if (ctrl == null) {
+            source.sendError(Text.literal("That companion has no active brain yet — nothing to send a skill to."));
+            return 0;
+        }
+        CompanionSkills.Skill sk = CompanionSkills.get(CompanionSkills.key(rawName));
+        if (sk == null) {
+            source.sendError(Text.literal("No skill named '" + rawName.strip() + "'. Try /companion skills."));
+            return 0;
+        }
+        AgentConversationData data = ConversationManager.getOrCreateEventQueueData(ctrl);
+        data.onEvent(new Event.UserMessage(
+                "Execute this skill now, step by step, using your available commands:\n\n" + sk.body(),
+                source.getName()));
+        String who = companion.getCustomName() != null
+                ? companion.getCustomName().getString() : CompanionConfig.name();
+        source.sendFeedback(() -> Text.literal("Skill '" + sk.name() + "' sent to " + who + "."), false);
         return 1;
     }
 
