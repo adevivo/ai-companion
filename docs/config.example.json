@@ -39,5 +39,9 @@
       "Give me a second.",
       "I'm here."
     ]
+  },
+  "skills": {
+    "_help": "Markdown procedures in config/aicompanion/skills/*.md, invoked with /companion skill <name>. advertiseInPrompt: when true (default), the companion is told each skill's name + description in its system prompt, so you can also ask for one conversationally ('use your lumberjack skill'). Skill bodies are injected only when invoked, never in the standing prompt. Edit the .md files then run /companion reload to pick up changes.",
+    "advertiseInPrompt": true
   }
 }

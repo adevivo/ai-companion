@@ -56,6 +56,9 @@ player chat ─► ConversationManager ─► LLM (local llama.cpp / any OpenAI-
 | **Spend visibility** | Token usage is accumulated from the response `usage` object and reported to the owner (chat + log) every `llm.usageReportEveryTokens` tokens — informational, never blocking. `llm.maxRequests` remains as an opt-in *hard* per-session cap (default off). |
 | **Chat gating** | `behavior.triggerPrefix` (blank = answer all nearby chat) and `behavior.thinkThrottleSeconds` (minimum gap between LLM turns; queued, not dropped) — both previously config-only, now actually wired. |
 | **Recall & cleanup** | `/companion come` (recall to owner, interrupts the current task), `/companion where` (coordinates + distance), and `/companion despawn` (remove a stuck companion, and drop its conversation state so the manager doesn't leak). |
+| **Stats readout** | `/companion stats` prints the companion's HP, food/saturation, worn armor, held items (with durability), and an aggregated inventory list to chat. |
+| **Radar HUD** | A client-side locator bar that points toward the companion so you can walk to it past entity-tracking range — the server pushes its position/health, so it works even when the entity isn't loaded. `/companion radar` (or an unbound keybind) cycles ON / AUTO / OFF; default ON, with cross-dimension and staleness handling. |
+| **Skills** | User-authored markdown procedures in `config/aicompanion/skills/*.md`, invoked with `/companion skill <name>` — the file's body is injected into that companion's LLM queue and run with its normal command loop. `/companion skills` lists them; names/descriptions are advertised in the persona so they can also be asked for in chat. Ships with four examples (lumberjack, home-guard, farming, harvest) and hot-reloads via `/companion reload`. |
 | **Voice output** | Repointed the engine's TTS path from Player2 cloud to a **local Kokoro** OpenAI-compatible endpoint. Audio is still fetched and played **client-side**; only the `message` field is ever voiced. See **[tts/](tts/)**. |
 
 ### Licensing
@@ -160,7 +163,8 @@ comments (`_help` keys) explaining every setting. Full schema:
 **[docs/config.example.json](docs/config.example.json)**. Edit it and restart the game.
 
 Sections: `companion.{name,description,systemPrompt,skin}` · `llm.{endpoint,model,…}` ·
-`tts.{enabled,endpoint,voice,…}` · `behavior.{triggerPrefix,thinkThrottleSeconds}`.
+`tts.{enabled,endpoint,voice,…}` · `behavior.{triggerPrefix,thinkThrottleSeconds}` ·
+`skills.{advertiseInPrompt}`.
 
 ### Choosing a brain
 
@@ -266,14 +270,14 @@ and defines the entity/spawn/config — exactly how Player2NPC consumes PlayerEn
 ## Building
 
 **JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`. The jar version
-comes from `engine/gradle.properties` (currently **1.0.12**); adjust the filename if you bump it.
+comes from `engine/gradle.properties` (currently **1.0.20**); adjust the filename if you bump it.
 
 ```bash
 # macOS / Linux
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17          # or your JDK 17 path
 
 # 1. Build the engine (our PlayerEngine fork) and stage its jar for the consumer
-cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.12.jar ../aicompanion/libs/ && cd ..
+cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.20.jar ../aicompanion/libs/ && cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion && ./gradlew build      # → build/libs/*.jar
@@ -283,7 +287,7 @@ cd aicompanion && ./gradlew build      # → build/libs/*.jar
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # adjust to your JDK 17 install
 
 # 1. Build the engine fork and stage its jar for the consumer
-cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.12.jar ..\aicompanion\libs\; cd ..
+cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.20.jar ..\aicompanion\libs\; cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar
@@ -298,7 +302,9 @@ cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar
 items), and is driven by a local llama.cpp brain through a hardened prompt with robust JSON command
 parsing. A frontier A/B lever, running token-usage reporting, an opt-in request cap, and chat gating
 (`behavior.triggerPrefix` / `thinkThrottleSeconds`) are in place for paid endpoints. Voice output
-(local Kokoro TTS) is wired — see **[tts/](tts/)**.
+(local Kokoro TTS) is wired — see **[tts/](tts/)**. Quality-of-life additions: a `/companion stats`
+readout, a client radar HUD that locates the companion past tracking range, and a **skills** system —
+markdown procedures in `config/aicompanion/skills/` invoked with `/companion skill <name>`.
 
 **Not ready for a public multiplayer server**, and deliberately so:
 
