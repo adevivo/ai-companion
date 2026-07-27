@@ -26,6 +26,21 @@ public final class CompanionTokenHud {
 
     private CompanionTokenHud() {}
 
+    // Visibility, flipped by /companion tokens. Session-scoped like the radar's mode — no client
+    // config file yet, so it returns to the default on restart. Default on: the panel is the only
+    // fine-grained view of spend, and someone who has never seen it cannot know to turn it on.
+    private static volatile boolean enabled = true;
+
+    /** Flip the panel on/off and return the new state (for the chat echo). */
+    public static boolean toggle() {
+        enabled = !enabled;
+        return enabled;
+    }
+
+    public static boolean enabled() {
+        return enabled;
+    }
+
     // Last snapshot from the server. receivedAtMs == 0 means "never received".
     private static volatile long promptTokens, completionTokens, totalTokens;
     private static volatile int requests;
@@ -97,6 +112,11 @@ public final class CompanionTokenHud {
 
     /** Render callback body — registered against {@code HudRenderCallback.EVENT} in the client init. */
     public static void render(GuiGraphics ctx, float tickDelta) {
+        if (!enabled) {
+            // Only drawing stops — update() keeps banking deltas, so switching the panel back on
+            // shows the real history for the time it was hidden instead of a hole in the graph.
+            return;
+        }
         if (receivedAtMs == 0L) {
             return; // no companion has ever reported in this session
         }

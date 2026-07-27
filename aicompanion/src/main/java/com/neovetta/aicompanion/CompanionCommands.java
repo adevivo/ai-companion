@@ -59,6 +59,7 @@ public final class CompanionCommands {
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
                         .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
                         .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))
+                        .then(CommandManager.literal("tokens").executes(ctx -> tokens(ctx.getSource())))
                         .then(CommandManager.literal("skills").executes(ctx -> skills(ctx.getSource()))
                             .then(CommandManager.literal("reset")
                                     .executes(ctx -> skillsReset(ctx.getSource(), null))
@@ -188,6 +189,23 @@ public final class CompanionCommands {
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.RADAR_TOGGLE, PacketByteBufs.empty());
+        return 1;
+    }
+
+    /**
+     * Toggle the caller's token usage HUD. Same shape as {@link #radar}: the panel and its on/off
+     * flag are client state, so this only sends the empty toggle packet and the client echoes the
+     * new state. Turning it off stops the drawing, not the {@link AiCompanion#TOKEN_USAGE} packets —
+     * they are ~30 bytes a second and keeping them flowing means the burn graph is still accurate
+     * when the panel comes back on.
+     */
+    private static int tokens(ServerCommandSource source) {
+        ServerPlayerEntity player = source.getPlayer();
+        if (player == null) {
+            source.sendError(Text.literal("/companion tokens must be run by a player (it toggles a HUD)."));
+            return 0;
+        }
+        ServerPlayNetworking.send(player, AiCompanion.TOKEN_HUD_TOGGLE, PacketByteBufs.empty());
         return 1;
     }
 

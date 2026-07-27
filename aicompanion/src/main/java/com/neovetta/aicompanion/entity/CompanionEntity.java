@@ -30,6 +30,8 @@ import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
+import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.Arm;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
@@ -151,8 +153,12 @@ public class CompanionEntity extends LivingEntity
         super.tick();
         this.tickHandSwing();
         if (!this.getWorld().isClient) {
+            // Every tick, not age-gated: the regen timer counts ticks. Outside the brain gate too,
+            // so a companion with no controller attached still heals.
+            this.hungerManager.regenerateOnly(this);
             maybeSendRadar();
             maybeSendTokens();
+            maybeWarnLowHealth();
         }
     }
 
@@ -214,6 +220,58 @@ public class CompanionEntity extends LivingEntity
         buf.writeLong(usage.totalTokens());
         buf.writeVarInt(usage.requests());
         ServerPlayNetworking.send(owner, AiCompanion.TOKEN_USAGE, buf);
+    }
+
+    /** Fraction of max health below which the owner is told, and above which the warning re-arms. */
+    private static final float LOW_HEALTH_WARN = 0.30f;
+    private static final float LOW_HEALTH_REARM = 0.60f;
+    /** True once warned, cleared on recovery, so a hurt companion says it once rather than every tick. */
+    private boolean lowHealthWarned = false;
+
+    /**
+     * Tell the owner once when the companion is badly hurt.
+     *
+     * <p>It has no self-preservation: in one session it dropped to 3/20 and carried on building for
+     * the rest of the session without reacting or saying anything, one skeleton arrow away from
+     * dying and scattering a full inventory. This does not fix that — it does not eat, heal or flee —
+     * it just makes the state visible so the owner can decide.
+     *
+     * <p>Hysteresis between the two thresholds keeps a companion hovering near the line from
+     * spamming; the notice re-arms only after a real recovery. Also routed to the agent's own log so
+     * it can mention being hurt in conversation.
+     */
+    private void maybeWarnLowHealth() {
+        if (this.controller == null || this.ownerUuid == null || this.age % 20 != 10) {
+            return;
+        }
+        float max = this.getMaxHealth();
+        if (max <= 0f) {
+            return;
+        }
+        float fraction = this.getHealth() / max;
+        if (fraction >= LOW_HEALTH_REARM) {
+            lowHealthWarned = false;
+            return;
+        }
+        if (fraction > LOW_HEALTH_WARN || lowHealthWarned) {
+            return;
+        }
+        MinecraftServer server = this.getWorld().getServer();
+        if (server == null) {
+            return;
+        }
+        ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
+        if (owner == null) {
+            return; // owner offline — warn when they next see it drop, not into the void
+        }
+        lowHealthWarned = true;
+        String name = this.getCustomName() != null ? this.getCustomName().getString() : CompanionConfig.name();
+        String note = String.format("%s is badly hurt — %.0f/%.0f health.", name, this.getHealth(), max);
+        owner.sendMessage(Text.literal(note).formatted(Formatting.RED), false);
+        AiCompanion.LOGGER.info("[{}] {}", AiCompanion.MOD_ID, note);
+        if (this.controller != null) {
+            this.controller.logAgentNotice(note + " Tell your owner you are hurt and need help.");
+        }
     }
 
     /**

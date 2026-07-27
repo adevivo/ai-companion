@@ -51,7 +51,7 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 - **Persona & identity** — set the companion's name, description, and personality in config; the persona is injected into a hardened prompt scaffold (it shapes voice, it doesn't get to override safety structure).
 - **Held tools & weapons** — the companion visibly wields tools/weapons in its main hand, and its held item is part of what the LLM "sees," so equips are confirmable.
 - **Reliable command output** — tolerant JSON parsing with graceful fallback: a malformed model reply is spoken as chat instead of dropping the turn.
-- **Know what you're spending** — a live HUD panel shows the session's token total, in/out split, and a tokens-per-minute graph for the last 30 minutes, so a paid endpoint never surprises you and a runaway companion is obvious within a minute. The running total is also reported to chat and the log every 100k tokens. Optional hard caps and a chat trigger prefix are there if you want them; both are off by default.
+- **Know what you're spending** — a live HUD panel shows the session's token total, in/out split, and a tokens-per-minute graph for the last 30 minutes, so a paid endpoint never surprises you and a runaway companion is obvious within a minute (`/companion tokens` hides it if you'd rather not see it). The running total is also reported to chat and the log every 100k tokens. Optional hard caps and a chat trigger prefix are there if you want them; both are off by default.
 - **Find it again** — a locator bar HUD points toward your companion and works past entity-tracking range, so wandering off isn't a lost companion.
 - **Recall commands** — call a wandered-off companion back, or ask where it is.
 - **In-game config screen** — `/companion config` opens a settings UI (identity, LLM, voice, behavior) right in the client; edits apply live, no restart. `/companion reload` re-reads the JSON file if you prefer editing by hand. With [Mod Menu](https://www.curseforge.com/minecraft/mc-mods/modmenu) installed you also get a config button there (optional — nothing breaks without it).
@@ -66,6 +66,8 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 | `/companion come` | Recall it to you, interrupting its current task. |
 | `/companion where` | Report its coordinates and distance from you. |
 | `/companion despawn` | Remove it from the world (e.g. if it gets stuck). |
+| `/companion radar` | Cycle the locator bar: ON / AUTO / OFF. |
+| `/companion tokens` | Show or hide the token usage panel. |
 | `/companion config` | Open the in-game settings screen. |
 | `/companion reload` | Re-read `config/aicompanion.json` and apply it live. |
 
@@ -101,6 +103,8 @@ On first launch the mod writes `config/aicompanion.json` with documented default
 
 - **Spend awareness:** `llm.usageReportEveryTokens` (default `100000`) prints a running token total to chat; `0` silences it. `llm.maxRequests` is a separate, opt-in *hard* cap that makes the companion stop responding once hit — leave it at `0` unless you want a hard stop.
 - **Chat gating:** `behavior.triggerPrefix` (blank by default) makes the companion answer only messages starting with that prefix, so ambient chat costs nothing. `behavior.thinkThrottleSeconds` sets a minimum gap between LLM turns — messages inside the window are queued, not dropped.
+- **Survival-honest building:** the companion pays for what it builds out of its own inventory, one item per block, instead of conjuring blocks. Short of something? It goes and collects it, then builds — you just ask once. Set `behavior.buildCostsMaterials` to `false` for creative-style building.
+- **Builds land where you asked:** every plan is checked against the real terrain before a block is placed, so a structure can't end up buried out of sight — but "put it on top of the ground" still means on top, and towers still go up. Only a plan hallucinated far into the sky is refused, and it costs no materials. Rebuilding something that's already there spends nothing and says so instead of pretending. `behavior.buildGroundCheck` turns the check off.
 - **Voice (optional):** enable TTS and point it at a local Kokoro endpoint (client-side playback).
 
 ## What's bundled

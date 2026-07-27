@@ -10,7 +10,13 @@ import adris.altoclef.util.helpers.StorageHelper;
 
 public class FoodCommand extends Command {
    public FoodCommand() throws CommandException {
-      super("food", "Collects a certain amount of food. Example: `food 10` to collect 10 units of food.", new Arg<>(Integer.class, "count"));
+      super(
+         "food",
+         "GATHERS food by foraging and hunting — this does NOT eat anything and may take you far from"
+            + " where you are. To eat food you are already carrying, use `eat` instead."
+            + " Example: `food 10` to go and collect 10 units of food.",
+         new Arg<>(Integer.class, "count")
+      );
    }
 
    @Override

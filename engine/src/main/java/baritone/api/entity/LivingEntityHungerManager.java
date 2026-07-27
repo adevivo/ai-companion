@@ -27,6 +27,43 @@ public class LivingEntityHungerManager {
       }
    }
 
+   /**
+    * Natural health regeneration only — no exhaustion, no hunger drain.
+    *
+    * <p>{@link #update} is not called anywhere for a companion, so its regeneration has never run:
+    * an injured companion sits at whatever health it was left with forever, while its hunger reads a
+    * permanent 20/20 because nothing consumes it either. This restores the healing half without
+    * turning on the starvation half.
+    *
+    * <p>The omission of {@link #addExhaustion} is deliberate and load-bearing. {@code update()} adds
+    * exhaustion on every heal, and exhaustion is precisely what the following tick converts into lost
+    * saturation and then lost food — so calling {@code update()} here would drain hunger as a side
+    * effect of healing, and eventually starve a companion that has no working way to eat.
+    *
+    * <p>Must be called every tick: the {@code foodTickTimer} thresholds below are tick counts.
+    */
+   public void regenerateOnly(LivingEntity entity) {
+      if (!entity.level().getGameRules().getBoolean(GameRules.RULE_NATURAL_REGENERATION) || !this.canFoodHeal(entity)) {
+         this.foodTickTimer = 0;
+         return;
+      }
+      if (this.foodSaturationLevel > 0.0F && this.foodLevel >= 20) {
+         this.foodTickTimer++;
+         if (this.foodTickTimer >= 10) {
+            entity.heal(Math.min(this.foodSaturationLevel, 6.0F) / 6.0F);
+            this.foodTickTimer = 0;
+         }
+      } else if (this.foodLevel >= 18) {
+         this.foodTickTimer++;
+         if (this.foodTickTimer >= 80) {
+            entity.heal(1.0F);
+            this.foodTickTimer = 0;
+         }
+      } else {
+         this.foodTickTimer = 0;
+      }
+   }
+
    public void update(LivingEntity player) {
       Difficulty difficulty = player.level().getDifficulty();
       this.prevFoodLevel = this.foodLevel;

@@ -269,6 +269,10 @@ public final class CompanionConfig {
             BehaviorConfig.triggerPrefix = str(behavior, "triggerPrefix", BehaviorConfig.triggerPrefix);
             BehaviorConfig.thinkThrottleSeconds =
                     dbl(behavior, "thinkThrottleSeconds", BehaviorConfig.thinkThrottleSeconds);
+            BehaviorConfig.buildCostsMaterials =
+                    bool(behavior, "buildCostsMaterials", BehaviorConfig.buildCostsMaterials);
+            BehaviorConfig.buildGroundCheck =
+                    bool(behavior, "buildGroundCheck", BehaviorConfig.buildGroundCheck);
         }
 
         JsonObject tts = obj(root, "tts");
@@ -351,7 +355,7 @@ public final class CompanionConfig {
                 "temperature": 0.7,
                 "maxTokens": 200,
                 "timeoutMs": 90000,
-                "useGrammar": false,
+                "useGrammar": true,
                 "apiKey": "",
                 "maxRequests": 0,
                 "usageReportEveryTokens": 100000,
@@ -371,7 +375,9 @@ public final class CompanionConfig {
               "behavior": {
                 "triggerPrefix": "",
                 "thinkThrottleSeconds": 0,
-                "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn."
+                "buildCostsMaterials": true,
+                "buildGroundCheck": true,
+                "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block. If it is short it collects the shortfall itself and then builds, so one command does the whole job; blocks that are already correct are skipped and cost nothing. Set false for creative-style building where blocks come from nothing. buildGroundCheck: when true (default), a build plan is compared against the real terrain first. One-sided by design — a plan that came out below ground is lifted onto the surface (up to 3 blocks), while one above ground is built as generated ('on top of the ground' is a one-block gap, and towers are legitimately higher). Only a plan more than 16 blocks in the air is refused, without spending materials. Set false to disable the check entirely."
               },
               "skills": {
                 "advertiseInPrompt": true,

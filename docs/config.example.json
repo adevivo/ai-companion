@@ -17,7 +17,7 @@
     "temperature": 0.7,
     "maxTokens": 200,
     "timeoutMs": 90000,
-    "useGrammar": false,
+    "useGrammar": true,
     "apiKey": "",
     "maxRequests": 0,
     "usageReportEveryTokens": 100000
@@ -31,9 +31,11 @@
     "speed": 1.0
   },
   "behavior": {
-    "_help": "triggerPrefix: when set (e.g. \"@\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank = answers all nearby chat (the singleplayer default). thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit); messages arriving inside the window are queued, not dropped.",
+    "_help": "triggerPrefix: when set (e.g. \"@\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank = answers all nearby chat (the singleplayer default). thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit); messages arriving inside the window are queued, not dropped. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block, and collects the shortfall itself before building; false = creative-style building. buildGroundCheck: when true (default), a build plan is checked against the real terrain. One-sided: a plan below ground is lifted onto the surface (up to 3 blocks), a plan above ground is built as generated, and only one more than 16 blocks in the air is refused (without spending materials). Set false to disable the check entirely.",
     "triggerPrefix": "",
     "thinkThrottleSeconds": 0,
+    "buildCostsMaterials": true,
+    "buildGroundCheck": true,
     "cannedFallback": [
       "...",
       "Give me a second.",

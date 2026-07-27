@@ -8,6 +8,7 @@ public class AgentStatus extends ObjectStatus {
       LivingEntity player = mod.getPlayer();
       return (AgentStatus) new AgentStatus()
             .add("position", StatusUtils.getCurrentPosition(mod))
+            .add("groundLevel", StatusUtils.getGroundLevelString(mod))
             .add("health", String.format("%.2f/20", player.getHealth()))
             .add("food",
                   String.format("%.2f/20", (float) mod.getBaritone().getEntityContext().hungerManager().getFoodLevel()))

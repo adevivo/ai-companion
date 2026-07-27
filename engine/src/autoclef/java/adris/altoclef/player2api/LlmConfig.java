@@ -48,11 +48,19 @@ public final class LlmConfig {
             Integer.parseInt(resolve("aicompanion.llm.maxTokens", "AICOMPANION_LLM_MAXTOKENS", "-1"));
 
     /**
-     * Whether to constrain output with a GBNF grammar / json_schema. Carried from config for later use;
-     * Phase 2 testing showed clean JSON without it, so the request body does not yet emit a grammar.
+     * Whether to constrain output to a JSON object ({@code response_format: json_object}).
+     *
+     * <p>Defaults to true. Left off originally because early testing showed clean JSON without it —
+     * that held for short exchanges and stopped holding in longer, chattier sessions: a measured
+     * session had 9 of 21 turns come back as bare prose, which the parser can only turn into a spoken
+     * message with no command, so the companion narrates work it never starts. Enabling it dropped
+     * that to 0. Honored by xAI, OpenAI and llama.cpp alike.
+     *
+     * <p>Note this guarantees valid JSON, not the right fields — a model can still return a
+     * well-formed object with an empty command.
      */
     public static volatile boolean useGrammar =
-            Boolean.parseBoolean(resolve("aicompanion.llm.useGrammar", "AICOMPANION_LLM_USEGRAMMAR", "false"));
+            Boolean.parseBoolean(resolve("aicompanion.llm.useGrammar", "AICOMPANION_LLM_USEGRAMMAR", "true"));
 
     /**
      * Optional bearer token for a hosted OpenAI-compatible endpoint (e.g. xAI/Grok, OpenAI). When

@@ -28,6 +28,33 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_THINKTHROTTLESECONDS", "0"));
 
     /**
+     * Whether {@code build_structure} charges the companion's inventory for the blocks it places.
+     * True (the default) keeps building honest in survival: the companion has to own the materials
+     * first, and a build it cannot afford is refused rather than conjured. Set false to restore the
+     * old creative-style behaviour where blocks appear out of nothing.
+     */
+    public static volatile boolean buildCostsMaterials =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.buildCostsMaterials",
+                    "AICOMPANION_BEHAVIOR_BUILDCOSTSMATERIALS", "true"));
+
+    /**
+     * Whether {@code build_structure} checks a generated plan against the real terrain before placing
+     * it. True by default: the model has no reliable sense of terrain height, and a wrong Y otherwise
+     * costs real materials for a build nobody can see.
+     *
+     * <p>The check is deliberately one-sided. A plan that came out below the ground is lifted onto it
+     * (up to {@code BuildPlacement.MAX_LIFT}), because buried is never what was asked for and is
+     * invisible once it happens. A plan above the ground is left exactly as generated — "on top of
+     * the ground" is a one-block gap, and towers and platforms are legitimately higher — and refused
+     * only past {@code BuildPlacement.MAX_AIR_GAP}, where no plausible request could have put it.
+     *
+     * <p>Set false to disable the check entirely, e.g. for work deep underground.
+     */
+    public static volatile boolean buildGroundCheck =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.buildGroundCheck",
+                    "AICOMPANION_BEHAVIOR_BUILDGROUNDCHECK", "true"));
+
+    /**
      * Apply {@link #triggerPrefix} to an incoming chat line. Returns the message the model should see
      * (prefix stripped, trimmed), or {@code null} if this message is not addressed to the companion.
      */

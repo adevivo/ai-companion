@@ -4,6 +4,7 @@ import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.tasksystem.Task;
 import adris.altoclef.util.helpers.ItemHelper;
+import adris.altoclef.util.helpers.WorldHelper;
 import baritone.api.entity.IAutomatone;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import java.util.Map.Entry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction.Axis;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -219,8 +221,30 @@ public class StatusUtils {
       return mod.getInteractionManager().getGameType().isCreative() ? "creative" : "survival";
    }
 
+   /**
+    * The bot's FEET position — the block it occupies, not where it is looking from.
+    *
+    * <p>This used to report {@code getEyePosition()}, roughly 1.53 blocks higher (the companion is
+    * player-sized, {@code height * 0.85}), while every prompt that consumes it — notably the
+    * build_structure ground-level rule — describes it as the feet. A build placed at the reported Y
+    * therefore floated a block or two above the terrain even when the model followed instructions
+    * exactly. Only {@link AgentStatus} reads this; the raytracing/look code calls
+    * {@code getEyePosition()} directly and is unaffected.
+    */
    public static String getCurrentPosition(AltoClefController mod) {
-      return mod.getEntity().getEyePosition().toString();
+      return mod.getEntity().position().toString();
+   }
+
+   /**
+    * Y of the ground block the bot is standing on, so "ground level" is something it can read rather
+    * than guess. Without it a model asked to build at ground level has no terrain height anywhere in
+    * its context and will reach for any plausible-looking Y nearby — in one observed session it took
+    * the Y of a skeleton in {@code nearby hostiles} and buried the build two blocks down.
+    */
+   public static String getGroundLevelString(AltoClefController mod) {
+      Entity entity = mod.getEntity();
+      int surface = WorldHelper.surfaceY(mod, Mth.floor(entity.getX()), Mth.floor(entity.getZ()));
+      return Integer.toString(surface);
    }
 
    public static String getTaskTree(AltoClefController mod) {

@@ -59,6 +59,13 @@ public class AiCompanion implements ModInitializer {
      */
     public static final Identifier TOKEN_USAGE = id("token_usage");
 
+    /**
+     * S2C packet (empty payload): {@code /companion tokens} tells the client to flip the token HUD
+     * on or off. Server-side for the same reason as {@link #OPEN_CONFIG_SCREEN} — the client flips
+     * the static flag and echoes the new state in chat.
+     */
+    public static final Identifier TOKEN_HUD_TOGGLE = id("token_hud_toggle");
+
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
     public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
             .<CompanionEntity>createLiving()

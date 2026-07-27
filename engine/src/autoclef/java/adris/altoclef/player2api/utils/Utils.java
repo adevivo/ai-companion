@@ -62,21 +62,119 @@ public class Utils {
       }
    }
 
+   /** Reasoning wrappers emitted inline by thinking models, stripped before we look for JSON. */
+   private static final String REASONING_BLOCK =
+         "(?is)<\\s*(think|thinking|reasoning|scratchpad)\\s*>.*?<\\s*/\\s*\\1\\s*>";
+   /** An opening reasoning tag the model never closed — everything after it is thinking. */
+   private static final String UNCLOSED_REASONING = "(?is)<\\s*(think|thinking|reasoning|scratchpad)\\s*>.*$";
+
    public static JsonObject parseCleanedJson(String content) throws JsonSyntaxException {
       String cleaned = content == null ? "" : content.trim();
+      cleaned = stripReasoning(cleaned);
       // Strip markdown code fences: ```json ... ``` or bare ``` ... ```.
       cleaned = cleaned.replaceAll("(?s)^```[a-zA-Z]*\\s*", "").replaceAll("(?s)\\s*```\\s*$", "").trim();
-      // Models sometimes wrap the JSON in reasoning/prose (e.g. a <think> preamble). Keep only the
-      // outermost {...} object so leading/trailing text does not break parsing.
-      int start = cleaned.indexOf('{');
-      int end = cleaned.lastIndexOf('}');
-      if (start >= 0 && end > start) {
-         cleaned = cleaned.substring(start, end + 1);
-      }
+      cleaned = extractJsonObject(cleaned);
       // Lenient reader tolerates minor deviations (unquoted control chars, trailing commas, etc.).
       JsonReader reader = new JsonReader(new StringReader(cleaned));
       reader.setLenient(true);
       return new JsonParser().parse(reader).getAsJsonObject();
+   }
+
+   /**
+    * Removes inline reasoning that thinking models mix into the content field. Must run before the
+    * JSON is located: a stray brace inside a {@code <think>} block would otherwise be mistaken for
+    * the start of the response object, and the whole reply — reasoning and all — would end up
+    * spoken in chat.
+    */
+   /**
+    * If the reply is a bare JSON string rather than the expected object, returns its unquoted text.
+    *
+    * <p>Models do this under {@code response_format: json_object} — a quoted string satisfies "valid
+    * JSON" without being an object, so the mode does not prevent it. Without unwrapping, the raw
+    * content is spoken with its quote marks still attached ({@code <Ava> "Water ready—…"}).
+    *
+    * @return the unwrapped text, or null when the content is not a lone JSON string
+    */
+   public static String unwrapJsonString(String content) {
+      if (content == null || content.isBlank()) {
+         return null;
+      }
+      String cleaned = stripReasoning(content).trim();
+      if (!cleaned.startsWith("\"")) {
+         return null;
+      }
+      try {
+         JsonReader reader = new JsonReader(new StringReader(cleaned));
+         reader.setLenient(true);
+         JsonElement parsed = new JsonParser().parse(reader);
+         if (parsed.isJsonPrimitive() && parsed.getAsJsonPrimitive().isString()) {
+            return parsed.getAsString();
+         }
+      } catch (RuntimeException e) {
+         // Starts with a quote but is not parseable JSON — leave it to the caller's own handling.
+      }
+      return null;
+   }
+
+   public static String stripReasoning(String content) {
+      if (content == null || content.isEmpty()) {
+         return "";
+      }
+      String stripped = content.replaceAll(REASONING_BLOCK, " ");
+      // An unclosed tag means the model was cut off mid-thought (usually maxTokens). Drop the tail,
+      // but only if doing so still leaves us something — otherwise keep the text for the caller to
+      // judge, since dropping everything would turn a truncated reply into silence with no clue why.
+      String withoutUnclosed = stripped.replaceAll(UNCLOSED_REASONING, " ").trim();
+      if (!withoutUnclosed.isEmpty()) {
+         stripped = withoutUnclosed;
+      }
+      return stripped.trim();
+   }
+
+   /**
+    * Returns the first balanced {@code {...}} object in {@code text}, or the text unchanged when
+    * there is none. Brace-aware and string-aware, so braces inside JSON string values (or in prose
+    * around the object) do not throw off the bounds the way a plain first-brace/last-brace scan does.
+    */
+   private static String extractJsonObject(String text) {
+      int depth = 0;
+      int start = -1;
+      boolean inString = false;
+      boolean escaped = false;
+      for (int i = 0; i < text.length(); i++) {
+         char c = text.charAt(i);
+         if (inString) {
+            if (escaped) {
+               escaped = false;
+            } else if (c == '\\') {
+               escaped = true;
+            } else if (c == '"') {
+               inString = false;
+            }
+            continue;
+         }
+         if (c == '"') {
+            inString = true;
+         } else if (c == '{') {
+            if (depth == 0) {
+               start = i;
+            }
+            depth++;
+         } else if (c == '}') {
+            depth--;
+            if (depth == 0 && start >= 0) {
+               return text.substring(start, i + 1);
+            }
+            if (depth < 0) { // stray closing brace in prose — resync
+               depth = 0;
+               start = -1;
+            }
+         }
+      }
+      // Unbalanced (truncated reply): fall back to the widest span so a lenient parse can still try.
+      int first = text.indexOf('{');
+      int last = text.lastIndexOf('}');
+      return first >= 0 && last > first ? text.substring(first, last + 1) : text;
    }
 
    public static String[] splitLinesToArray(String input) {

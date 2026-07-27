@@ -323,6 +323,23 @@ public class AltoClefController {
       Debug.logWarning(message);
    }
 
+   /**
+    * Report something that went wrong to the log AND to the agent's next turn.
+    *
+    * <p>For soft failures — a command that ran to completion without doing what was asked, like a
+    * deposit with nothing to deposit. Those report as "finished" to the task system, so without this
+    * the agent believes it succeeded and stands there while the player wonders why nothing happened.
+    * The text lands in {@code gameDebugMessages}, which the model sees but the player does not.
+    */
+   public void logAgentNotice(String message) {
+      logWarning(message);
+      try {
+         ConversationManager.getOrCreateEventQueueData(this).addAltoclefLogMessage(message);
+      } catch (Exception e) {
+         Debug.logWarning("Could not deliver notice to the agent: " + e);
+      }
+   }
+
    public static boolean inGame() {
       return true;
    }

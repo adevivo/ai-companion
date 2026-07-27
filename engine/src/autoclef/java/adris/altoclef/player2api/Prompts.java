@@ -60,9 +60,16 @@ public class Prompts {
       - "chop/break/cut a tree", "get wood", "gather logs" -> `get log 10`
       - "mine/dig stone", "get cobblestone/stone" -> `get stone 10`
       - "mine some iron/coal/diamonds" -> `get iron_ore 5` / `get coal 5` / `get diamond 3`
-      - "get me food" / "I'm hungry" -> `food 10`
+      - "eat something" / "eat the cooked_mutton" / "you're hurt, eat" -> `eat`  (or `eat cooked_mutton`) — eats what you already carry, right where you stand
+      - "get me food" / "go find food" -> `food 10`   (GATHERS food by foraging; it does NOT eat, and it will take you away from here — never use it to eat)
       - "make/craft a wooden axe" -> `get wooden_axe 1`   (any tool/armor: `get <material>_<item> 1`, material = wooden|stone|iron|golden|diamond)
       - "build a house/shelter/tower here" -> `build_structure a small house at (X, Y, Z)`  (use your OWN current position for X, Y, Z)
+        COORDINATES: take X and Z from `position` in agentStatus, rounded down to whole numbers. NEVER invent them, and never borrow them from a mob, a player, or a block you can see.
+        The Y you pass is the layer the lowest blocks will occupy, and it decides how the build sits on the land. agentStatus gives you both numbers you need: `groundLevel` is the ground block you are standing on, and your feet are one above it.
+          - Y = groundLevel  -> the build REPLACES the ground surface, ending up flush with the terrain. Use for fields, farms, paths, roads, and the floors of buildings.
+          - Y = groundLevel + 1  -> the build SITS ON TOP of the ground. Use for anything free-standing: a block, a pillar, a wall, a statue, a chest.
+        If the owner says "on top of", "above", "sitting on", or asks you to raise an earlier build, that is groundLevel + 1 (or higher). If they say "at ground level", "flush", or "level with the ground", that is groundLevel. When neither is stated, a building floor is flush and a loose object sits on top.
+        Building spends materials from your inventory, one item per block. Check `inventory` in agentStatus first, and `get` what you are short of before building. If a build is refused you will be told exactly what is still needed — `get` that, then run the same `build_structure` again.
       - "follow me" / "come with me" -> `follow <username>`
       - "kill/attack that zombie/creeper" -> `attack zombie 1`
       - "equip/hold/wield the axe (or any tool/weapon)" -> `equip wooden_axe`  (equip also HOLDS tools/weapons in hand, not just armor)
@@ -117,15 +124,17 @@ public class Prompts {
                               If materials are named in the description, use them (e.g., "oak_planks", "stone_bricks", "glass", "cobblestone", "spruce_log", "lantern", "torch", "water", "lava"). If unknown, fall back to "stone".
                               ## Structure Guidelines
                               - Make sure blocknames are correct minecraft blocknames.
-                              - Make sure to comment your thoughts, and really think about this, this is very important that the design is not to simple.
+                              - SIZE IS LITERAL. If the description names a count or dimensions, emit exactly that and nothing more: "a single dirt block" is ONE setBlock, "a 2x2 square" is four, "a 9x9 field" is 81. Do not round up, do not add an extra course "to finish it off", and do not copy the size of something you built earlier. Every extra block is charged to the bot's inventory.
+                              - Make sure to comment your thoughts, and really think about the design. For an open-ended request ("a house", "a tower") a plain box is too simple — give it some thought. This does NOT apply when the description already pins down the size or shape; then the description wins.
                               - Translate the description into concrete geometry with loops/conditionals (floors, walls, roofs, pillars, arches, domes by integer radii, etc.).
                               - For buildings where it makes sense, make sure you also add beds, crafting_table, furnace, etc, be creative!! Maybe a building could have paintings in the hallway, maybe a fireplace, etc.
                               - For buildings when it makes sense, add rooms instead of having a big empty space. Make sure the rooms are different too, maybe a kitchen, bedroom, bathroom, etc. Try not to just make a rectangle/cube as well, maybe make the building an L shape, or add multiple sections, or something similar.
                               - Make sure any torches are attached to a block, and not floating in the air.
                               - A player is 2x1, so make sure structures are the appropriate size.
-                              - GROUND LEVEL: the Y in the description is the bot's own feet position, which is the AIR block above the ground. The ground surface block is at Y-1. Set `let baseY = <Y> - 1;` and treat baseY as the surface layer you REPLACE. Never lay a "foundation" slab of dirt/stone on top of the existing ground first — that leaves the build standing proud of the terrain on a visible pedestal. Floors, fields, paths and roads all overwrite baseY; only walls and upper storeys go at baseY+1 and above.
+                              - BASE HEIGHT: set `let baseY = <Y>;` using the Y from the description EXACTLY as given. Do not add or subtract anything from it. baseY is the layer the LOWEST blocks of the structure occupy, and the caller has already chosen it to mean what they want: a Y level with the terrain replaces the ground surface (floors, fields, paths, roads), and a Y one higher sits on top of it. Adjusting it yourself is how a build ends up buried or floating. Everything above the lowest layer goes at baseY+1 and up. Never lay a "foundation" slab of dirt/stone beneath the lowest layer — that leaves the build standing proud of the terrain on a visible pedestal. The server checks the result against the real terrain: a plan that came out below ground is lifted onto it, and one absurdly high in the air is thrown away without building.
                               - WATER AND LAVA SPILL. Only place "water" or "lava" where it is fully contained: flush with the surrounding ground (at baseY, never on a raised platform) AND with solid blocks on all four sides. If you cannot guarantee both, place a solid block instead. A single exposed water source on a raised platform will flood everything around it.
                               - Not every request is a building. Fields, farms, paths, walls and bridges should be simple, flat, and functional — for those, ignore the guidance above about rooms, furniture and decoration.
+                              - EVERY BLOCK IS PAID FOR out of the bot's inventory, so do not waste them. Build hollow, not solid: never fill an interior volume with blocks, and never lay a foundation under a floor. Keep to the size asked for. Prefer common materials (dirt, cobblestone, oak_planks, stone) over ones that are hard to come by. Water and lava cost one bucket each no matter how many sources you place, so irrigation rows are cheap.
                               ##  Output Rules (critical)
                               Output only the final DSL program as plain text, each statement on its own line.
                               Every statement ends with ; (except }).

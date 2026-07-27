@@ -34,9 +34,17 @@ public class AgentConversationData {
     private boolean isProcessing = false;
     private boolean enabled = true;
 
+    // Armed by onGreeting(), consumed by the turn that answers it. Both used to be initialized true
+    // instead, which meant they were armed on construction whether or not a greeting was ever
+    // requested — and nothing requests one (sendGreeting is unreferenced). The first real turn after
+    // a companion spawns or has its brain re-attached on world load therefore had its command
+    // silently rewritten to `bodylang greeting`: the companion waved, spoke the message it had
+    // planned, and never ran the task the player actually asked for.
     // seperating these to be safe:
-    private boolean isGreetingResponse = true;
-    private boolean shouldIgnoreGreetingDance = true;
+    private boolean isGreetingResponse = false;
+    private boolean shouldIgnoreGreetingDance = false;
+    /** Guards {@link #requeueAfterMalformedReply} so two bad replies cannot loop on each other. */
+    private boolean lastReplyWasMalformed = false;
 
     private MessageBuffer altoClefMsgBuffer = new MessageBuffer(10);
 
@@ -121,9 +129,41 @@ public class AgentConversationData {
                         e.getMessage());
             } finally {
                 this.isProcessing = false;
+                requeueAfterMalformedReply(jsonResp, command);
             }
         };
         completer.processToJson(mod.getPlayer2APIService(), historyWithWrappedStatus, onLLMResponse, onErrMsg, true);
+    }
+
+    /**
+     * Give the agent one more turn when a malformed reply left it with nothing to do.
+     *
+     * <p>A reply that could not be parsed yields a message but an empty command, and nothing else
+     * queues an event for it — so the loop simply stops. Observed live: the companion said "Water
+     * ready—now building the 9x9 wheat field" and then stood still indefinitely, because that turn
+     * was the entire remaining plan.
+     *
+     * <p>Only fires for the fallback path ({@link Player2APIService#FALLBACK_MARKER}), and only once
+     * in a row: if the retry turn is also malformed, let it rest rather than spend requests in a
+     * loop.
+     */
+    private void requeueAfterMalformedReply(JsonObject jsonResp, String command) {
+        boolean wasFallback = jsonResp.has(Player2APIService.FALLBACK_MARKER);
+        if (!wasFallback || (command != null && !command.isBlank())) {
+            lastReplyWasMalformed = false;
+            return;
+        }
+        if (lastReplyWasMalformed) {
+            LOGGER.warn("Two malformed replies in a row; not queueing another retry turn.");
+            lastReplyWasMalformed = false;
+            return;
+        }
+        lastReplyWasMalformed = true;
+        LOGGER.info("Malformed reply produced no command; queueing a follow-up so the plan continues.");
+        addEventToQueue(new Event.InfoMessage(
+                "Your last reply was not valid JSON, so NO command ran and nothing happened. "
+                        + "If you were part-way through a task, issue the command now. "
+                        + "Reply with a JSON object containing reason, command and message."));
     }
 
     private boolean isEventDuplicateOfLastMessage(Event evt) {
@@ -179,6 +219,10 @@ public class AgentConversationData {
     }
 
     public void onGreeting() {
+        // Arm the overrides here, not at construction: they must only affect the turn that answers
+        // this greeting event, never whatever the player happens to ask for first.
+        isGreetingResponse = true;
+        shouldIgnoreGreetingDance = true;
         // queue up greeting
         addEventToQueue(mod.getAIPersistantData().getGreetingEvent());
     }

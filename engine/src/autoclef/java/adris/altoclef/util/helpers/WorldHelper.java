@@ -42,6 +42,7 @@ import net.minecraft.world.level.block.SpawnerBlock;
 import net.minecraft.world.level.block.entity.SpawnerBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -145,6 +146,30 @@ public interface WorldHelper {
       } else {
          return null;
       }
+   }
+
+   /**
+    * Y of the topmost solid ground block in a column — the block you would stand on top of.
+    *
+    * <p>Backed by the chunk heightmap, so this is O(1) per column. Prefer it to
+    * {@link #getGroundHeight(AltoClefController, int, int)}, which walks the whole column down from
+    * the build limit (~384 block lookups) and reports the topmost redstone conductor, meaning a tree
+    * or an overhang above the site answers with the log height instead of the ground.
+    *
+    * <p>{@code MOTION_BLOCKING_NO_LEAVES} rather than {@code WORLD_SURFACE}: the latter counts any
+    * non-air block, so grass and flowers read one block high. The {@code _WG} variants are worldgen
+    * only ({@code Heightmap.Types#keepAfterWorldgen}) and are not maintained on a loaded chunk.
+    *
+    * <p>The {@code - 1} is not slack: {@code ChunkAccess#getHeight} returns {@code getFirstAvailable()
+    * - 1} (the topmost matching block) and {@code Level#getHeight} adds one back, so the level-level
+    * call yields the first FREE position above the ground — a standing entity's feet, not the ground.
+    * Verified against 1.20.1 bytecode.
+    *
+    * @return the ground block's Y, or {@code level.getMinBuildHeight() - 1} if the chunk is unloaded
+    */
+   static int surfaceY(AltoClefController controller, int x, int z) {
+      Level world = controller.getWorld();
+      return world.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
    }
 
    static int getGroundHeight(AltoClefController controller, int x, int z) {

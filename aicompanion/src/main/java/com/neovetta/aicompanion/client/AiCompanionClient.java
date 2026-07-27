@@ -50,6 +50,10 @@ public class AiCompanionClient implements ClientModInitializer {
                     CompanionTokenHud.update(promptTokens, completionTokens, totalTokens, requests);
                 });
 
+        // /companion tokens → flip the usage panel and echo it. Client thread, same as the radar toggle.
+        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.TOKEN_HUD_TOGGLE,
+                (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::toggleTokenHudAndEcho));
+
         HudRenderCallback.EVENT.register(CompanionRadarHud::render);
         HudRenderCallback.EVENT.register(CompanionTokenHud::render);
 
@@ -63,6 +67,15 @@ public class AiCompanionClient implements ClientModInitializer {
                 cycleRadarAndEcho();
             }
         });
+    }
+
+    /** Flip the token usage panel and print the new state to the local chat. */
+    private static void toggleTokenHudAndEcho() {
+        boolean on = CompanionTokenHud.toggle();
+        var client = net.minecraft.client.MinecraftClient.getInstance();
+        if (client.player != null) {
+            client.player.sendMessage(Text.literal("Companion token HUD: " + (on ? "ON" : "OFF")), false);
+        }
     }
 
     /** Advance the radar mode and print the new value to the local chat. */

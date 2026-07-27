@@ -21,8 +21,20 @@ public class Debug {
       return "[Alto Clef] ";
    }
 
+   /**
+    * Player-facing engine output ({@code mod.log(...)}): command results, task failures, anything the
+    * user or the agent is meant to find out about.
+    *
+    * <p>This used to route through {@link #logInternal}, which sits at level 0 — a level {@link
+    * #canLog} rejects under every setting. That silently swallowed every {@code mod.log(...)} call in
+    * the engine, so failures like "insufficient items to deposit" reached nobody: not chat, not the
+    * log file, not the agent's next turn. Kept separate from {@code logInternal} so per-tick task
+    * tracing stays off while real messages get through.
+    */
    public static void logMessage(String message, boolean prefix) {
-      logInternal(message);
+      if (canLog(1)) {
+         System.out.println((prefix ? getLogPrefix() : "") + message);
+      }
    }
 
    public static void logCharacterMessage(String message, Character character, boolean isPublic) {

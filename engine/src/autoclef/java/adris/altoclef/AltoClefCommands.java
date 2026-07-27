@@ -7,6 +7,7 @@ import adris.altoclef.commands.EquipCommand;
 import adris.altoclef.commands.FarmCommand;
 import adris.altoclef.commands.FishCommand;
 import adris.altoclef.commands.FollowCommand;
+import adris.altoclef.commands.EatCommand;
 import adris.altoclef.commands.FoodCommand;
 import adris.altoclef.commands.GamerCommand;
 import adris.altoclef.commands.GetCommand;
@@ -39,6 +40,7 @@ public class AltoClefCommands {
                   new LocateStructureCommand(),
                   new StopCommand(),
                   new FoodCommand(),
+                  new EatCommand(),
                   new MeatCommand(),
                   new ReloadSettingsCommand(),
                   new ResetMemoryCommand(),

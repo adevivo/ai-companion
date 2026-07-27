@@ -17,6 +17,10 @@ A single, dedicated **AI companion** for Minecraft that navigates, gathers, craf
 autonomously, driven by a **local LLM** (llama.cpp) on your own server — with no external AI dependency.
 Optionally pointable at a hosted OpenAI-compatible API (e.g. xAI/Grok) for quality comparison.
 
+## Community / Support
+Discord: [Join the AI Companion Discord](https://discord.gg/PAm4ZFsXX)
+
+
 ### Origin
 
 **Forked from:** [PlayerEngine](https://github.com/Goodbird-git/PlayerEngine) (Goodbird-git, **LGPL-3.0**) —
@@ -49,7 +53,7 @@ player chat ─► ConversationManager ─► LLM (local llama.cpp / any OpenAI-
 | **Brain swap** | Routed the LLM seam to a configurable OpenAI-compatible endpoint (local llama.cpp by default); disabled Player2 device-auth, heartbeat, and cloud TTS in local mode. |
 | **Companion entity** | Our own `CompanionEntity` (LivingEntity + PlayerEngine capability interfaces), spawn command, Baritone navigation, and a held-item render layer so tools/weapons show in-hand. |
 | **Config / identity** | `config/aicompanion.json` drives companion name, description, and persona, plus all LLM settings (endpoint, model, temperature, maxTokens, timeout). Persona is injected into the engine's hardened prompt scaffold, not a replacement for it. |
-| **LLM request** | Now sends `model` / `temperature` / `max_tokens`; optional JSON mode (`response_format: json_object`) to force valid command output. |
+| **LLM request** | Now sends `model` / `temperature` / `max_tokens`; JSON mode (`response_format: json_object`, `llm.useGrammar`, **on by default**) to force valid command output. Without it, chatty models drift into bare prose mid-session — a measured run had 9 of 21 turns come back unparseable, which reads in-game as the companion narrating work it never starts. Scoped to the agent turn only — the build-DSL codegen and the memory summarizer want plain text, and forcing an object on them wraps their reply in one their parsers choke on. |
 | **Command reliability** | Robust JSON parsing (strips code fences, extracts the outermost object, lenient reader), raw-response logging on parse failure, and a graceful fallback that speaks a non-JSON reply instead of dropping the turn. |
 | **Equip** | Extended `equip` to wield **tools/weapons in the main hand** (new `HoldItemTask`), not just armor; the agent's held item is now part of its perceived status so the LLM can confirm equips. |
 | **Frontier A/B testing** | Config lever to point at a hosted API (e.g. xAI/Grok) via a bearer API key (env-var preferred), while keeping Player2 cloud coupling off. |
@@ -57,8 +61,9 @@ player chat ─► ConversationManager ─► LLM (local llama.cpp / any OpenAI-
 | **Chat gating** | `behavior.triggerPrefix` (blank = answer all nearby chat) and `behavior.thinkThrottleSeconds` (minimum gap between LLM turns; queued, not dropped) — both previously config-only, now actually wired. |
 | **Recall & cleanup** | `/companion come` (recall to owner, interrupts the current task), `/companion where` (coordinates + distance), and `/companion despawn` (remove a stuck companion, and drop its conversation state so the manager doesn't leak). |
 | **Stats readout** | `/companion stats` prints the companion's HP, food/saturation, worn armor, held items (with durability), and an aggregated inventory list to chat. |
+| **Healing & eating** | The engine's hunger manager was never ticked, so an injured companion healed **never** — it sat at whatever health it was left with, while hunger read a permanent 20/20 because nothing consumed it either. Natural regeneration now runs every tick; hunger depletion stays off deliberately, so there is no starvation risk and no foraging pressure. Drop below 30% health and the owner gets one chat warning (re-arms after recovery past 60%). New `eat` command consumes food from the companion's own inventory on the spot — `food` gathers and could send it on an expedition mid-emergency, which is what used to happen when it was asked to eat. |
 | **Radar HUD** | A client-side locator bar that points toward the companion so you can walk to it past entity-tracking range — the server pushes its position/health, so it works even when the entity isn't loaded. `/companion radar` (or an unbound keybind) cycles ON / AUTO / OFF; default ON, with cross-dimension and staleness handling. |
-| **Token HUD** | A client-side panel (top-left) showing the session's running token spend — total, the in/out split, request count, and a 30-minute **tokens-per-minute** bar graph. Visible only while a companion is spawned and reporting in; hidden by F1 and while the F3 overlay is up. The server pushes cumulative totals once a second and the client derives the graph by diffing them, so nothing extra is tracked server-side. |
+| **Token HUD** | A client-side panel (top-left) showing the session's running token spend — total, the in/out split, request count, and a 30-minute **tokens-per-minute** bar graph. Visible only while a companion is spawned and reporting in; hidden by F1 and while the F3 overlay is up. The server pushes cumulative totals once a second and the client derives the graph by diffing them, so nothing extra is tracked server-side. `/companion tokens` toggles the panel; default ON. |
 | **Skills** | User-authored markdown procedures in `config/aicompanion/skills/*.md`, invoked with `/companion skill <name>` — the file's body is injected into that companion's LLM queue and run with its normal command loop. `/companion skills` lists them; names/descriptions are advertised in the persona so they can also be asked for in chat. Ships with four examples (lumberjack, home-guard, farming, harvest) and hot-reloads via `/companion reload`. |
 | **Voice output** | Repointed the engine's TTS path from Player2 cloud to a **local Kokoro** OpenAI-compatible endpoint. Audio is still fetched and played **client-side**; only the `message` field is ever voiced. See **[tts/](tts/)**. |
 
@@ -164,7 +169,7 @@ comments (`_help` keys) explaining every setting. Full schema:
 **[docs/config.example.json](docs/config.example.json)**. Edit it and restart the game.
 
 Sections: `companion.{name,description,systemPrompt,skin}` · `llm.{endpoint,model,…}` ·
-`tts.{enabled,endpoint,voice,…}` · `behavior.{triggerPrefix,thinkThrottleSeconds}` ·
+`tts.{enabled,endpoint,voice,…}` · `behavior.{triggerPrefix,thinkThrottleSeconds,buildCostsMaterials,buildGroundCheck}` ·
 `skills.{advertiseInPrompt}`.
 
 ### Choosing a brain
@@ -218,7 +223,8 @@ live: the running total, the input/output split, the request count, and a bar gr
 **tokens per minute** over the last 30 minutes. The graph is the useful part — a companion answering
 the occasional question looks nothing like one stuck in a think loop, and you'll see the difference
 within a minute instead of at the next milestone report. It disappears when the companion despawns,
-and F1 hides it with the rest of the HUD.
+and F1 hides it with the rest of the HUD. `/companion tokens` turns the panel off and on if you'd
+rather not have it there; it's on by default and the setting lasts for the session.
 
 Behind it, the companion also reports its running token usage to chat and the log every
 `llm.usageReportEveryTokens` tokens (default `100000`; `0` silences it). Two optional brakes, both
@@ -228,6 +234,8 @@ off by default:
 |---|---|
 | `behavior.triggerPrefix` | Set to e.g. `"@"` and only messages starting with it reach the model — ambient chat becomes free. Blank = it answers everything nearby. |
 | `behavior.thinkThrottleSeconds` | Minimum gap between LLM turns. Messages arriving inside the window are queued and folded into the next turn, not dropped. |
+| `behavior.buildCostsMaterials` | `true` (default): `build_structure` spends real items from the companion's inventory, one per block. If it is short, it **collects the shortfall itself** and then builds — one command does the whole job, rather than bouncing back to the model to fetch one item per turn. Blocks already correct are skipped and cost nothing. Only if gathering fails does it refuse and report what is still missing. `false` restores creative-style building where blocks come from nothing. |
+| `behavior.buildGroundCheck` | `true` (default): a build plan is compared against the real terrain before any block is placed. One-sided by design — a plan that came out **below** ground is lifted onto the surface (up to 3 blocks), since buried is never intended and is invisible once it happens; a plan **above** ground is built exactly as generated, since "on top of the ground" is a one-block gap and towers are legitimately higher. Only a plan more than 16 blocks up is refused, with **no materials spent** and the correct ground Y reported back. Set `false` to disable the check entirely. |
 | `llm.maxRequests` | Hard per-session request cap. Once hit the companion stops responding until restart — a stop, not a throttle. `0` = unlimited. |
 
 ---
@@ -278,14 +286,14 @@ and defines the entity/spawn/config — exactly how Player2NPC consumes PlayerEn
 ## Building
 
 **JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`. The jar version
-comes from `engine/gradle.properties` (currently **1.0.27**); adjust the filename if you bump it.
+comes from `engine/gradle.properties` (currently **1.0.33**); adjust the filename if you bump it.
 
 ```bash
 # macOS / Linux
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17          # or your JDK 17 path
 
 # 1. Build the engine (our PlayerEngine fork) and stage its jar for the consumer
-cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.27.jar ../aicompanion/libs/ && cd ..
+cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.33.jar ../aicompanion/libs/ && cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion && ./gradlew build      # → build/libs/*.jar
@@ -295,7 +303,7 @@ cd aicompanion && ./gradlew build      # → build/libs/*.jar
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # adjust to your JDK 17 install
 
 # 1. Build the engine fork and stage its jar for the consumer
-cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.27.jar ..\aicompanion\libs\; cd ..
+cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.33.jar ..\aicompanion\libs\; cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar

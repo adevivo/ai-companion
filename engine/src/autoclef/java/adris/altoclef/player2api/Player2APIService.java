@@ -153,7 +153,16 @@ public class Player2APIService {
       }
    }
 
-   private static void applyLlmParams(JsonObject requestBody) {
+   /**
+    * Shared model/sampling parameters.
+    *
+    * <p>{@code jsonMode} must be false for any call whose reply is consumed as plain text. JSON mode
+    * is not a formatting hint — it forces the model to emit an object, so a prompt asking for prose
+    * or for a DSL program comes back wrapped in one ({@code {"program": "..."}}) and the caller feeds
+    * the wrapper to a parser that has no idea what to do with it. Only the agent turn, whose contract
+    * really is a JSON object, may pass true.
+    */
+   private static void applyLlmParams(JsonObject requestBody, boolean jsonMode) {
       String model = LlmConfig.model;
       boolean openAi = LlmConfig.baseUrl != null && LlmConfig.baseUrl.contains("api.openai.com");
       // OpenAI's gpt-5.x and o-series lock temperature to the default and 400 on any override;
@@ -172,7 +181,7 @@ public class Player2APIService {
          // Every other OpenAI-compatible backend (llama.cpp, xAI, Anthropic) expects max_tokens.
          requestBody.addProperty(openAi ? "max_completion_tokens" : "max_tokens", LlmConfig.maxTokens);
       }
-      if (LlmConfig.useGrammar) {
+      if (jsonMode && LlmConfig.useGrammar) {
          // OpenAI-compatible JSON mode: forces the model to emit a JSON object instead of prose.
          // Honored by both xAI/Grok and llama.cpp — stops chatty models replying with bare sentences.
          JsonObject responseFormat = new JsonObject();
@@ -181,8 +190,17 @@ public class Player2APIService {
       }
    }
 
+   /**
+    * Marker on the object returned when the reply could not be parsed as the agent contract.
+    *
+    * <p>Such a turn carries a message but no command, which means the agent stops acting. Consumers
+    * check this so they can queue a follow-up rather than let the plan die mid-sentence — the
+    * observed failure was a companion announcing "now building the wheat field" and then standing
+    * still forever.
+    */
+   public static final String FALLBACK_MARKER = "_fallback";
+
    public JsonObject completeConversation(ConversationHistory conversationHistory) throws Exception {
-      enforceRequestCap();
       JsonObject requestBody = new JsonObject();
       JsonArray messagesArray = new JsonArray();
 
@@ -193,7 +211,37 @@ public class Player2APIService {
             .toString();
 
       requestBody.add("messages", messagesArray);
-      applyLlmParams(requestBody);
+      applyLlmParams(requestBody, true);
+
+      String content = requestContent(requestBody, lastMessageForDebug);
+      try {
+         return Utils.parseCleanedJson(content);
+      } catch (Exception first) {
+         // One bad sample should not cost the turn. JSON mode does NOT prevent this: a bare quoted
+         // string is valid JSON, just not an object, so `response_format: json_object` is satisfied
+         // and the parse still fails. Sampling is non-deterministic, so asking again usually gets a
+         // well-formed object. The retry counts against llm.maxRequests, which is correct.
+         LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. Raw=<<{}>>",
+               first.getMessage(), content);
+         String retried = requestContent(requestBody, lastMessageForDebug);
+         try {
+            return Utils.parseCleanedJson(retried);
+         } catch (Exception second) {
+            LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. Raw=<<{}>>",
+                  second.getMessage(), retried);
+            JsonObject fallback = new JsonObject();
+            fallback.addProperty("reason", "");
+            fallback.addProperty("command", "");
+            fallback.addProperty("message", speakableFallback(retried));
+            fallback.addProperty(FALLBACK_MARKER, true);
+            return fallback;
+         }
+      }
+   }
+
+   /** One request/response round trip, returning the raw assistant content. */
+   private String requestContent(JsonObject requestBody, String lastMessageForDebug) throws Exception {
+      enforceRequestCap();
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
       Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
             "/v1/chat/completions", true, requestBody);
@@ -203,28 +251,38 @@ public class Player2APIService {
          if (choices.size() != 0) {
             JsonObject messageObject = choices.get(0).getAsJsonObject().getAsJsonObject("message");
             if (messageObject != null && messageObject.has("content")) {
-               String content = messageObject.get("content").getAsString();
                LOGGER.info("Finished complete conversation HTTP request last msg={}", lastMessageForDebug);
-               try {
-                  return Utils.parseCleanedJson(content);
-               } catch (Exception e) {
-                  // Some models (esp. chatty frontier ones) occasionally reply with a bare sentence
-                  // instead of the required JSON. Rather than dropping the turn, treat the text as the
-                  // spoken message with no command so the companion stays responsive. Enable
-                  // llm.useGrammar (JSON mode) to prevent this at the source.
-                  LOGGER.error("LLM response was not JSON ({}). Treating as plain message. Raw=<<{}>>",
-                        e.getMessage(), content);
-                  JsonObject fallback = new JsonObject();
-                  fallback.addProperty("reason", "");
-                  fallback.addProperty("command", "");
-                  fallback.addProperty("message", content == null ? "" : content.trim());
-                  return fallback;
-               }
+               return messageObject.get("content").getAsString();
             }
          }
       }
-
       throw new Exception("Invalid response format: " + responseMap.toString());
+   }
+
+   /**
+    * Turns an unparseable reply into something safe to say out loud, or "" to stay quiet.
+    *
+    * <p>The raw content used to be spoken verbatim, which meant a thinking model's {@code <think>}
+    * monologue — and any half-written JSON around it — was broadcast to chat. Reasoning is stripped
+    * first; whatever is left is only spoken if it still reads like a sentence rather than machine
+    * output. Silence is better than narrating the model's internals at the player.
+    */
+   static String speakableFallback(String content) {
+      // A lone JSON string is the common shape here — unwrap it so the quote marks are not spoken.
+      String unwrapped = Utils.unwrapJsonString(content);
+      String text = Utils.stripReasoning(unwrapped != null ? unwrapped : content).trim();
+      if (text.isEmpty()) {
+         return "";
+      }
+      // Any leftover structure (braces, quoted keys, tags) means this was a malformed response
+      // object, not speech. Saying it would leak the protocol into the world.
+      if (text.contains("{") || text.contains("}") || text.contains("\"command\"")
+            || text.contains("\"reason\"") || text.contains("\"message\"") || text.matches("(?s).*<[^>]+>.*")) {
+         LOGGER.warn("Discarding unparseable reply that looks like machine output rather than speech");
+         return "";
+      }
+      // The prompt asks for under 250 characters; a runaway reply is a malfunction, not dialogue.
+      return text.length() > 250 ? text.substring(0, 250).trim() : text;
    }
 
    public String completeConversationToString(ConversationHistory conversationHistory) throws Exception {
@@ -237,7 +295,8 @@ public class Player2APIService {
       }
 
       requestBody.add("messages", messagesArray);
-      applyLlmParams(requestBody);
+      // Plain text out: the DSL codegen and the memory summarizer both parse/store this raw.
+      applyLlmParams(requestBody, false);
       String lastMessageForDebug = conversationHistory.getListJSON().get(conversationHistory.getListJSON().size() - 1)
             .toString();
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);

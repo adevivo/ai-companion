@@ -1,27 +1,56 @@
 package adris.altoclef.tasks.construction.build_structure;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.mojang.datafixers.util.Either;
 
 import adris.altoclef.AltoClefController;
+import adris.altoclef.TaskCatalogue;
+import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.player2api.ConversationHistory;
 import adris.altoclef.player2api.LLMCompleter;
 import adris.altoclef.player2api.Player2APIService;
 import adris.altoclef.player2api.Prompts;
+import adris.altoclef.player2api.utils.Utils;
+import adris.altoclef.tasks.construction.build_structure.StructureFromCode.SetBlockCommand;
 import adris.altoclef.tasksystem.Task;
+import adris.altoclef.util.ItemTarget;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 
+/**
+ * Builds an LLM-described structure in three phases:
+ *
+ * <ol>
+ * <li>{@link RequestLLMCode} — ask the model for a DSL program.
+ * <li>{@link GenerateBlockPlan} — run that program on a worker thread. Pure interpretation: it
+ * produces a list of block placements and touches nothing in the world.
+ * <li>{@link PlaceBlocks} — charge the companion's inventory for the plan, then write the blocks on
+ * the server thread, spread over several ticks.
+ * </ol>
+ *
+ * <p>Splitting plan from placement is what keeps world writes on the server thread. Running the
+ * interpreter and the {@code setBlock} calls together on a worker thread raced the server's own
+ * chunk access.
+ */
 public class BuildStructureTask extends Task {
     private static final int maxNumErrors = 2;
+    /** Placements per tick. Enough to finish a large build quickly without stalling a tick. */
+    private static final int blocksPerTick = 256;
     private static Logger LOGGER = LogManager.getLogger();
 
     private boolean isDone = false;
@@ -29,9 +58,68 @@ public class BuildStructureTask extends Task {
     private AltoClefController mod;
     private Player2APIService service;
     private int numErrors;
+    /** Last codegen/parse failure, so the give-up notice can say what kept going wrong. */
+    private String lastError;
+
     private Task actuallyRunningTask;
     private ConversationHistory history;
     private LLMCompleter completer;
+
+    /** The in-flight material gather, or null. Compared by identity in the phase dispatch. */
+    private Task gatherTask;
+    /** Plan held across a gather so placement resumes with the same (already ground-checked) blocks. */
+    private List<SetBlockCommand> pendingPlan = List.of();
+    /** One gather per build. Without this a shortfall that gathering cannot fix would loop forever. */
+    private boolean gatherAttempted = false;
+
+    /**
+     * The description trimmed for agent-facing text.
+     *
+     * <p>Skill-generated descriptions run to hundreds of characters — the 9x9 wheat field spec is
+     * ~700 — and every notice quoting one in full is echoed back into the next LLM request through
+     * {@code gameDebugMessages}. Three refusals in one session pushed roughly 2.5KB of duplicated
+     * spec through the context window. The log keeps the full text; the model only needs enough to
+     * know which build is being talked about.
+     */
+    private String shortDescription() {
+        String text = description == null ? "" : description.strip();
+        return text.length() <= 80 ? text : text.substring(0, 77).strip() + "...";
+    }
+
+    /**
+     * Strips whatever packaging the model wrapped the DSL program in before the parser sees it.
+     *
+     * <p>The prompt asks for plain text and {@code completeConversationToString} no longer forces
+     * JSON mode, but models wrap anyway — in {@code <think>} preamble, in ``` fences, or in a
+     * {@code {"program": "..."}} object. Unwrapped, every one of those is a parse error on line 1 or
+     * 2, identical on every retry, so the task burns all three attempts and gives up.
+     */
+    static String normalizeCode(String raw) {
+        // Fences come off first: a fenced JSON wrapper has to look like JSON before we can unwrap it,
+        // and the program inside the wrapper is sometimes fenced again on its own.
+        String text = stripFences(Utils.stripReasoning(raw));
+        // A lone JSON object almost always carries the program in a single string field.
+        if (text.startsWith("{")) {
+            try {
+                JsonObject obj = new JsonParser().parse(text).getAsJsonObject();
+                for (String key : new String[] { "program", "code", "dsl", "structure" }) {
+                    if (obj.has(key) && obj.get(key).isJsonPrimitive()) {
+                        text = stripFences(obj.get(key).getAsString());
+                        break;
+                    }
+                }
+            } catch (RuntimeException e) {
+                // Not JSON after all — fall through and let the DSL parser report on the real text.
+                LOGGER.debug("Code reply starts with '{' but is not a JSON object; parsing as-is");
+            }
+        }
+        return text;
+    }
+
+    /** Removes a surrounding ```` ```dsl ... ``` ```` (or bare ```` ``` ````) fence. */
+    private static String stripFences(String text) {
+        return text.replaceAll("(?s)^\\s*```[a-zA-Z]*\\s*", "").replaceAll("(?s)\\s*```\\s*$", "").trim();
+    }
 
     private class RequestLLMCode extends Task {
         // outer option: isDone, either: (left=code (success), right=errStr)
@@ -46,8 +134,9 @@ public class BuildStructureTask extends Task {
         protected void onStart() {
             // call LLM and either output err or code result.
             completer.processToString(service, history, codeResult -> {
-                LOGGER.info("LLM generated code={}", codeResult);
-                llmResult = Optional.of(Either.left(codeResult));
+                String code = normalizeCode(codeResult);
+                LOGGER.info("LLM generated code={}", code);
+                llmResult = Optional.of(Either.left(code));
             }, errStr -> {
                 LOGGER.info("LLM Transport Error={}", errStr);
                 llmResult = Optional.of(Either.right(errStr));
@@ -75,62 +164,249 @@ public class BuildStructureTask extends Task {
         }
     }
 
-    private class BuildFromCode extends Task {
-        String code;
+    /**
+     * Interprets the DSL on a worker thread and collects the placements it emits. No world access
+     * happens here, so running off-thread is safe.
+     */
+    private class GenerateBlockPlan extends Task {
+        final String code;
 
-        private ExecutorService buildThread;
+        private final ExecutorService planThread;
+        /** Written by the worker before {@link #result}, read by the server thread after it. */
+        private volatile List<SetBlockCommand> plan = List.of();
         // outer Option: is done, inner option: is error
-        Optional<Optional<String>> result = Optional.empty();
+        volatile Optional<Optional<String>> result = Optional.empty();
 
-        public BuildFromCode(String code) {
+        GenerateBlockPlan(String code) {
             this.code = code;
-            this.buildThread = Executors.newSingleThreadExecutor();
-            buildThread.submit(() -> {
-                StructureFromCode.buildStructureFromCode(code, setBlockData -> {
-                    LOGGER.info("setBlock(x={}, y={}, z={}, blockName={})",
-                            setBlockData.x, setBlockData.y, setBlockData.z, setBlockData.blockName);
-                    ResourceLocation id = new ResourceLocation("minecraft", setBlockData.blockName);
-                    Block block = BuiltInRegistries.BLOCK.get(id);
-                    // 3 means send to clients (2) and notify neighbors/update block states (1).
-                    // maybe do 2 if you dont want
-                    // redstone/etc updating/torches falling probably
-                    mod.getWorld().setBlock(new BlockPos(setBlockData.x, setBlockData.y, setBlockData.z),
-                            block.defaultBlockState(), 3);
-                }, (errStr) -> {
+            this.planThread = Executors.newSingleThreadExecutor();
+            planThread.submit(() -> {
+                List<SetBlockCommand> collected = new ArrayList<>();
+                StructureFromCode.buildStructureFromCode(code, collected::add, errStr -> {
                     result = Optional.of(Optional.of(errStr));
                 }, () -> {
+                    plan = collected;
                     result = Optional.of(Optional.empty());
                 }, mod);
             });
+            planThread.shutdown();
         }
 
         @Override
         protected boolean isEqual(Task var1) {
-            // TODO Auto-generated method stub
-            return false;
+            return var1 == this;
         }
 
         @Override
         protected void onStart() {
-            // TODO Auto-generated method stub
-
         }
 
         @Override
         protected void onStop(Task var1) {
-            // TODO Auto-generated method stub
-
+            planThread.shutdownNow();
         }
 
         @Override
         protected Task onTick() {
-            // TODO Auto-generated method stub
             return null;
         }
 
         @Override
         public boolean isFinished() {
             return result.isPresent();
+        }
+
+        @Override
+        protected String toDebugString() {
+            return String.format("Working out how to build (%s)", description);
+        }
+    }
+
+    /**
+     * Charges for the plan and writes it into the world. Runs entirely on the server thread, a few
+     * hundred blocks per tick.
+     */
+    private class PlaceBlocks extends Task {
+        private List<SetBlockCommand> plan;
+        private int next = 0;
+        /** Blocks actually written. Zero at the end means the build was a no-op, not a success. */
+        private int changed = 0;
+        /**
+         * Why the build was given up on, or null to carry on. Reported to the agent verbatim, so it
+         * has to read as an explanation of what to do next rather than a status code.
+         */
+        private String abortReason;
+        /** Non-empty when the build paused to go and collect what it was short of. */
+        private List<ItemTarget> gatherTargets = List.of();
+
+        PlaceBlocks(List<SetBlockCommand> plan) {
+            this.plan = plan;
+        }
+
+        /** What this build still needs collecting, or empty to carry on placing. */
+        List<ItemTarget> gatherTargets() {
+            return gatherTargets;
+        }
+
+        /** The plan as it will actually be placed — already shifted by the ground check. */
+        List<SetBlockCommand> plan() {
+            return plan;
+        }
+
+        @Override
+        protected void onStart() {
+            if (plan.isEmpty()) {
+                // isFinished() is already true for an empty plan, so onTick never runs and the
+                // no-op report below would be skipped — the task would just finish and the agent
+                // would announce a structure the DSL never described a single block of.
+                LOGGER.info("Build ({}) produced an empty plan — no blocks to place", description);
+                abortReason = String.format(
+                        "Built nothing for (%s): the generated plan contained no blocks at all. Nothing exists — do not describe it as built. Try again with a clearer description.",
+                        shortDescription());
+                return;
+            }
+            // Ground check first: a plan that is going to be thrown away must not cost anything.
+            if (!checkGround()) {
+                return;
+            }
+            if (!BehaviorConfig.buildCostsMaterials) {
+                LOGGER.info("Building ({}), {} blocks, materials disabled by config", description, plan.size());
+                return;
+            }
+            BuildMaterials.Bill bill = BuildMaterials.tally(plan);
+            Map<Item, Integer> shortfall = BuildMaterials.shortfall(mod, bill);
+            if (!shortfall.isEmpty()) {
+                LOGGER.info("Not enough materials to build ({}), missing {}", description,
+                        BuildMaterials.describe(shortfall));
+                // First time short: go and collect, rather than bouncing it back to the model to
+                // fetch one item per round trip. gatherAttempted stops this repeating forever.
+                if (!gatherAttempted) {
+                    gatherTargets = BuildMaterials.gatherTargets(bill);
+                    if (!gatherTargets.isEmpty()) {
+                        return;
+                    }
+                    LOGGER.info("Nothing in the shortfall can be gathered automatically");
+                }
+                abortReason = String.format(
+                        "Could not build (%s): not carrying enough materials. Still needed: %s. Use `get` to collect them, then build again.",
+                        shortDescription(), BuildMaterials.describe(shortfall));
+                return;
+            }
+            LOGGER.info("Building ({}), {} blocks costing {}", description, plan.size(),
+                    bill.isFree() ? "nothing" : BuildMaterials.describe(bill.consumed()));
+        }
+
+        /**
+         * Compare the plan against the terrain. Asymmetric on purpose: a buried plan is always a
+         * mistake and is lifted onto the surface, while a plan above the ground is taken at face
+         * value, because "sitting on top of the ground" is a one-block gap and indistinguishable
+         * from a one-block error by size alone. Only the two hopeless cases are refused.
+         *
+         * @return false when the build has been abandoned
+         */
+        private boolean checkGround() {
+            if (!BehaviorConfig.buildGroundCheck) {
+                return true;
+            }
+            OptionalInt offset = BuildPlacement.groundOffset(mod, plan);
+            if (offset.isEmpty()) {
+                return true; // nothing comparable — all air, or the footprint is not loaded
+            }
+            // Positive: plan is below the terrain and must come up. Negative: it is above it.
+            int dy = offset.getAsInt();
+            if (dy > 0) {
+                if (dy <= BuildPlacement.MAX_LIFT) {
+                    LOGGER.info("Build plan for ({}) came out {} block(s) underground; lifting onto the surface",
+                            description, dy);
+                    plan = BuildPlacement.shifted(plan, dy);
+                    return true;
+                }
+                return refuseGround(dy + " blocks underground");
+            }
+            if (-dy > BuildPlacement.MAX_AIR_GAP) {
+                return refuseGround(-dy + " blocks up in the air");
+            }
+            // At the surface, or deliberately above it — build exactly what was asked for.
+            return true;
+        }
+
+        /** Abandon the build before anything is spent, telling the agent where the ground actually is. */
+        private boolean refuseGround(String where) {
+            int feetY = Mth.floor(mod.getEntity().getY());
+            LOGGER.info("Refusing build ({}): plan sits {}", description, where);
+            abortReason = String.format(
+                    "Could not build (%s): the plan came out %s, so nothing was placed and no materials were spent. Ground level there is y=%d and your feet are at y=%d — build again using those, and do not claim the structure exists.",
+                    shortDescription(), where, feetY - 1, feetY);
+            return false;
+        }
+
+        @Override
+        protected Task onTick() {
+            if (abortReason != null || !gatherTargets.isEmpty()) {
+                return null;
+            }
+            int visited = 0;
+            while (next < plan.size() && visited < blocksPerTick) {
+                SetBlockCommand command = plan.get(next);
+                Block block = BuildMaterials.resolveBlock(command.blockName);
+                BlockPos pos = new BlockPos(command.x, command.y, command.z);
+                // Already the right block? Placing it again would cost an item and change nothing.
+                // Compared by Block rather than BlockState on purpose: re-running a farm build must
+                // not reset crop age or farmland moisture — and then bill for having done so.
+                if (mod.getWorld().getBlockState(pos).getBlock() == block) {
+                    next++;
+                    visited++;
+                    continue;
+                }
+                Item cost = BehaviorConfig.buildCostsMaterials ? BuildMaterials.consumedItemFor(block) : null;
+                if (cost != null && !BuildMaterials.consume(mod, cost, 1)) {
+                    // Pre-flight said we could afford this, so something else emptied the
+                    // inventory mid-build. Stop rather than carry on placing for free.
+                    LOGGER.warn("Ran out of {} partway through building ({})", BuildMaterials.name(cost),
+                            description);
+                    abortReason = String.format(
+                            "Stopped building (%s) partway: ran out of %s. The structure is incomplete. Use `get` to collect more, then build again.",
+                            shortDescription(), BuildMaterials.name(cost));
+                    return null;
+                }
+                // 3 means send to clients (2) and notify neighbors/update block states (1).
+                mod.getWorld().setBlock(pos, block.defaultBlockState(), 3);
+                changed++;
+                next++;
+                visited++;
+            }
+            if (next >= plan.size() && changed == 0) {
+                // Every block was already what the plan asked for. Nothing was placed and nothing was
+                // spent, but the task still "finishes" — so say so, or the agent announces a
+                // structure it did not build. This is what a rebuild onto itself looks like.
+                LOGGER.info("Build ({}) changed nothing — all {} blocks already in place",
+                        description, plan.size());
+                abortReason = String.format(
+                        "Built nothing for (%s): every block was already in place, so no materials were spent and the world is unchanged. Tell the owner it was already there rather than claiming you built it. If they wanted it somewhere else, use a different position.",
+                        shortDescription());
+                return null;
+            }
+            setDebugState(String.format("Placed %d/%d blocks", next, plan.size()));
+            return null;
+        }
+
+        /** Why the build stopped early, or null if it ran to completion. */
+        String abortReason() {
+            return abortReason;
+        }
+
+        @Override
+        protected void onStop(Task var1) {
+        }
+
+        @Override
+        protected boolean isEqual(Task var1) {
+            return var1 == this;
+        }
+
+        @Override
+        public boolean isFinished() {
+            return abortReason != null || !gatherTargets.isEmpty() || next >= plan.size();
         }
 
         @Override
@@ -159,8 +435,11 @@ public class BuildStructureTask extends Task {
     @Override
     protected Task onTick() {
         if (numErrors > maxNumErrors) {
-            LOGGER.info("Too many errors, finishing.");
-            // TODO: change to error from Task
+            // The task system only knows "finished", so without a notice the agent reads this as a
+            // success and tells the player the structure is built. Say what actually happened.
+            mod.logAgentNotice(String.format(
+                    "Could not build (%s): the build plan failed to generate %d times in a row (last error: %s). Nothing was placed. Do not claim it was built.",
+                    shortDescription(), numErrors, lastError == null ? "unknown" : lastError));
             isDone = true;
             return null;
         }
@@ -176,10 +455,11 @@ public class BuildStructureTask extends Task {
             result.mapBoth(
                     code -> {
                         LOGGER.info("LLM returned code={}", code);
-                        actuallyRunningTask = new BuildFromCode(code);
+                        actuallyRunningTask = new GenerateBlockPlan(code);
                         return null;
                     }, errStr -> {
                         ++numErrors;
+                        lastError = errStr;
                         String tryAgainMessage = String.format(
                                 "When trying to call the llm with the description, got this error: \n(%s)\n. Try again and generate code using the same description:\n(%s)",
                                 errStr, description);
@@ -190,13 +470,14 @@ public class BuildStructureTask extends Task {
                     });
             return actuallyRunningTask;
         }
-        if (actuallyRunningTask instanceof BuildFromCode) {
-            Optional<String> result = ((BuildFromCode) actuallyRunningTask).result.get();
+        if (actuallyRunningTask instanceof GenerateBlockPlan planTask) {
+            Optional<String> result = planTask.result.get();
             // set actually running task in both cases
             result.ifPresentOrElse(
                     errStr -> {
-                        String code = ((BuildFromCode) actuallyRunningTask).code;
-                        history.addAssistantMessage(code, service);
+                        ++numErrors;
+                        lastError = errStr;
+                        history.addAssistantMessage(planTask.code, service);
                         String tryAgainMessage = String.format(
                                 "The code was executed, but got error \n(%s)\nTry again and generate code with the same description:\n(%s)",
                                 errStr, description);
@@ -204,10 +485,52 @@ public class BuildStructureTask extends Task {
                         history.addUserMessage(tryAgainMessage, service);
                         actuallyRunningTask = new RequestLLMCode();
                     }, () -> {
-                        isDone = true;
-                        actuallyRunningTask = null;
+                        actuallyRunningTask = new PlaceBlocks(planTask.plan);
                     });
             return actuallyRunningTask;
+        }
+        if (actuallyRunningTask == gatherTask && gatherTask != null) {
+            // Collected (or gave up trying) — place the same plan again. gatherAttempted is already
+            // set, so a shortfall this time round aborts instead of looping back here.
+            LOGGER.info("Finished gathering for ({}); placing blocks", description);
+            gatherTask = null;
+            actuallyRunningTask = new PlaceBlocks(pendingPlan);
+            return actuallyRunningTask;
+        }
+        if (actuallyRunningTask instanceof PlaceBlocks placeTask) {
+            List<ItemTarget> needed = placeTask.gatherTargets();
+            if (!needed.isEmpty()) {
+                // Short of materials on the first attempt: go and get everything at once rather than
+                // bouncing back to the model, which fetched one item per round trip and burned three
+                // turns on a chest and a bucket.
+                gatherAttempted = true;
+                pendingPlan = placeTask.plan();
+                gatherTask = needed.size() == 1
+                        ? TaskCatalogue.getItemTask(needed.get(0))
+                        : TaskCatalogue.getSquashedItemTask(needed.toArray(new ItemTarget[0]));
+                if (gatherTask != null) {
+                    LOGGER.info("Gathering materials for ({}): {}", description,
+                            needed.stream().map(ItemTarget::toString).collect(Collectors.joining(", ")));
+                    setDebugState("Collecting materials to build");
+                    actuallyRunningTask = gatherTask;
+                    return actuallyRunningTask;
+                }
+                // No usable resource task — fall through and let the next attempt report the shortfall.
+                LOGGER.warn("Could not build a gather task for ({}); retrying placement to report it",
+                        description);
+                actuallyRunningTask = new PlaceBlocks(pendingPlan);
+                return actuallyRunningTask;
+            }
+            // Missing materials or a plan that missed the ground are not the model's fault, so
+            // there is nothing to regenerate — hand the agent the reason and let it act on it.
+            String abortReason = placeTask.abortReason();
+            if (abortReason != null) {
+                LOGGER.info(abortReason);
+                mod.logAgentNotice(abortReason);
+            }
+            isDone = true;
+            actuallyRunningTask = null;
+            return null;
         }
         LOGGER.error("actually running task in buildStructureTask set to incorrect type");
         return null;
