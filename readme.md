@@ -171,7 +171,8 @@ comments (`_help` keys) explaining every setting. Full schema:
 **[docs/config.example.json](docs/config.example.json)**. Edit it and restart the game.
 
 Sections: `companion.{name,description,systemPrompt,skin}` · `llm.{endpoint,model,…}` ·
-`tts.{enabled,endpoint,voice,…}` · `behavior.{triggerPrefix,thinkThrottleSeconds,buildCostsMaterials,buildGroundCheck}` ·
+`tts.{enabled,endpoint,voice,…}` ·
+`behavior.{triggerPrefix,thinkThrottleSeconds,buildCostsMaterials,buildGroundCheck,maxAutonomousTurns}` ·
 `skills.{advertiseInPrompt}`.
 
 ### Choosing a brain
@@ -238,6 +239,7 @@ off by default:
 | `behavior.thinkThrottleSeconds` | Minimum gap between LLM turns. Messages arriving inside the window are queued and folded into the next turn, not dropped. |
 | `behavior.buildCostsMaterials` | `true` (default): `build_structure` spends real items from the companion's inventory, one per block. If it is short, it **collects the shortfall itself** and then builds — one command does the whole job, rather than bouncing back to the model to fetch one item per turn. Blocks already correct are skipped and cost nothing. Only if gathering fails does it refuse and report what is still missing. `false` restores creative-style building where blocks come from nothing. |
 | `behavior.buildGroundCheck` | `true` (default): a build plan is compared against the real terrain before any block is placed. One-sided by design — a plan that came out **below** ground is lifted onto the surface (up to 3 blocks), since buried is never intended and is invisible once it happens; a plan **above** ground is built exactly as generated, since "on top of the ground" is a one-block gap and towers are legitimately higher. Only a plan more than 16 blocks up is refused, with **no materials spent** and the correct ground Y reported back. Set `false` to disable the check entirely. |
+| `behavior.maxAutonomousTurns` | `2` (default): how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again. Every finished command prompts it for a next step, so without a cap one instruction chains indefinitely — and it starts inventing chores. The counter resets whenever anybody talks to it, and whenever a command **fails**, so gather-then-retry loops still run to completion. `0` = unlimited (the old behaviour). |
 | `llm.maxRequests` | Hard per-session request cap. Once hit the companion stops responding until restart — a stop, not a throttle. `0` = unlimited. |
 
 ---
