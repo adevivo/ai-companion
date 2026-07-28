@@ -119,9 +119,19 @@ public class StorageHelper {
       return miningRequirementMetInner(controller, true, requirement);
    }
 
+   /**
+    * The hotbar slot holding the best tool for {@code state}, or empty when that is already the slot
+    * in hand.
+    *
+    * <p>This returned {@code Optional.of(...)} unconditionally, so every {@code isPresent()} check at a
+    * call site was decorative — {@code ToolSet.getBestSlot} never reports "nothing better", it falls
+    * back to slot 0 or the selected slot. Reporting empty for "no change needed" is what callers
+    * actually branch on.
+    */
    public static Optional<Slot> getBestToolSlot(AltoClefController controller, BlockState state) {
+      LivingEntityInventory inventory = controller.getInventory();
       int bestSlot = new ToolSet(controller.getPlayer()).getBestSlot(state.getBlock(), false);
-      return Optional.of(new Slot(controller.getInventory().main, bestSlot));
+      return bestSlot == inventory.selectedSlot ? Optional.empty() : Optional.of(new Slot(inventory.main, bestSlot));
    }
 
    public static boolean shouldSaveStack(AltoClefController controller, Block block, ItemStack stack) {

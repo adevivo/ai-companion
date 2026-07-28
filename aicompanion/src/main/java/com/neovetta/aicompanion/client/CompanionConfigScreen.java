@@ -327,6 +327,16 @@ public final class CompanionConfigScreen {
                         Text.literal("the window queue into the next turn. 0 = no limit."))
                 .setSaveConsumer(v -> behavior.addProperty("thinkThrottleSeconds", v))
                 .build());
+        cat.addEntry(eb.startIntField(Text.literal("Max Autonomous Turns"), intVal(behavior, "maxAutonomousTurns", 2))
+                .setDefaultValue(2)
+                .setMin(0)
+                .setTooltip(
+                        Text.literal("Actions the companion may take on its own after"),
+                        Text.literal("finishing your request, before it waits to be"),
+                        Text.literal("spoken to. Resets when anybody talks to it."),
+                        Text.literal("0 = unlimited, and it will invent chores."))
+                .setSaveConsumer(v -> behavior.addProperty("maxAutonomousTurns", v))
+                .build());
     }
 
     /**

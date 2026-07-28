@@ -189,11 +189,25 @@ public class ConversationManager {
     private static long lastStallReport = 0L;
 
     /**
+     * How long work must sit undispatched before it counts as a stall.
+     *
+     * <p>This warning used to fire after 5 seconds, which caught the companion simply <em>talking</em>:
+     * a turn is an LLM round-trip plus however long the TTS clip runs, and 7–11 second holds are
+     * ordinary. Six of the seven warnings in the 2026-07-28 session were `tts=true` — designed
+     * behaviour logged at WARN, which is how a warning stops meaning anything. A real stall is a lock
+     * nobody releases, and that outlasts any sentence.
+     */
+    private static final long STALL_THRESHOLD_NANOS = TimeUnit.SECONDS.toNanos(15);
+
+    /**
      * Warn when messages are queued but nothing is dispatching them. Only fires if work is actually
-     * pending, and at most once every 5 seconds, so a healthy idle server stays quiet.
+     * pending, has been pending longer than {@link #STALL_THRESHOLD_NANOS}, and at most once every 5
+     * seconds — so a healthy server stays quiet whether it is idle or mid-sentence.
      */
     private static void reportStallIfWorkPending(String reason) {
-        if (queueData.values().stream().noneMatch(AgentConversationData::hasPendingEvents)) {
+        boolean stalled = queueData.values().stream()
+                .anyMatch(data -> data.hasPendingEvents() && data.nanosWaiting() > STALL_THRESHOLD_NANOS);
+        if (!stalled) {
             return;
         }
         long now = System.nanoTime();

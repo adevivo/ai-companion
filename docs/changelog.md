@@ -5,6 +5,91 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.0 — She stops fidgeting, listens when you interrupt, and actually farms
+
+Bundles PlayerEngine 1.0.39. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+All of this came out of two short play sessions against a local Llama endpoint. Nothing here crashed —
+both sessions had zero exceptions — but a lot was quietly going wrong underneath.
+
+### ⚠️ Run one command after updating
+
+```
+/companion skills reset harvest
+```
+
+The Harvest skill is rewritten in this version, but your existing copy on disk is never overwritten
+automatically — that protects skills you have edited yourself, and it also means an update leaves you
+on the old text. The command backs up what you have to `harvest.md.bak` first.
+
+### Fixed — farming
+
+- **She walks the rows now, and every tile she harvests gets a seed back.** Farming used to work
+  opportunistically — break whatever happens to be in reach, then plant whatever happens to be in
+  reach — which is how fields ended up stripped but never sown, and how she could end up standing
+  still in the middle of 122 ripe crops for three minutes without taking a step. She now orders the
+  field into rows, walks it end to end, and harvests *then immediately replants* each tile before
+  moving to the next one. Harvest and replant are one paired action per tile, not two separate sweeps.
+- **She covers the whole field.** The block scan was capped at 256 results regardless of the range you
+  asked for, so on a large field she only ever saw a corner of it — and which corner was decided by
+  chunk iteration order, not by where you were standing. The scan budget now scales with the range.
+- **A tile she cannot reach no longer stops the whole job.** Each tile gets 15 seconds; past that she
+  records why she skipped it and moves on. Each pass ends with a summary — tiles harvested, sown and
+  skipped — so it is obvious what actually happened.
+- **Harvesting no longer stops dead without telling you.** Every time the farm was started it threw
+  away its map of the field, and the task above it restarted the farm on any tick where it looked idle
+  — so the map got thrown away again before it could ever be used, twenty times a second, forever.
+  Restarting now keeps the map unless you have actually moved the field, and the restart is
+  rate-limited.
+- **Dropped wheat and seeds get collected.** She gathers what is lying around between passes instead of
+  leaving it to despawn.
+- **A stuck farm now says it is stuck.** Every way the farm can end up doing nothing now names itself,
+  in chat and in her own status, so "waiting for the crops to regrow" (correct, and worth saying) is
+  distinguishable from "I cannot see the field" (broken). If the block scan throws, you get told —
+  previously that failure vanished silently and left her frozen with no explanation.
+- **She can tell you she is out of seeds.** Bare farmland with an empty seed pouch now reports as
+  exactly that, with the number of tiles left unplanted.
+- **The Harvest skill was rewritten.** The old text told her *"No hoe, no breaking blocks, no planting
+  seeds — never say you are doing those"*, which was meant as "don't run those as separate commands"
+  but read as "you do not replant." Asked directly whether she would replant, she apologised and said
+  she had forgotten — she had been told not to talk about it. The skill now states plainly that `farm`
+  harvests *and* replants on its own, that tending a field is ongoing work she stays with until you
+  give her something else, and that standing still while crops regrow is correct rather than a fault.
+
+### Fixed
+
+- **The companion no longer fights herself over what to hold.** While farming or foraging she was
+  swapping the item in her hand roughly fifteen times a second, every second, tearing the seeds out of
+  her own hand as she tried to plant them. Three things stacked up to cause it: the "am I mining right
+  now?" signal was wired to *your* mining rather than hers, the flag that cleared it only ever fired
+  once per game launch, and the check that used it ran every single tick with no cooldown. One session
+  logged 822 of these swaps, 662 of them back to back.
+- **`scan` works.** It could not find a single block — not dirt, not iron, nothing — because it was
+  looking up names in a table that gets renamed when the game is packaged. Asking it to find something
+  would suggest you meant `field_9975`. It now goes through the block registry.
+- **Ask for a mob and she'll answer instead of failing.** `scan` only ever found blocks, but nothing
+  said so, so "find me a chicken" went to `scan chicken` and failed. She can already see every nearby
+  mob without a command, and now she knows that.
+- **Interrupting her actually works.** If you told her to do something while she was already thinking
+  about what to do next, her in-flight thought won and your instruction waited a full round. In one
+  session "kill that zombie" lost to a decision to go foraging, and she walked off with the zombie on
+  top of her. Your instruction now takes precedence.
+- **She stops making up chores.** Every finished command asked her "what next?", which she almost
+  always answered with another command — so one instruction could spawn an unbounded chain of them.
+  After being told "good job" she went on to attack a spider, attack two skeletons, forage, and start
+  farming, none of it requested. She now takes at most two actions on her own initiative before
+  waiting to be spoken to. Tune with `behavior.maxAutonomousTurns` (0 = unlimited, old behaviour).
+
+### Also
+
+- Warnings about the conversation being stuck no longer fire while she is simply talking. A
+  seven-second pause is her finishing a sentence, not a problem.
+- Killing a mob no longer logs a nineteen-item shopping list as though she were hunting a chicken for
+  blaze powder.
+
+---
+
 ## 0.1.9 — Builds that finish, and a companion that dies like a player
 
 Bundles PlayerEngine 1.0.38. Self-contained jar as always — don't install a standalone engine

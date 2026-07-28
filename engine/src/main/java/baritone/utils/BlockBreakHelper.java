@@ -18,6 +18,18 @@ public final class BlockBreakHelper {
       this.ctx = ctx;
    }
 
+   /**
+    * The block this entity is currently mining, or {@code null} when it is not mining.
+    *
+    * <p>This is the only authoritative answer for a companion. The state used to be tracked by an
+    * event pair published from a mixin on {@code MultiPlayerGameMode} — the <em>client's</em> block
+    * breaking — which a server-side companion entity never goes through at all.
+    */
+   @Nullable
+   public BlockPos getBreakingBlockPos() {
+      return this.lastPos;
+   }
+
    public void stopBreakingBlock() {
       if (this.ctx.entity() != null && this.lastPos != null) {
          if (!this.ctx.playerController().hasBrokenBlock()) {

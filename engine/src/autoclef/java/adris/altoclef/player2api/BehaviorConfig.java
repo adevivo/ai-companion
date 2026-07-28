@@ -55,6 +55,23 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_BUILDGROUNDCHECK", "true"));
 
     /**
+     * How many turns in a row the companion may take on its own initiative before it must wait to be
+     * spoken to ({@code <= 0} = unlimited).
+     *
+     * <p>Every finished command queues a "what shall we do next?" prompt, so one instruction can drive
+     * an unbounded chain of LLM turns. Measured on a local endpoint: 17 calls for 8 user messages —
+     * 9 turns, over half, were self-triggered, and they included four actions nobody asked for
+     * (`attack spider`, `attack skeleton`, `food`, `farm`) issued after the owner said "good job".
+     *
+     * <p>Two is enough to finish a genuine multi-step plan — gather, then build — without letting the
+     * companion wander off on its own for the rest of the session. The counter resets the moment
+     * anybody talks to it.
+     */
+    public static volatile int maxAutonomousTurns =
+            Integer.parseInt(resolve("aicompanion.behavior.maxAutonomousTurns",
+                    "AICOMPANION_BEHAVIOR_MAXAUTONOMOUSTURNS", "2"));
+
+    /**
      * Apply {@link #triggerPrefix} to an incoming chat line. Returns the message the model should see
      * (prefix stripped, trimmed), or {@code null} if this message is not addressed to the companion.
      */

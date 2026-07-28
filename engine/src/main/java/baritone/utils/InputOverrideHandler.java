@@ -6,7 +6,9 @@ import baritone.api.utils.input.Input;
 import baritone.behavior.Behavior;
 import java.util.EnumSet;
 import java.util.Set;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.LivingEntity;
+import org.jetbrains.annotations.Nullable;
 
 public final class InputOverrideHandler extends Behavior implements IInputOverrideHandler {
    private final Set<Input> inputForceStateMap = EnumSet.noneOf(Input.class);
@@ -89,5 +91,11 @@ public final class InputOverrideHandler extends Behavior implements IInputOverri
 
    public BlockBreakHelper getBlockBreakHelper() {
       return this.blockBreakHelper;
+   }
+
+   @Nullable
+   @Override
+   public BlockPos getBreakingBlockPos() {
+      return this.blockBreakHelper.getBreakingBlockPos();
    }
 }

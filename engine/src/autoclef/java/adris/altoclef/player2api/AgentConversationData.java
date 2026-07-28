@@ -46,6 +46,35 @@ public class AgentConversationData {
     /** Guards {@link #requeueAfterMalformedReply} so two bad replies cannot loop on each other. */
     private boolean lastReplyWasMalformed = false;
 
+    /**
+     * Whether the turn currently in flight was self-triggered — driven only by {@code InfoMessage}
+     * command feedback, with nobody having spoken to the companion.
+     */
+    private volatile boolean autonomousTurnInFlight = false;
+
+    /**
+     * Set when a real user message lands while an autonomous turn is already in flight. That turn was
+     * composed without the message, so its command answers a question nobody is asking any more.
+     *
+     * <p>Seen live: the owner typed "kill that zombie" two seconds after a command-finish turn was
+     * dispatched, the in-flight turn came back with `food 10`, and the companion walked off to forage
+     * while the zombie was on top of them. The zombie was only dealt with a full round later.
+     */
+    private volatile boolean userMessagePreemptedTurn = false;
+
+    /**
+     * Turns taken on the companion's own initiative since anybody last spoke to it. Bounded by
+     * {@link BehaviorConfig#maxAutonomousTurns}.
+     */
+    private volatile int consecutiveAutonomousTurns = 0;
+
+    /**
+     * When the currently-queued work first arrived, or 0 when the queue is empty. Drives
+     * {@link #nanosWaiting()}, which is what decides whether a lock is a stall or just a companion
+     * partway through a sentence.
+     */
+    private volatile long firstPendingSince = 0L;
+
     private MessageBuffer altoClefMsgBuffer = new MessageBuffer(10);
 
     /**
@@ -101,9 +130,20 @@ public class AgentConversationData {
         this.lastProcessTime = System.nanoTime();
         this.isProcessing = true;
 
+        // Classify the turn before the queue is drained: a batch of nothing but InfoMessages is the
+        // companion prompting itself after a command finished, not anyone talking to it.
+        this.autonomousTurnInFlight = eventQueue.stream().allMatch(evt -> evt instanceof InfoMessage);
+        this.userMessagePreemptedTurn = false;
+        if (this.autonomousTurnInFlight) {
+            this.consecutiveAutonomousTurns++;
+        }
+
         // prepare conversation history for LLM call
         Event lastEvent = mod.getAIPersistantData().dumpEventQueueToConversationHistoryAndReturnLastEvent(eventQueue,
                 mod.getPlayer2APIService());
+        // The queue has been drained into the history, so nothing is waiting any more. Anything that
+        // arrives from here on starts its own wait clock.
+        this.firstPendingSince = eventQueue.isEmpty() ? 0L : System.nanoTime();
         Optional<String> reminderString = getReminderStringFromLastEvent(lastEvent);
 
         String agentStatus = AgentStatus.fromMod(this.mod).toString();
@@ -118,9 +158,19 @@ public class AgentConversationData {
 
         Consumer<JsonObject> onLLMResponse = jsonResp -> {
             String llmMessage = Utils.getStringJsonSafely(jsonResp, "message");
-            String command = this.isGreetingResponse ? "bodylang greeting"
+            String replied = this.isGreetingResponse ? "bodylang greeting"
                     : Utils.getStringJsonSafely(jsonResp, "command");
             this.isGreetingResponse = false;
+            boolean preempted = this.userMessagePreemptedTurn && replied != null && !replied.isBlank();
+            if (preempted) {
+                // Keep the message so the companion still says something rather than going mute, but
+                // do not act: the user's message is already queued and drives the very next turn, which
+                // will decide what to actually do with full knowledge of what was asked.
+                LOGGER.info("Dropping command={} from a self-triggered turn — a user message arrived while it was"
+                        + " in flight and takes precedence.", replied);
+            }
+            this.userMessagePreemptedTurn = false;
+            String command = preempted ? "" : replied;
             LOGGER.info("[AICommandBridge/processCharWithAPI]: Processed LLM repsonse: message={} command={}",
                     llmMessage, command);
             try {
@@ -136,7 +186,9 @@ public class AgentConversationData {
                         e.getMessage());
             } finally {
                 this.isProcessing = false;
-                requeueAfterMalformedReply(jsonResp, command);
+                // Pass what the model actually replied, not the blanked-out value: a preempted turn is
+                // not a malformed one, and the queued user message already guarantees a next turn.
+                requeueAfterMalformedReply(jsonResp, replied);
             }
         };
         completer.processToJson(mod.getPlayer2APIService(), historyWithWrappedStatus, onLLMResponse, onErrMsg, true);
@@ -189,6 +241,9 @@ public class AgentConversationData {
         if (eventQueue.size() > MAX_EVENT_QUEUE_SIZE) {
             eventQueue.removeFirst();
         }
+        if (eventQueue.isEmpty()) {
+            firstPendingSince = System.nanoTime();
+        }
         LOGGER.info("queue for UUID={} name={} adding event={} ", getUUID(), getName(), event);
         eventQueue.add(event);
     }
@@ -225,6 +280,15 @@ public class AgentConversationData {
     }
 
     public void onEvent(Event event) {
+        if (event instanceof Event.UserMessage) {
+            // Somebody is talking to us: the companion is no longer running on its own initiative, so
+            // it earns a fresh budget of self-triggered turns.
+            consecutiveAutonomousTurns = 0;
+            if (isProcessing && autonomousTurnInFlight) {
+                LOGGER.info("User message arrived mid-turn; the in-flight self-triggered command will be discarded.");
+                userMessagePreemptedTurn = true;
+            }
+        }
         addEventToQueue(event);
     }
 
@@ -262,6 +326,12 @@ public class AgentConversationData {
             String failure = pendingFailure;
             pendingFailure = null;
             if (failure != null) {
+                // A failure means the owner's request is still unmet, so this is not the companion
+                // drifting off on its own — it is recovery, and it needs room to run. Without this
+                // reset a gather -> build loop stalls halfway: the refused build queues (failures are
+                // never capped), the follow-up `get` succeeds, and then the budget is already spent so
+                // nothing prompts the retry.
+                consecutiveAutonomousTurns = 0;
                 // Queued whatever else is pending, unlike the plain "what next" prompt below: a
                 // failure has to reach the conversation history, because that is the only record
                 // that outlives the turn it happened on. Skipping it here is what let the agent
@@ -271,6 +341,12 @@ public class AgentConversationData {
                         "Command feedback: %s finished, but it did NOT do what was asked. %s Do not tell the owner it succeeded or that the result exists — say what actually happened and act on it. If nothing further is needed, generate empty command `\"\"`.",
                         stopReason.commandName(), failure)));
             } else if (eventQueue.isEmpty()) {
+                if (autonomousBudgetSpent()) {
+                    LOGGER.info("Not prompting for a next step after cmd={}: {} self-triggered turns already taken"
+                            + " without anyone speaking. Waiting to be addressed.",
+                            stopReason.commandName(), consecutiveAutonomousTurns);
+                    return;
+                }
                 LOGGER.info("adding cmd={} to queue because it finished and queue not empty", stopReason.commandName());
                 addEventToQueue(new InfoMessage(String.format(
                         "Command feedback: %s finished running. What shall we do next? If no new action is needed to finish user's request, generate empty command `\"\"`.",
@@ -294,6 +370,11 @@ public class AgentConversationData {
             // goes permanently silent mid-plan until the owner types in chat. Skip when the queue is
             // already non-empty (same rule as the finished case) so a real user message isn't preempted.
             if (eventQueue.isEmpty()) {
+                if (autonomousBudgetSpent()) {
+                    LOGGER.info("Not prompting for a next step after stop: {} self-triggered turns already taken"
+                            + " without anyone speaking. Waiting to be addressed.", consecutiveAutonomousTurns);
+                    return;
+                }
                 LOGGER.info("adding cmd={} to queue so the agent can continue after stopping",
                         stopReason.commandName());
                 addEventToQueue(new InfoMessage(
@@ -307,6 +388,16 @@ public class AgentConversationData {
         } else {
             LOGGER.info("Skipping command stop for cmd={} because it was cancelled", stopReason.commandName());
         }
+    }
+
+    /**
+     * Whether the companion has used up its run of self-triggered turns and should now wait to be
+     * spoken to. Only gates the "what next?" prompts — a command <em>failure</em> is still always
+     * reported, since that is information the owner needs and the model cannot otherwise learn.
+     */
+    private boolean autonomousBudgetSpent() {
+        int max = BehaviorConfig.maxAutonomousTurns;
+        return max > 0 && consecutiveAutonomousTurns >= max;
     }
 
     // Utils:
@@ -336,12 +427,26 @@ public class AgentConversationData {
     }
 
     /**
+     * How long the oldest undispatched work has been waiting, in nanoseconds; 0 when nothing is
+     * pending. This is the honest measure of a stall — "time since the last turn" is not, because a
+     * conversation that has never taken a turn has no last turn, and one that just took a turn may
+     * legitimately be holding new work while the companion finishes speaking.
+     */
+    public long nanosWaiting() {
+        long since = firstPendingSince;
+        return since == 0L ? 0L : System.nanoTime() - since;
+    }
+
+    /**
      * One-line dump of everything {@link #getPriority()} consults, so a companion that has queued a
      * message but is not acting on it can be diagnosed from a log rather than a debugger.
      */
     public String describeState() {
-        return String.format("%s{enabled=%s, processing=%s, queued=%d, msSinceLastProcess=%d, priority=%d}",
-                getName(), enabled, isProcessing, eventQueue.size(),
+        return String.format(
+                "%s{enabled=%s, processing=%s, autonomousInFlight=%s, autonomousTurns=%d, queued=%d,"
+                        + " msWaiting=%d, msSinceLastProcess=%d, priority=%d}",
+                getName(), enabled, isProcessing, autonomousTurnInFlight, consecutiveAutonomousTurns,
+                eventQueue.size(), nanosWaiting() / 1_000_000L,
                 lastProcessTime == 0L ? -1 : (System.nanoTime() - lastProcessTime) / 1_000_000L,
                 getPriority());
     }

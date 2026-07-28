@@ -21,7 +21,15 @@ public class PlayerInteractionFixChain extends TaskChain {
    private final TimerGame stackHeldTimeout = new TimerGame(1.0);
    private final TimerGame generalDuctTapeSwapTimeout = new TimerGame(30.0);
    private final TimerGame shiftDepressTimeout = new TimerGame(10.0);
-   private final TimerGame betterToolTimer = new TimerGame(0.0);
+   /**
+    * How often to reconsider the tool in hand while mining.
+    *
+    * <p>Was {@code 0.0} — elapsed every tick, so this ran the full check plus a slot swap at 20 Hz and
+    * fought whatever the running task had equipped. Baritone's {@code FarmProcess} re-selects seeds
+    * every tick to plant them, so a farm run turned into a tug-of-war over the hotbar. A block takes
+    * far longer than this to break; a second is ample to notice the target changed under us.
+    */
+   private final TimerGame betterToolTimer = new TimerGame(1.0);
    private final TimerGame mouseMovingButScreenOpenTimeout = new TimerGame(1.0);
    private ItemStack lastHandStack = null;
    private Rotation lastLookRotation;

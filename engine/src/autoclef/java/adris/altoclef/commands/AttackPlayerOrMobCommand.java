@@ -146,6 +146,17 @@ public class AttackPlayerOrMobCommand extends Command {
             : task.toKill.equals(this.toKill) && task.mobKillTargetCount == this.mobKillTargetCount;
       }
 
+      /**
+       * {@code ResourceTask} appends the full resource list to this name, and {@link #drops} is a
+       * catch-all of every mob drop in the game — so the default rendering was 19 entries of
+       * "x 9999" on every kill, and read as though the companion was hunting a chicken for blaze
+       * powder. The list is a pickup filter, not a goal; it does not belong in the task name.
+       */
+      @Override
+      protected String toDebugString() {
+         return "Attacking and collect items from " + this.toKill + " x " + this.mobKillTargetCount;
+      }
+
       @Override
       protected String toDebugStringName() {
          return "Attacking and collect items from " + this.toKill + " x " + this.mobKillTargetCount;
