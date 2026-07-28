@@ -5,13 +5,10 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
-## 0.2.0 — She farms properly, listens when you interrupt, and stops inventing chores
+## 0.2.0 — Farming that actually farms
 
 Bundles PlayerEngine 1.0.39. Self-contained jar as always — don't install a standalone engine
 alongside it.
-
-This one came out of three play sessions against a local Llama endpoint. Nothing crashed — all three
-had zero exceptions — but a lot was going wrong quietly underneath.
 
 ### ⚠️ Run one command after updating
 
@@ -19,63 +16,31 @@ had zero exceptions — but a lot was going wrong quietly underneath.
 /companion skills reset harvest
 ```
 
-The Harvest skill is rewritten in this version, but an existing copy on disk is never overwritten
-automatically — that protects skills you have edited yourself, and it also means an update leaves you
-on the old text. The command backs up what you have to `harvest.md.bak` first. Fresh installs are fine.
+The Harvest skill is rewritten in this version, and an existing copy on disk is never overwritten
+automatically — that protects skills you have edited yourself. The command backs the old one up to
+`harvest.md.bak`. Fresh installs need nothing.
 
-### Farming actually works
+### Farming
 
-- **She walks the rows, and every tile she harvests gets a seed back.** Farming used to be
-  opportunistic — break whatever happened to be in reach, then plant whatever happened to be in reach
-  — which is how a field ended up stripped but never sown, and how she could stand motionless in the
-  middle of 122 ripe crops for three minutes without taking a step. She now orders the field into
-  rows, walks it end to end, and harvests *then immediately replants* each tile before moving on.
-  Harvest and replant are one paired action per tile, not two separate sweeps that might not line up.
-- **She covers the whole field.** The block scan stopped at 256 results no matter what range you
-  asked for, so on a large field she only ever saw part of it — and which part was decided by chunk
-  iteration order, not by where you were standing. The scan now scales to the range.
-- **Nothing can silently stall any more.** A tile she cannot reach gets fifteen seconds, then she
-  records why and moves on. Every way the farm can end up doing nothing now names itself, in chat and
-  in her own status, so "waiting for the crops to regrow" (correct, and worth saying) reads
-  differently from "I cannot see the field" (broken). Each pass ends with a summary: tiles harvested,
-  sown, and skipped.
-- **She tells you when she is out of seeds**, and how many tiles are left bare.
-- **Dropped wheat and seeds get collected** between passes instead of left to despawn.
-- **The Harvest skill was rewritten.** The old text told her *"no planting seeds — never say you are
-  doing those"*, meaning "don't run those as separate commands" but reading as "you do not replant".
-  Asked directly whether she would replant, she apologised for forgetting — she had been told not to
-  talk about it. It now says plainly that `farm` harvests *and* replants unaided, that tending a field
-  is ongoing work she stays with until you give her something else, and that standing still while
-  crops regrow is correct rather than a fault.
+- **Every tile it harvests gets a seed back.** It now works the field in a zig-zag — up one row, back
+  down the next — harvesting and replanting each tile before moving to the one beside it, instead of
+  wandering the field and leaving it stripped bare.
+- **It sees the whole field**, not just the part nearest to it.
+- **Nothing stalls silently.** A tile it cannot reach is skipped and reported, and it says whether it
+  is waiting for crops to regrow or genuinely stuck.
+- **Dropped wheat and seeds get collected** instead of left to despawn.
 
-### Fixed
+### Also fixed
 
-- **She no longer fights herself over what to hold.** While farming or foraging she was swapping the
-  item in her hand roughly fifteen times a second, tearing the seeds out of her own hand as she tried
-  to plant them — 822 swaps in one eight-minute session, 662 of them back to back. Three things
-  stacked up: the "am I mining right now?" signal was wired to *your* mining rather than hers, the
-  flag that cleared it only ever fired once per game launch, and the check that used it ran every
-  single tick with no cooldown.
-- **`scan` works.** It could not find a single block — not dirt, not iron, nothing — because it looked
-  up names in a table that gets renamed when the game is packaged, so it would suggest you meant
-  `field_9975`. It now goes through the block registry. Ask it for a mob and it explains that it finds
-  blocks, rather than failing silently.
-- **Interrupting her works.** Tell her something while she is already deciding what to do next and
-  your instruction used to lose to her in-flight thought. In one session "kill that zombie" lost to a
-  decision to go foraging, and she wandered off with the zombie on top of her. You win now.
-- **She stops making up chores.** Every finished command asked her "what next?", which she almost
-  always answered with another command, so one instruction could chain indefinitely — after being told
-  "good job" she went on to attack a spider, attack two skeletons, forage, and start farming, none of
-  it requested. She now takes at most two actions on her own initiative before waiting to be spoken
-  to. The count resets whenever you talk to her, and whenever a command fails, so gather-then-retry
-  still runs to completion. Tune with `behavior.maxAutonomousTurns` (`0` = unlimited, old behaviour).
+- It no longer swaps the item in its hand many times a second while farming, which was pulling seeds
+  out of its own hand as it tried to plant them.
+- `scan` works — it previously could not find any block at all.
+- Telling it something mid-thought now takes precedence over whatever it was about to do.
+- It stops inventing chores once your request is done. Tune with `behavior.maxAutonomousTurns`
+  (default `2`, `0` = unlimited).
 
-### Also
-
-- Warnings about the conversation being stuck no longer fire while she is simply talking. A
-  seven-second pause is her finishing a sentence, not a problem.
-- Killing a mob no longer logs a nineteen-item shopping list as though she were hunting a chicken for
-  blaze powder.
+Tested end to end against a local `Qwen2.5-14B-Instruct-Q4_K_M.gguf` — a quantised 14B model on
+consumer hardware handles all of this comfortably.
 
 ---
 
