@@ -3,6 +3,7 @@ package com.neovetta.aicompanion.entity;
 import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.Player2APIService;
+import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.util.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
@@ -27,6 +28,7 @@ import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
@@ -41,6 +43,7 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -126,13 +129,85 @@ public class CompanionEntity extends LivingEntity
         }
     }
 
+    /** Consecutive AI updates that ended in an exception. Reset by any tick that completes. */
+    private int aiFailures;
+    /** Set once the AI has failed too many times in a row; cleared by `/companion reload`. */
+    private boolean aiDisabled;
+    /**
+     * How many consecutive failures before the AI is switched off.
+     *
+     * <p>More than one because a transient fault — a chunk that was not loaded, a race with a world
+     * save — should heal itself without the owner doing anything. Not many more, because a genuinely
+     * broken state would otherwise throw twenty times a second forever.
+     */
+    private static final int MAX_AI_FAILURES = 5;
+
+    /**
+     * Absorb an exception from the AI so it cannot take the server down with it.
+     *
+     * <p>The AI runs inside this entity's tick, and Minecraft treats anything thrown out of an entity
+     * tick as unrecoverable: it raises "Ticking entity" and shuts the server down, which for a
+     * singleplayer world means the session ends. That is what a single null player reference in
+     * block-placement did — see {@code EntityPlaceContext}. A defect in the companion should cost the
+     * companion, not the world.
+     */
+    private void onAiTickFailed(Throwable failure) {
+        aiFailures++;
+        // The counters are raised before anything that could itself fail. This method is the last
+        // thing standing between a broken AI and a dead server, so reporting the problem must never
+        // become a second way to crash: reading the player list or the custom name touches state that
+        // may be exactly what went wrong.
+        if (aiFailures >= MAX_AI_FAILURES) {
+            aiDisabled = true;
+        }
+        try {
+            String name = this.getCustomName() != null
+                    ? this.getCustomName().getString()
+                    : CompanionConfig.name();
+            // Trace only on the first failure of a run — at 20 ticks a second, logging every one
+            // would bury the original cause under thousands of copies of itself.
+            if (aiFailures == 1) {
+                AiCompanion.LOGGER.error("[{}] {}'s AI threw during tick; skipping this update",
+                        AiCompanion.MOD_ID, name, failure);
+                tellOwner(name + " hit an internal error and skipped a step. Watch for it repeating.");
+            }
+            if (aiDisabled) {
+                AiCompanion.LOGGER.error("[{}] {}'s AI failed {} times in a row; disabling it. Last error:",
+                        AiCompanion.MOD_ID, name, aiFailures, failure);
+                tellOwner(name + "'s brain has stopped working — use /companion reload to restart it.");
+            }
+        } catch (Throwable reportingFailure) {
+            // Nothing left to do but note it and keep the world alive.
+            AiCompanion.LOGGER.error("[{}] Could not report a companion AI failure",
+                    AiCompanion.MOD_ID, reportingFailure);
+        }
+    }
+
+    /** Puts a line in the owner's chat, if they are online to read it. */
+    private void tellOwner(String message) {
+        MinecraftServer server = this.getWorld().getServer();
+        if (server == null || this.ownerUuid == null) {
+            return;
+        }
+        ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
+        if (owner != null) {
+            owner.sendMessage(Text.literal(message).formatted(Formatting.RED), false);
+        }
+    }
+
+    /** Lets the AI run again after it was switched off. Called by {@code /companion reload}. */
+    public void resetAiFailures() {
+        aiFailures = 0;
+        aiDisabled = false;
+    }
+
     // --- Ticking: drive the managers; the controller is guarded until the nav step ---
     @Override
     public void tick() {
         this.interactionManager.update();
         this.inventory.updateItems();
         lastAttackedTicks++; // LivingEntities don't tick attack cooldown by default
-        if (!this.getWorld().isClient && shouldTickAi()) {
+        if (!this.getWorld().isClient && !aiDisabled && shouldTickAi()) {
             // Inside this window the chunk source answers reads from memory instead of blocking on a
             // load — see CompanionTickGuard. Scoped to the AI only: super.tick() below must keep
             // vanilla's normal world access for physics and collision.
@@ -146,6 +221,9 @@ public class CompanionEntity extends LivingEntity
                     // Before a brain is attached, still drive Baritone so /companion goto works.
                     IBaritone.KEY.get(this).serverTick();
                 }
+                aiFailures = 0; // a clean tick clears whatever went wrong before it
+            } catch (Throwable failure) {
+                onAiTickFailed(failure);
             } finally {
                 CompanionTickGuard.end();
             }
@@ -257,20 +335,117 @@ public class CompanionEntity extends LivingEntity
             return;
         }
         MinecraftServer server = this.getWorld().getServer();
-        if (server == null) {
-            return;
-        }
-        ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
-        if (owner == null) {
+        if (server == null || this.ownerUuid == null
+                || server.getPlayerManager().getPlayer(this.ownerUuid) == null) {
             return; // owner offline — warn when they next see it drop, not into the void
         }
         lowHealthWarned = true;
         String name = this.getCustomName() != null ? this.getCustomName().getString() : CompanionConfig.name();
         String note = String.format("%s is badly hurt — %.0f/%.0f health.", name, this.getHealth(), max);
-        owner.sendMessage(Text.literal(note).formatted(Formatting.RED), false);
+        tellOwner(note);
         AiCompanion.LOGGER.info("[{}] {}", AiCompanion.MOD_ID, note);
         if (this.controller != null) {
-            this.controller.logAgentNotice(note + " Tell your owner you are hurt and need help.");
+            // Info, not a notice: this fires from the entity tick, unrelated to whatever command is
+            // running, and logAgentNotice would leave a pending failure for that command to report.
+            this.controller.logAgentInfo(note + " Tell your owner you are hurt and need help.");
+        }
+    }
+
+    // --- Death: die like a player, drop like a player ---
+
+    /**
+     * Scatter everything the companion was carrying at the place it died.
+     *
+     * <p>Without this the inventory is simply garbage-collected with the entity: {@link LivingEntity}
+     * has no drop-on-death behaviour of its own — that lives in {@code PlayerEntity}, and only for a
+     * player's own inventory — so a companion carrying a build's worth of materials took all of it with
+     * it. {@link #dropInventory()} is vanilla's hook for exactly this and is called unconditionally from
+     * {@code LivingEntity.drop(DamageSource)}, on the server, once per death.
+     *
+     * <p><b>{@code keepInventory} is deliberately ignored.</b> For a player the rule moves items to the
+     * respawned body; a companion has no respawn — it is removed from the world 20 ticks after dying and
+     * never comes back — so honouring the rule would keep the stacks on an entity that ceases to exist,
+     * which is the bug this fixes, just conditional on a gamerule. Always dropping means nothing is ever
+     * lost. {@code doMobLoot} is not consulted either: these are items the owner handed over or the
+     * companion gathered, not mob loot.
+     *
+     * <p>Armour is included here rather than left to {@code dropEquipment}: that hook is empty on
+     * {@link LivingEntity} (only {@code MobEntity} implements it), so there is nothing to double up with.
+     */
+    @Override
+    protected void dropInventory() {
+        super.dropInventory();
+        if (this.getWorld().isClient) {
+            return;
+        }
+        int stacks = dropAll(this.inventory.main)
+                + dropAll(this.inventory.armor)
+                + dropAll(this.inventory.offHand);
+        announceDeath(stacks);
+    }
+
+    /**
+     * Drop every non-empty stack in one of the inventory's backing lists and return how many were
+     * dropped. The slot is cleared <em>before</em> the drop: {@code dropStack} hands the very same
+     * {@link ItemStack} instance to the new {@link ItemEntity} rather than copying it, so leaving it in
+     * place would alias a stack that now belongs to the world.
+     */
+    private int dropAll(List<ItemStack> slots) {
+        int dropped = 0;
+        for (int i = 0; i < slots.size(); i++) {
+            ItemStack stack = slots.get(i);
+            if (stack.isEmpty()) {
+                continue;
+            }
+            slots.set(i, ItemStack.EMPTY);
+            this.dropStack(stack, 0.5f); // waist height, so nothing spawns inside the floor
+            dropped++;
+        }
+        return dropped;
+    }
+
+    /**
+     * Tell the owner where it died and that there is something to go and collect — the radar stops
+     * updating the moment the entity is removed, and dropped items despawn after five minutes.
+     *
+     * <p>Everything here is best-effort and wrapped: this runs inside the entity tick, where anything
+     * thrown is a "Ticking entity" crash that ends the session, and reading the custom name or the
+     * player list touches exactly the state that a broken companion is likely to have corrupted. The
+     * drop itself has already happened by this point, so a failure here costs a chat line, not items.
+     */
+    private void announceDeath(int stacks) {
+        try {
+            String name = this.getCustomName() != null
+                    ? this.getCustomName().getString()
+                    : CompanionConfig.name();
+            BlockPos pos = this.getBlockPos();
+            String where = String.format("%s died at %d, %d, %d", name, pos.getX(), pos.getY(), pos.getZ());
+            String note = stacks == 0
+                    ? where + " — it was carrying nothing."
+                    : String.format("%s and dropped %d stack%s. Items despawn in 5 minutes.",
+                            where, stacks, stacks == 1 ? "" : "s");
+            AiCompanion.LOGGER.info("[{}] {}", AiCompanion.MOD_ID, note);
+            tellOwner(note);
+        } catch (Throwable reportingFailure) {
+            AiCompanion.LOGGER.error("[{}] Could not report a companion death", AiCompanion.MOD_ID,
+                    reportingFailure);
+        }
+    }
+
+    /**
+     * Release the conversation state along with the body.
+     *
+     * <p>{@code ConversationManager} keys on the entity UUID and never cleans up on its own; a dead
+     * companion's UUID is never seen again (a replacement is a new entity), so without this every death
+     * leaks a full conversation history for the rest of the session. {@code /companion despawn} already
+     * does the same thing for the same reason.
+     */
+    @Override
+    public void onDeath(DamageSource source) {
+        boolean wasDying = this.dead; // onDeath is guarded but not documented as once-only
+        super.onDeath(source);
+        if (!this.getWorld().isClient && !wasDying) {
+            ConversationManager.forget(this.getUuid());
         }
     }
 

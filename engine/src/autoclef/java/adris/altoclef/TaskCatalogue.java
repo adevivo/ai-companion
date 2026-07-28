@@ -92,6 +92,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.material.MapColor;
 
 public class TaskCatalogue {
+   private static final org.apache.logging.log4j.Logger LOGGER = org.apache.logging.log4j.LogManager.getLogger();
    private static final HashMap<String, Item[]> nameToItemMatches = new HashMap<>();
    private static final HashMap<String, TaskCatalogue.CataloguedResource> nameToResourceTask = new HashMap<>();
    private static final HashMap<Item, TaskCatalogue.CataloguedResource> itemToResourceTask = new HashMap<>();
@@ -352,7 +353,15 @@ public class TaskCatalogue {
       BiFunction<ItemHelper.WoodItems, Integer, ResourceTask> getTask,
       boolean requireNetherForNetherStuff
    ) {
-      return woodTasks(woodItem -> woodItem.prefix + "_" + woodItem.prefix, getMatch, getTask, requireNetherForNetherStuff);
+      // baseName used to be dropped on the floor here in favour of prefix + "_" + prefix, so every
+      // per-wood resource catalogued itself as "oak_oak" / "birch_birch". The first caller (logs)
+      // claimed those names and put() silently early-returns on a duplicate name, so planks, doors,
+      // stairs, slabs, fences and trapdoors reached neither map: `get oak_planks` did not exist, and
+      // build_structure's auto-gather skipped every one of them as unobtainable.
+      // Note some baseNames compose to non-vanilla ids ("stripped_logs" -> "oak_stripped_logs").
+      // Catalogue names are internal identifiers, so that is cosmetic; the item mapping is what the
+      // build path looks up.
+      return woodTasks(woodItem -> woodItem.prefix + "_" + baseName, getMatch, getTask, requireNetherForNetherStuff);
    }
 
    private static TaskCatalogue.CataloguedResource[] woodTasks(
@@ -976,6 +985,12 @@ public class TaskCatalogue {
       shapedRecipe3x3("rabbit_stew", Items.RABBIT_STEW, 1, o, "cooked_rabbit", o, "carrot", "baked_potato", "mushroom", o, "bowl", o);
       String b = "beetroot";
       shapedRecipe3x3("beetroot_soup", Items.BEETROOT_SOUP, 1, b, b, b, b, b, b, o, "bowl", o);
+      // Cataloguing runs in a static initialiser, so a duplicate single-item registration throws
+      // before anything else in the engine loads. Logging the totals makes both a healthy init and a
+      // failed one obvious in the log rather than something to infer from a missing feature.
+      // Log4j directly, not Debug.logInternal: that gates on canLog(0), a level rejected under every
+      // setting, so the first version of this line never reached the log at all.
+      LOGGER.info("TaskCatalogue: {} resources, {} item mappings", nameToResourceTask.size(), itemToResourceTask.size());
    }
 
    private static class CataloguedResource {

@@ -3,6 +3,7 @@ package baritone.behavior;
 import baritone.Baritone;
 import baritone.api.entity.IInventoryProvider;
 import baritone.api.entity.LivingEntityInventory;
+import baritone.utils.EntityPlaceContext;
 import baritone.utils.ToolSet;
 import java.util.ArrayList;
 import java.util.OptionalInt;
@@ -137,23 +138,19 @@ public final class InventoryBehavior extends Behavior {
                   ((BlockItem)stack.getItem())
                      .getBlock()
                      .getStateForPlacement(
-                        new BlockPlaceContext(
-                           new UseOnContext(
-                              this.ctx.world(),
-                              null,
-                              InteractionHand.MAIN_HAND,
-                              stack,
-                              new BlockHitResult(
-                                 new Vec3(this.ctx.entity().getX(), this.ctx.entity().getY(), this.ctx.entity().getZ()),
-                                 Direction.UP,
-                                 this.ctx.feetPos(),
-                                 false
-                              )
-                           ) {
-                              public boolean isSecondaryUseActive() {
-                                 return false;
-                              }
-                           }
+                        // Entity-backed; a null player here would NPE on any orientable block, the
+                        // same way it did in BuilderProcess.approxPlaceable.
+                        new EntityPlaceContext(
+                           this.ctx.entity(),
+                           this.ctx.world(),
+                           InteractionHand.MAIN_HAND,
+                           stack,
+                           new BlockHitResult(
+                              new Vec3(this.ctx.entity().getX(), this.ctx.entity().getY(), this.ctx.entity().getZ()),
+                              Direction.UP,
+                              this.ctx.feetPos(),
+                              false
+                           )
                         )
                      )
                )

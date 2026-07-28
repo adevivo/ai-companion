@@ -48,6 +48,13 @@ public class AgentConversationData {
 
     private MessageBuffer altoClefMsgBuffer = new MessageBuffer(10);
 
+    /**
+     * Why the running command did not do its job, or null. Consumed by the next
+     * {@link #onCommandFinish} so the failure lands in the conversation history rather than only in
+     * the rolling debug buffer. Written from the task thread, read on the server thread.
+     */
+    private volatile String pendingFailure = null;
+
     public AgentConversationData(AltoClefController mod) {
         this.mod = mod;
     }
@@ -204,6 +211,19 @@ public class AgentConversationData {
         this.altoClefMsgBuffer.addMsg(message);
     }
 
+    /**
+     * Remember that the running command did not do what was asked, so {@link #onCommandFinish} can say
+     * so in the event it queues.
+     *
+     * <p>Without this the outcome only ever lived in {@code altoClefMsgBuffer}, which is drained by
+     * the read that renders {@code gameDebugMessages} — one turn of visibility — while the paired
+     * "finished running" event stays in the history for good. The model then had a permanent record
+     * that the command completed and no record of it having failed, and reported success.
+     */
+    public void recordCommandFailure(String message) {
+        this.pendingFailure = message;
+    }
+
     public void onEvent(Event event) {
         addEventToQueue(event);
     }
@@ -239,8 +259,18 @@ public class AgentConversationData {
             } else {
                 shouldIgnoreGreetingDance = false;
             }
-            if (eventQueue.isEmpty()) {
-
+            String failure = pendingFailure;
+            pendingFailure = null;
+            if (failure != null) {
+                // Queued whatever else is pending, unlike the plain "what next" prompt below: a
+                // failure has to reach the conversation history, because that is the only record
+                // that outlives the turn it happened on. Skipping it here is what let the agent
+                // keep a permanent "finished" and no trace of the reason it had not.
+                LOGGER.info("adding cmd={} finish to queue as a FAILURE: {}", stopReason.commandName(), failure);
+                addEventToQueue(new InfoMessage(String.format(
+                        "Command feedback: %s finished, but it did NOT do what was asked. %s Do not tell the owner it succeeded or that the result exists — say what actually happened and act on it. If nothing further is needed, generate empty command `\"\"`.",
+                        stopReason.commandName(), failure)));
+            } else if (eventQueue.isEmpty()) {
                 LOGGER.info("adding cmd={} to queue because it finished and queue not empty", stopReason.commandName());
                 addEventToQueue(new InfoMessage(String.format(
                         "Command feedback: %s finished running. What shall we do next? If no new action is needed to finish user's request, generate empty command `\"\"`.",

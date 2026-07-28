@@ -15,6 +15,7 @@ import adris.altoclef.control.InputControls;
 import adris.altoclef.control.PlayerExtraController;
 import adris.altoclef.control.SlotHandler;
 
+import adris.altoclef.player2api.AgentConversationData;
 import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.player2api.AIPersistantData;
 import adris.altoclef.player2api.Player2APIService;
@@ -45,6 +46,8 @@ import java.util.UUID;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -324,19 +327,71 @@ public class AltoClefController {
    }
 
    /**
-    * Report something that went wrong to the log AND to the agent's next turn.
+    * Report something that went wrong to the log, to the agent's next turn, and to the owner in chat.
     *
     * <p>For soft failures — a command that ran to completion without doing what was asked, like a
-    * deposit with nothing to deposit. Those report as "finished" to the task system, so without this
-    * the agent believes it succeeded and stands there while the player wonders why nothing happened.
-    * The text lands in {@code gameDebugMessages}, which the model sees but the player does not.
+    * deposit with nothing to deposit, or a build that could not afford its materials. Those report as
+    * "finished" to the task system, so without this the agent believes it succeeded and stands there
+    * while the player wonders why nothing happened.
     */
    public void logAgentNotice(String message) {
+      logAgentNotice(message, message);
+   }
+
+   /**
+    * As {@link #logAgentNotice(String)}, with separate wording for the owner.
+    *
+    * <p>Agent-facing text carries instructions the model needs ("use `get` to collect them, then build
+    * again") that read as noise in chat. Pass a plain sentence as {@code playerMessage} to tell the
+    * owner what happened in their own terms, or null to keep it out of chat entirely.
+    *
+    * <p>The notice goes to the agent by two routes on purpose. {@code gameDebugMessages} is a rolling
+    * buffer that {@code MessageBuffer.dumpAndGetString} <b>drains</b> as it reads, so anything left
+    * only there is visible for exactly one turn and then gone — while the "finished running" event
+    * queued alongside it stays in the conversation history forever. That asymmetry is how a build that
+    * ran out of materials came to be reported to the owner as a finished house: by the following turn
+    * the only surviving evidence said "finished". Recording it as a pending failure as well lets
+    * {@code onCommandFinish} state the outcome in the event that does persist.
+    */
+   public void logAgentNotice(String message, String playerMessage) {
+      logWarning(message);
+      try {
+         AgentConversationData data = ConversationManager.getOrCreateEventQueueData(this);
+         data.addAltoclefLogMessage(message);
+         data.recordCommandFailure(message);
+      } catch (Exception e) {
+         Debug.logWarning("Could not deliver notice to the agent: " + e);
+      }
+      tellOwner(playerMessage);
+   }
+
+   /**
+    * Tell the agent something without claiming the running command failed.
+    *
+    * <p>For notices that are not about a command at all — a health warning raised from the entity
+    * tick, say. Routing those through {@link #logAgentNotice} would leave a pending failure behind
+    * that the next command to finish would wrongly report as its own outcome.
+    */
+   public void logAgentInfo(String message) {
       logWarning(message);
       try {
          ConversationManager.getOrCreateEventQueueData(this).addAltoclefLogMessage(message);
       } catch (Exception e) {
          Debug.logWarning("Could not deliver notice to the agent: " + e);
+      }
+   }
+
+   /** Puts a line in the owner's chat, so failures are visible in-game and not only in the log. */
+   public void tellOwner(String message) {
+      if (message == null || message.isBlank()) {
+         return;
+      }
+      try {
+         if (this.owner instanceof ServerPlayer serverOwner) {
+            serverOwner.sendSystemMessage(Component.literal(message).withStyle(ChatFormatting.RED));
+         }
+      } catch (Exception e) {
+         Debug.logWarning("Could not deliver notice to the owner: " + e);
       }
    }
 

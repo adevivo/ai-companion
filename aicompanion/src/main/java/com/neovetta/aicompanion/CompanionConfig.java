@@ -149,6 +149,9 @@ public final class CompanionConfig {
         for (ServerWorld world : server.getWorlds()) {
             for (Entity entity : world.iterateEntities()) {
                 if (entity instanceof CompanionEntity companion) {
+                    // Also the way back from an AI that switched itself off after repeated failures —
+                    // the message it prints tells the owner to run exactly this command.
+                    companion.resetAiFailures();
                     AltoClefController ctrl = companion.getController();
                     if (ctrl != null && ctrl.getAIPersistantData() != null) {
                         ctrl.getAIPersistantData().updateSystemPrompt();

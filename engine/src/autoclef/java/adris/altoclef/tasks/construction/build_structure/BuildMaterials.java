@@ -183,11 +183,27 @@ public final class BuildMaterials {
         return key == null ? item.toString() : key.getPath();
     }
 
-    /** Renders a bill or shortfall as "64 dirt, 40 wheat_seeds". */
+    /** Renders a bill or shortfall as "64 dirt, 40 wheat_seeds". For the log and the agent. */
     public static String describe(Map<Item, Integer> items) {
         return items.entrySet().stream()
                 .map(entry -> entry.getValue() + " " + name(entry.getKey()))
                 .collect(Collectors.joining(", "));
+    }
+
+    /**
+     * The same list written for a person: "64 dirt, 40 wheat seeds and 1 chest".
+     *
+     * <p>Registry ids are what the agent needs in order to `get` things, but they read badly in chat,
+     * which is where the owner finds out a build could not afford itself.
+     */
+    public static String describeForPlayer(Map<Item, Integer> items) {
+        List<String> parts = items.entrySet().stream()
+                .map(entry -> entry.getValue() + " " + name(entry.getKey()).replace('_', ' '))
+                .collect(Collectors.toList());
+        if (parts.size() <= 1) {
+            return String.join("", parts);
+        }
+        return String.join(", ", parts.subList(0, parts.size() - 1)) + " and " + parts.get(parts.size() - 1);
     }
 
     /**

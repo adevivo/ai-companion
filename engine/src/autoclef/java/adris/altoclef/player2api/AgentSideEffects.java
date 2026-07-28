@@ -54,6 +54,10 @@ public class AgentSideEffects {
 
         // command part:
         if (characterMessage.command() != null && !characterMessage.command().isBlank()) {
+            // A new command owns its own outcome. Without this, a failure recorded by a command that
+            // was replaced rather than finished would still be sitting there and would be reported
+            // as the next command's result.
+            characterMessage.sendingCharacterData().recordCommandFailure(null);
             onCommandListGenerated(characterMessage.sendingCharacterData().getMod(), characterMessage.command(),
                     characterMessage.sendingCharacterData()::onCommandFinish);
         }

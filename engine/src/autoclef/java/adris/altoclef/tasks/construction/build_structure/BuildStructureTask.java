@@ -25,6 +25,7 @@ import adris.altoclef.player2api.Player2APIService;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.utils.Utils;
 import adris.altoclef.tasks.construction.build_structure.StructureFromCode.SetBlockCommand;
+import adris.altoclef.tasks.construction.build_structure.templates.TemplateLibrary;
 import adris.altoclef.tasksystem.Task;
 import adris.altoclef.util.ItemTarget;
 import net.minecraft.core.BlockPos;
@@ -33,10 +34,12 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 
 /**
- * Builds an LLM-described structure in three phases:
+ * Builds a described structure, in three phases:
  *
  * <ol>
- * <li>{@link RequestLLMCode} — ask the model for a DSL program.
+ * <li>{@link RequestLLMCode} — ask the model for a DSL program. <b>Skipped</b> when
+ * {@code TemplateLibrary} recognises the description: a built-in generator produces the plan directly
+ * and the whole codegen round-trip, prompt included, never happens.
  * <li>{@link GenerateBlockPlan} — run that program on a worker thread. Pure interpretation: it
  * produces a list of block placements and touches nothing in the world.
  * <li>{@link PlaceBlocks} — charge the companion's inventory for the plan, then write the blocks on
@@ -71,6 +74,21 @@ public class BuildStructureTask extends Task {
     private List<SetBlockCommand> pendingPlan = List.of();
     /** One gather per build. Without this a shortfall that gathering cannot fix would loop forever. */
     private boolean gatherAttempted = false;
+
+    /** What the held plan costs, so the gather can report what is still outstanding. */
+    private BuildMaterials.Bill pendingBill;
+    /** When the owner was last told how the gather is going. */
+    private long lastProgressReport;
+    /**
+     * How often to report progress while collecting.
+     *
+     * <p>A correctly-catalogued gather is a genuinely long errand — one logged build needed 246 oak
+     * planks, 51 cobblestone, 12 glass, a crafting table and a furnace, which is minutes of mining
+     * during which the companion simply walks away. Silence for that long reads as a hang, and the
+     * owner cancels a build that was working. Quiet enough not to spam chat, often enough to show it
+     * is still going.
+     */
+    private static final long PROGRESS_INTERVAL_MILLIS = 30_000L;
 
     /**
      * The description trimmed for agent-facing text.
@@ -236,8 +254,20 @@ public class BuildStructureTask extends Task {
          * has to read as an explanation of what to do next rather than a status code.
          */
         private String abortReason;
+        /** The same outcome said plainly, for the owner's chat. Set wherever {@link #abortReason} is. */
+        private String playerReason;
+        /**
+         * True when the plan is worth keeping for a retry — i.e. it failed only because the materials
+         * were not there. A plan that missed the ground or produced nothing is a bad plan, and
+         * regenerating it is the point.
+         */
+        private boolean planWorthKeeping;
         /** Non-empty when the build paused to go and collect what it was short of. */
         private List<ItemTarget> gatherTargets = List.of();
+        /** What the whole plan costs, once priced. Null until the materials check has run. */
+        private BuildMaterials.Bill bill;
+        /** What was missing at pricing time, so the gather can say what it went for. */
+        private Map<Item, Integer> shortfall;
 
         PlaceBlocks(List<SetBlockCommand> plan) {
             this.plan = plan;
@@ -263,6 +293,7 @@ public class BuildStructureTask extends Task {
                 abortReason = String.format(
                         "Built nothing for (%s): the generated plan contained no blocks at all. Nothing exists — do not describe it as built. Try again with a clearer description.",
                         shortDescription());
+                playerReason = "I couldn't work out how to build that — nothing was placed.";
                 return;
             }
             // Ground check first: a plan that is going to be thrown away must not cost anything.
@@ -273,8 +304,8 @@ public class BuildStructureTask extends Task {
                 LOGGER.info("Building ({}), {} blocks, materials disabled by config", description, plan.size());
                 return;
             }
-            BuildMaterials.Bill bill = BuildMaterials.tally(plan);
-            Map<Item, Integer> shortfall = BuildMaterials.shortfall(mod, bill);
+            bill = BuildMaterials.tally(plan);
+            shortfall = BuildMaterials.shortfall(mod, bill);
             if (!shortfall.isEmpty()) {
                 LOGGER.info("Not enough materials to build ({}), missing {}", description,
                         BuildMaterials.describe(shortfall));
@@ -287,9 +318,15 @@ public class BuildStructureTask extends Task {
                     }
                     LOGGER.info("Nothing in the shortfall can be gathered automatically");
                 }
+                // The design is fine, only the inventory is short — so hold onto it. Re-running the
+                // same description will place this same structure instead of designing a new one
+                // with a new shopping list, which is what made "go and get it" never terminate.
+                planWorthKeeping = true;
                 abortReason = String.format(
-                        "Could not build (%s): not carrying enough materials. Still needed: %s. Use `get` to collect them, then build again.",
+                        "Could not build (%s): not carrying enough materials. Still needed: %s. Use `get` to collect exactly those, then run the SAME build_structure description again — it will build this same design, so nothing else will be needed.",
                         shortDescription(), BuildMaterials.describe(shortfall));
+                playerReason = String.format("I can't build that yet — I still need %s.",
+                        BuildMaterials.describeForPlayer(shortfall));
                 return;
             }
             LOGGER.info("Building ({}), {} blocks costing {}", description, plan.size(),
@@ -337,6 +374,9 @@ public class BuildStructureTask extends Task {
             abortReason = String.format(
                     "Could not build (%s): the plan came out %s, so nothing was placed and no materials were spent. Ground level there is y=%d and your feet are at y=%d — build again using those, and do not claim the structure exists.",
                     shortDescription(), where, feetY - 1, feetY);
+            playerReason = String.format(
+                    "I can't build that here — the plan came out %s, so I didn't place anything. Ground is at y=%d.",
+                    where, feetY - 1);
             return false;
         }
 
@@ -367,6 +407,8 @@ public class BuildStructureTask extends Task {
                     abortReason = String.format(
                             "Stopped building (%s) partway: ran out of %s. The structure is incomplete. Use `get` to collect more, then build again.",
                             shortDescription(), BuildMaterials.name(cost));
+                    playerReason = String.format("I ran out of %s partway through — the build is unfinished.",
+                            BuildMaterials.name(cost).replace('_', ' '));
                     return null;
                 }
                 // 3 means send to clients (2) and notify neighbors/update block states (1).
@@ -384,6 +426,7 @@ public class BuildStructureTask extends Task {
                 abortReason = String.format(
                         "Built nothing for (%s): every block was already in place, so no materials were spent and the world is unchanged. Tell the owner it was already there rather than claiming you built it. If they wanted it somewhere else, use a different position.",
                         shortDescription());
+                playerReason = "That was already there — I didn't need to place anything.";
                 return null;
             }
             setDebugState(String.format("Placed %d/%d blocks", next, plan.size()));
@@ -393,6 +436,31 @@ public class BuildStructureTask extends Task {
         /** Why the build stopped early, or null if it ran to completion. */
         String abortReason() {
             return abortReason;
+        }
+
+        /** The same, in words meant for the owner rather than the model. */
+        String playerReason() {
+            return playerReason;
+        }
+
+        /** Whether this plan should be held for a retry rather than regenerated. */
+        boolean planWorthKeeping() {
+            return planWorthKeeping;
+        }
+
+        /** What the whole plan costs, kept so the gather can report what is still outstanding. */
+        BuildMaterials.Bill bill() {
+            return bill;
+        }
+
+        /** What was missing when the build was priced, or null if it was affordable. */
+        Map<Item, Integer> shortfall() {
+            return shortfall;
+        }
+
+        /** Blocks actually written. Zero means the build was a no-op, not a success. */
+        int changed() {
+            return changed;
         }
 
         @Override
@@ -420,16 +488,69 @@ public class BuildStructureTask extends Task {
         this.mod = mod;
         this.service = mod.getPlayer2APIService();
         this.numErrors = 0;
-        this.history = new ConversationHistory(Prompts.getBuildStructurePrompt());
+    }
+
+    /**
+     * Builds the codegen conversation on first use.
+     *
+     * <p>Lazy because the system prompt is ~17k characters and a templated build never sends it. It
+     * used to be assembled in the constructor, so every build paid for it whether or not a model was
+     * ever going to see it.
+     */
+    private void ensureCodegenReady() {
+        if (history != null) {
+            return;
+        }
+        history = new ConversationHistory(Prompts.getBuildStructurePrompt());
         history.addUserMessage(
                 String.format("Build with the following description: (%s)", description),
                 service);
-        this.completer = new LLMCompleter();
+        completer = new LLMCompleter();
     }
 
     @Override
     protected void onStart() {
+        // A previous attempt at this exact request that only failed on materials left its plan
+        // behind. Reuse it, so collecting what was missing actually finishes the job rather than
+        // buying materials for a building that no longer exists.
+        Optional<List<SetBlockCommand>> remembered = BuildPlanCache.recall(mod, description);
+        if (remembered.isPresent()) {
+            LOGGER.info("Build ({}) reusing the plan from the previous attempt: {} blocks",
+                    description, remembered.get().size());
+            actuallyRunningTask = new PlaceBlocks(remembered.get());
+            return;
+        }
+        // Ordinary rectangular shapes are generated in-process. Only what the generators decline
+        // reaches the model, which is where the codegen prompt's token cost is actually warranted.
+        Optional<TemplateLibrary.Match> templated = TemplateLibrary.plan(description, mod);
+        if (templated.isPresent()) {
+            actuallyRunningTask = new PlaceBlocks(templated.get().plan());
+            return;
+        }
+        ensureCodegenReady();
         actuallyRunningTask = new RequestLLMCode();
+    }
+
+    /**
+     * Tell the owner how the material gather is going, at most once every
+     * {@link #PROGRESS_INTERVAL_MILLIS}.
+     *
+     * <p>Chat only — the agent is deliberately left out of it. Feeding progress into the model would
+     * spend tokens every half minute and invite it to narrate work the engine is already doing.
+     */
+    private void reportGatherProgress() {
+        if (gatherTask == null || actuallyRunningTask != gatherTask || pendingBill == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastProgressReport < PROGRESS_INTERVAL_MILLIS) {
+            return;
+        }
+        lastProgressReport = now;
+        Map<Item, Integer> remaining = BuildMaterials.shortfall(mod, pendingBill);
+        mod.tellOwner(remaining.isEmpty()
+                ? "Got everything I need — starting the build."
+                : "Still collecting: " + BuildMaterials.describeForPlayer(remaining) + " to go.");
     }
 
     @Override
@@ -439,11 +560,13 @@ public class BuildStructureTask extends Task {
             // success and tells the player the structure is built. Say what actually happened.
             mod.logAgentNotice(String.format(
                     "Could not build (%s): the build plan failed to generate %d times in a row (last error: %s). Nothing was placed. Do not claim it was built.",
-                    shortDescription(), numErrors, lastError == null ? "unknown" : lastError));
+                    shortDescription(), numErrors, lastError == null ? "unknown" : lastError),
+                    "Build failed: I couldn't come up with a workable plan for that. Nothing was placed.");
             isDone = true;
             return null;
         }
         if (actuallyRunningTask == null || !actuallyRunningTask.isFinished()) {
+            reportGatherProgress();
             return actuallyRunningTask;
         }
         // ---------- now task is finished, switch to next task: -------
@@ -505,6 +628,7 @@ public class BuildStructureTask extends Task {
                 // turns on a chest and a bucket.
                 gatherAttempted = true;
                 pendingPlan = placeTask.plan();
+                pendingBill = placeTask.bill();
                 gatherTask = needed.size() == 1
                         ? TaskCatalogue.getItemTask(needed.get(0))
                         : TaskCatalogue.getSquashedItemTask(needed.toArray(new ItemTarget[0]));
@@ -512,6 +636,14 @@ public class BuildStructureTask extends Task {
                     LOGGER.info("Gathering materials for ({}): {}", description,
                             needed.stream().map(ItemTarget::toString).collect(Collectors.joining(", ")));
                     setDebugState("Collecting materials to build");
+                    // Say so up front. This is where the companion disappears for minutes on end, and
+                    // an owner who is not told what it is doing cancels it.
+                    Map<Item, Integer> missing = placeTask.shortfall();
+                    if (missing != null && !missing.isEmpty()) {
+                        mod.tellOwner("Off to collect " + BuildMaterials.describeForPlayer(missing)
+                                + " for the build — this may take a while.");
+                    }
+                    lastProgressReport = System.currentTimeMillis();
                     actuallyRunningTask = gatherTask;
                     return actuallyRunningTask;
                 }
@@ -526,7 +658,20 @@ public class BuildStructureTask extends Task {
             String abortReason = placeTask.abortReason();
             if (abortReason != null) {
                 LOGGER.info(abortReason);
-                mod.logAgentNotice(abortReason);
+                mod.logAgentNotice(abortReason, placeTask.playerReason());
+            }
+            if (abortReason == null && placeTask.changed() > 0) {
+                // Ground truth from the engine, not the model's account of it. The owner has had a
+                // build reported as finished that never placed a block; this is the line that is
+                // only ever printed when blocks really went into the world.
+                mod.tellOwner(String.format("Done — placed %d blocks.", placeTask.changed()));
+            }
+            if (placeTask.planWorthKeeping()) {
+                BuildPlanCache.remember(mod, description, placeTask.plan());
+            } else {
+                // Built, or not worth rebuilding as drawn. Either way the next request for this
+                // description should start fresh rather than replay a plan that is now done.
+                BuildPlanCache.forget(mod, description);
             }
             isDone = true;
             actuallyRunningTask = null;
