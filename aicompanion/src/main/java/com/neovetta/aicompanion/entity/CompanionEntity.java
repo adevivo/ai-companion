@@ -522,12 +522,27 @@ public class CompanionEntity extends LivingEntity
         pickupItems();
     }
 
-    /** Pick up nearby items so gathered materials land in the player-like inventory. */
+    /**
+     * Pick up nearby items so gathered materials land in the player-like inventory.
+     *
+     * <p>Unfiltered below the last free slot — every cobblestone knocked loose while pathing, every
+     * leaf drop. That is how she arrives at a full inventory carrying 192 dirt and 64 torch nothing
+     * asked for, and a full inventory is not merely untidy: it stops collection dead, and the gather
+     * that needed one more log then retries forever (measured 2026-07-29 — 3,814 failed pickups over
+     * 27 minutes, nothing built).
+     *
+     * <p>So once there is no free slot, only take what merges into a stack already held. Gathering is
+     * unaffected while there is room, which is the overwhelmingly common case; at the boundary she
+     * stops spending her last slots on debris and keeps topping up what she is actually collecting.
+     * Filtering by what the active task wants would be the better answer, but gathering runs through
+     * this same path and that is a much larger change.
+     */
     private void pickupItems() {
         if (this.getWorld().isClient || !this.isAlive() || this.dead
                 || !this.getWorld().getGameRules().getBoolean(GameRules.DO_MOB_GRIEFING)) {
             return;
         }
+        boolean full = this.getLivingInventory().getEmptySlot() < 0;
         Vec3i r = new Vec3i(2, 1, 2);
         for (ItemEntity item : this.getWorld().getNonSpectatingEntities(ItemEntity.class,
                 this.getBoundingBox().expand(r.getX(), r.getY(), r.getZ()))) {
@@ -535,6 +550,9 @@ public class CompanionEntity extends LivingEntity
                 continue;
             }
             ItemStack stack = item.getStack();
+            if (full && !canMergeIntoHeldStack(stack)) {
+                continue;
+            }
             int count = stack.getCount();
             if (this.getLivingInventory().insertStack(stack)) {
                 this.sendPickup(item, count);
@@ -544,6 +562,19 @@ public class CompanionEntity extends LivingEntity
                 }
             }
         }
+    }
+
+    /** Whether {@code stack} can join a partial stack already carried, i.e. needs no free slot. */
+    private boolean canMergeIntoHeldStack(ItemStack stack) {
+        LivingEntityInventory inventory = this.getLivingInventory();
+        for (int i = 0; i < inventory.main.size(); i++) {
+            ItemStack held = inventory.main.get(i);
+            if (!held.isEmpty() && held.getCount() < held.getMaxCount()
+                    && ItemStack.canCombine(held, stack)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // --- Combat: LivingEntity has no attack of its own ---

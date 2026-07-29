@@ -15,6 +15,7 @@ import adris.altoclef.eventbus.EventBus;
 import adris.altoclef.player2api.AgentSideEffects;
 import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.player2api.Character;
+import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Player2APIService;
 import adris.altoclef.player2api.Event;
 import adris.altoclef.player2api.LLMCompleter;
@@ -27,6 +28,8 @@ import adris.altoclef.player2api.Event.UserMessage;
 import adris.altoclef.player2api.status.StatusUtils;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents.ChatMessage;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 
 public class ConversationManager {
@@ -59,7 +62,9 @@ public class ConversationManager {
                     return;
                 }
                 String sender = senderEntity.getName().getString();
-                ConversationManager.onUserChatMessage(new UserMessage(message, sender));
+                for (Component notice : ConversationManager.onUserChatMessage(new UserMessage(message, sender))) {
+                    senderEntity.sendSystemMessage(notice);
+                }
             });
         }
     }
@@ -92,6 +97,7 @@ public class ConversationManager {
     public static void onServerStopping() {
         int dropped = queueData.size();
         queueData.clear();
+        lastEarshotNotice.clear();
         Lock.waitingForResponseLock = false;
         // The completer list is static, so an in-flight request at shutdown would otherwise leave it
         // permanently "busy" and mute the companion for the rest of the game process.
@@ -124,30 +130,81 @@ public class ConversationManager {
 
     // ## Callbacks (need to register these externally)
 
-    // register when a user sends a chat message
-    public static void onUserChatMessage(UserMessage msg) {
+    /**
+     * Deliver a chat line to every companion within {@link #messagePassingMaxDistance}.
+     *
+     * @return lines to show the speaker: that nobody was close enough to hear them, or that
+     *         {@code llm.maxTokens} is set too low for the companion to answer properly. Both are
+     *         states where the companion otherwise appears to work and simply does nothing.
+     */
+    public static List<Component> onUserChatMessage(UserMessage msg) {
         LOGGER.info("User message event={}", msg);
         // will add to entities close to the user:
         int delivered = 0;
+        float nearest = Float.MAX_VALUE;
+        String nearestName = null;
         StringBuilder diagnostics = new StringBuilder();
         for (AgentConversationData data : queueData.values()) {
             float distance = StatusUtils.getDistanceToUsername(data.getMod(), msg.userName());
             boolean close = distance < messagePassingMaxDistance;
             diagnostics.append(String.format("[%s distance=%.1f withinRange=%s %s] ",
                     data.getName(), distance, close, describeWorldBinding(data)));
+            if (distance < nearest) {
+                nearest = distance;
+                nearestName = data.getName();
+            }
             if (close) {
                 data.onEvent(msg);
                 delivered++;
             }
         }
-        if (delivered == 0) {
-            // Silence here is otherwise indistinguishable from the model being down: the message is
-            // logged on arrival and then simply never acted on.
-            LOGGER.warn("ConversationManager: message from {} reached no companion "
-                            + "({} in queueData) — {}",
-                    msg.userName(), queueData.size(),
-                    diagnostics.length() == 0 ? "queueData is empty" : diagnostics.toString());
+        if (delivered > 0) {
+            // Deliberately every message and deliberately not throttled: at a too-low cap the reply
+            // is cut off mid-JSON, so skills silently do nothing while everything else looks fine.
+            // It is a standing misconfiguration, and the nagging stops the moment it is corrected.
+            if (LlmConfig.maxTokensTooLow()) {
+                return List.of(Component.literal(String.format(
+                        "⚠ llm.maxTokens is %d — too low. Long skill commands (farming) get cut off "
+                                + "mid-reply and nothing runs. Set it to %d or more in /companion config.",
+                        LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS)).withStyle(ChatFormatting.RED));
+            }
+            return List.of();
         }
+        // Silence here is otherwise indistinguishable from the model being down: the message is
+        // logged on arrival and then simply never acted on.
+        LOGGER.warn("ConversationManager: message from {} reached no companion "
+                        + "({} in queueData) — {}",
+                msg.userName(), queueData.size(),
+                diagnostics.length() == 0 ? "queueData is empty" : diagnostics.toString());
+        if (nearestName == null || nearest == Float.MAX_VALUE) {
+            return List.of(); // nothing to point at: no companion, or it is not in this world
+        }
+        Optional<String> earshot = outOfEarshotNotice(msg.userName(), nearestName, nearest);
+        if (earshot.isEmpty()) {
+            return List.of();
+        }
+        return List.of(Component.literal(earshot.get()).withStyle(ChatFormatting.GRAY));
+    }
+
+    /**
+     * How long a speaker goes between "can't hear you" notices, per player.
+     *
+     * <p>The notice fires on any line nobody heard, which on a busy server is every line two players
+     * say to each other while the companion is away. Once is informative; once per line is noise.
+     */
+    private static final long EARSHOT_NOTICE_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
+
+    private static final ConcurrentHashMap<String, Long> lastEarshotNotice = new ConcurrentHashMap<>();
+
+    private static Optional<String> outOfEarshotNotice(String userName, String companionName, float distance) {
+        long now = System.nanoTime();
+        Long last = lastEarshotNotice.get(userName);
+        if (last != null && now - last < EARSHOT_NOTICE_INTERVAL_NANOS) {
+            return Optional.empty();
+        }
+        lastEarshotNotice.put(userName, now);
+        return Optional.of(String.format("(%s is %d blocks away and can't hear you — /companion come)",
+                companionName, Math.round(distance)));
     }
 
     // register when an AI character messages

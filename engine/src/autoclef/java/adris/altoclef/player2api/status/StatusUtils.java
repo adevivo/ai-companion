@@ -240,11 +240,25 @@ public class StatusUtils {
     * than guess. Without it a model asked to build at ground level has no terrain height anywhere in
     * its context and will reach for any plausible-looking Y nearby — in one observed session it took
     * the Y of a skeleton in {@code nearby hostiles} and buried the build two blocks down.
+    *
+    * <p>Answered from the block the entity is actually resting on, because the prompt promises this is
+    * "the ground block you are standing on". Sampling a column at the rounded centre broke that promise
+    * twice over: underground it read the terrain overhead (in a cave at y=42 it reported 70), and on
+    * the edge of a structure it read straight past the block underfoot — measured 2026-07-29 standing
+    * on a roof at y=69 over water, where it reported 62.
+    *
+    * <p>{@code mainSupportingBlockPos}, which {@link Entity#getOnPos()} returns, is maintained by the
+    * engine from the collision that actually holds the entity up, so it is right on a one-block ledge
+    * where no single column is. It only exists while standing; airborne, fall back to the column read.
     */
    public static String getGroundLevelString(AltoClefController mod) {
       Entity entity = mod.getEntity();
-      int surface = WorldHelper.surfaceY(mod, Mth.floor(entity.getX()), Mth.floor(entity.getZ()));
-      return Integer.toString(surface);
+      if (entity.onGround()) {
+         return Integer.toString(entity.getOnPos().getY());
+      }
+      int ground = WorldHelper.groundYNear(mod, Mth.floor(entity.getX()), Mth.floor(entity.getZ()),
+            Mth.floor(entity.getY()));
+      return Integer.toString(ground);
    }
 
    public static String getTaskTree(AltoClefController mod) {

@@ -1,5 +1,5 @@
 {
-  "_notes": "companion.systemPrompt is a PERSONA block injected into the engine's hardened prompt (it does NOT replace the RULES/JSON-schema/valid-commands scaffolding). llm.* is applied to the engine at mod init. temperature<0 or maxTokens<=0 => omitted (server default). companion.skin + behavior.* below are documented for Phase 3b and are not wired yet.",
+  "_notes": "companion.systemPrompt is a PERSONA block injected into the engine's hardened prompt (it does NOT replace the RULES/JSON-schema/valid-commands scaffolding). llm.* is applied to the engine at mod init. temperature<0 or maxTokens<=0 => omitted (server default). Do not set maxTokens below 1000: it is a cap, not a budget (you pay for what is generated), and a low value cuts skill commands off mid-reply so nothing runs. companion.skin + behavior.* below are documented for Phase 3b and are not wired yet.",
   "_frontierTesting": "To test a hosted OpenAI-compatible model (xAI/Grok, OpenAI, etc.): set llm.endpoint (e.g. https://api.x.ai), llm.model (e.g. a NON-reasoning grok id), and supply the bearer key via env AICOMPANION_LLM_APIKEY (preferred, keeps it off disk) or llm.apiKey below. Keep localMode on. Set llm.maxRequests (e.g. 50) as a hard per-session spend cap. Do not commit a real apiKey.",
   "companion": {
     "name": "Vetta",
@@ -15,7 +15,7 @@
     "endpoint": "http://localhost:3030",
     "model": "local",
     "temperature": 0.7,
-    "maxTokens": 200,
+    "maxTokens": 1000,
     "timeoutMs": 90000,
     "useGrammar": true,
     "apiKey": "",

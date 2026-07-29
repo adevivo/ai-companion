@@ -149,6 +149,17 @@ public class PickupDroppedItemTask extends AbstractDoToClosestObjectTask<ItemEnt
       this.wanderTask.reset();
       this.progressChecker.reset();
       this.stuckCheck.reset();
+      this.consecutiveFailures = 0;
+      this.heldBefore = collectedCount();
+   }
+
+   /** How many of the items this task is after are currently held — the only reliable sign of progress. */
+   private int collectedCount() {
+      int total = 0;
+      for (ItemTarget target : this.itemTargets) {
+         total += this.controller.getItemStorage().getItemCount(target.getMatches());
+      }
+      return total;
    }
 
    @Override
@@ -162,6 +173,12 @@ public class PickupDroppedItemTask extends AbstractDoToClosestObjectTask<ItemEnt
          return this.wanderTask;
       } else {
          AltoClefController mod = this.controller;
+         // Anything actually collected means the run of failures is over, whichever drop it came from.
+         int held = collectedCount();
+         if (held > this.heldBefore) {
+            this.consecutiveFailures = 0;
+         }
+         this.heldBefore = held;
          if (mod.getBaritone().getPathingBehavior().isPathing()) {
             this.progressChecker.reset();
          }
@@ -211,9 +228,17 @@ public class PickupDroppedItemTask extends AbstractDoToClosestObjectTask<ItemEnt
                      Debug.logMessage(
                         StlHelper.toString(this.blacklist, element -> element == null ? "(null)" : element.getItem().getItem().getDescriptionId())
                      );
-                     Debug.logMessage("Failed to pick up drop, suggesting it's unreachable.");
+                     // "Unreachable" was the only explanation this ever gave, and for a full
+                     // inventory it is simply false — the drop is right there and there is nowhere to
+                     // put it. Naming the real cause is what lets the agent act (deposit/give)
+                     // instead of re-issuing the same `get`, which it did four times in one session.
+                     boolean noRoom = cannotFit(this.currentDrop);
+                     Debug.logMessage(noRoom
+                        ? "Failed to pick up drop: the inventory is full and it does not stack onto anything held."
+                        : "Failed to pick up drop, suggesting it's unreachable.");
                      this.blacklist.add(this.currentDrop);
                      mod.getEntityTracker().requestEntityUnreachable(this.currentDrop);
+                     reportRepeatedFailure(mod, noRoom);
                      return this.wanderTask;
                   }
                }
@@ -278,13 +303,80 @@ public class PickupDroppedItemTask extends AbstractDoToClosestObjectTask<ItemEnt
          }
       }
 
-      boolean touching = this.mod.getEntityTracker().isCollidingWithPlayer(itemEntity);
-      return (Task)(touching
-            && this.freeInventoryIfFull
-            && this.mod.getItemStorage().getSlotsThatCanFitInPlayerInventory(itemEntity.getItem(), false).isEmpty()
-         ? new EnsureFreeInventorySlotTask()
-         : new GetToEntityTask(itemEntity));
+      // Whether the drop can fit is a fact about the inventory, not about proximity. This used to
+      // also require colliding with the item, which gated the only escape from a full inventory on
+      // the one thing a full inventory prevents: nothing is collected, so no collision is registered,
+      // so no slot is ever freed. Measured 2026-07-29 — 3,814 consecutive failed pickups over 27
+      // minutes with EnsureFreeInventorySlotTask never once reached.
+      //
+      // Still requires something throwable: with nothing to drop, that task sits on "All items are
+      // protected" forever, which is the same silent spin in a new place. Falling through instead
+      // walks to the drop, fails, and reports through the path above.
+      if (this.freeInventoryIfFull && cannotFit(itemEntity)
+            && StorageHelper.getGarbageSlot(this.mod).isPresent()) {
+         this.setDebugState("Inventory is full; making room.");
+         // setDebugState only surfaces in taskStatus, so this path used to leave nothing in the log at
+         // all: confirming it had ever run meant diffing two /companion stats dumps for a vanished
+         // stack. Logged once per entry — getGoalTask runs every tick while the condition holds.
+         if (!this.announcedMakingRoom) {
+            this.announcedMakingRoom = true;
+            Debug.logMessage("Inventory is full and " + itemEntity.getItem().getItem().getDescriptionId()
+                  + " will not fit; dropping something to make room.");
+         }
+         return new EnsureFreeInventorySlotTask();
+      }
+      this.announcedMakingRoom = false;
+      return new GetToEntityTask(itemEntity);
    }
+
+   /** Whether the "making room" line has already been logged for the current full-inventory episode. */
+   private boolean announcedMakingRoom = false;
+
+   /** Whether there is nowhere in the inventory for this drop to go — no free slot, no stack to merge into. */
+   private boolean cannotFit(ItemEntity itemEntity) {
+      return this.mod.getItemStorage().getSlotsThatCanFitInPlayerInventory(itemEntity.getItem(), false).isEmpty();
+   }
+
+   /**
+    * Tell the owner and the agent once a run of failed pickups stops looking like bad luck.
+    *
+    * <p>Before this the whole failure was a {@code Debug.logMessage} and nothing else: one session
+    * spent 27 minutes and 3,814 identical failures without a single word in chat, and the owner
+    * eventually had to ask "did you get stuck?". {@link AltoClefController#logAgentNotice} reaches the
+    * log, the agent's next turn and the owner together, which is what turns this into something
+    * either of them can act on.
+    *
+    * <p>Reported once per run rather than per failure — the point is to break the silence, not to
+    * replace a log flood with a chat flood. The counter resets whenever a pickup succeeds.
+    */
+   private void reportRepeatedFailure(AltoClefController mod, boolean noRoom) {
+      if (++this.consecutiveFailures != FAILURES_BEFORE_REPORT) {
+         return;
+      }
+      if (noRoom) {
+         mod.logAgentNotice(
+            "Could not pick up the items needed: the inventory is FULL and nothing being collected stacks "
+               + "onto what is already held. Nothing will be collected until room is made — use `deposit` "
+               + "into a nearby container, or `give` the owner something, then continue.",
+            "I can't pick anything up — my inventory is full.");
+      } else {
+         mod.logAgentNotice(
+            "Could not reach the items needed after repeated attempts; they may be behind terrain or in "
+               + "water. Try moving somewhere else, or collecting a different material.",
+            "I can't get to those items.");
+      }
+   }
+
+   /**
+    * How many failures in a row before saying so. Small — a couple of misses are normal while pathing
+    * around a drop, and anything past that is the failure mode above rather than bad luck.
+    */
+   private static final int FAILURES_BEFORE_REPORT = 3;
+
+   private int consecutiveFailures = 0;
+
+   /** Held count of the targeted items as of last tick, to detect that something was collected. */
+   private int heldBefore = 0;
 
    protected boolean isValid(AltoClefController mod, ItemEntity obj) {
       return obj.isAlive() && !this.blacklist.contains(obj);

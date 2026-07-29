@@ -221,19 +221,37 @@ public class Player2APIService {
          // string is valid JSON, just not an object, so `response_format: json_object` is satisfied
          // and the parse still fails. Sampling is non-deterministic, so asking again usually gets a
          // well-formed object. The retry counts against llm.maxRequests, which is correct.
-         LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. Raw=<<{}>>",
-               first.getMessage(), content);
+         boolean firstTruncated = lastReplyTruncated;
+         if (firstTruncated) {
+            LOGGER.warn("LLM reply was cut off by the output token limit (llm.maxTokens={}); retrying once. Raw=<<{}>>",
+                  LlmConfig.maxTokens, content);
+         } else {
+            LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. Raw=<<{}>>",
+                  first.getMessage(), content);
+         }
          String retried = requestContent(requestBody, lastMessageForDebug);
          try {
             return Utils.parseCleanedJson(retried);
          } catch (Exception second) {
-            LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. Raw=<<{}>>",
-                  second.getMessage(), retried);
+            boolean truncated = lastReplyTruncated;
+            if (truncated) {
+               // Retrying cannot help: the cap is the same, so the second reply is cut off in the
+               // same place. Say so once, plainly, rather than reporting it as malformed JSON.
+               LOGGER.error("LLM reply was cut off by the output token limit again (llm.maxTokens={}). "
+                           + "Nothing ran. Raise llm.maxTokens to at least {}. Raw=<<{}>>",
+                     LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS, retried);
+            } else {
+               LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. Raw=<<{}>>",
+                     second.getMessage(), retried);
+            }
             JsonObject fallback = new JsonObject();
             fallback.addProperty("reason", "");
             fallback.addProperty("command", "");
             fallback.addProperty("message", speakableFallback(retried));
             fallback.addProperty(FALLBACK_MARKER, true);
+            if (truncated) {
+               fallback.addProperty(TRUNCATED_MARKER, true);
+            }
             return fallback;
          }
       }
@@ -252,12 +270,36 @@ public class Player2APIService {
             JsonObject messageObject = choices.get(0).getAsJsonObject().getAsJsonObject("message");
             if (messageObject != null && messageObject.has("content")) {
                LOGGER.info("Finished complete conversation HTTP request last msg={}", lastMessageForDebug);
+               lastReplyTruncated = wasTruncated(choices);
                return messageObject.get("content").getAsString();
             }
          }
       }
       throw new Exception("Invalid response format: " + responseMap.toString());
    }
+
+   /**
+    * Whether the model ran out of output budget mid-reply, per {@code finish_reason}.
+    *
+    * <p>Worth reading rather than inferring from the parse failure: a truncated reply is well-formed
+    * JSON right up to the cut, so it surfaces only as {@code Unterminated string at … path $.command}
+    * and looks identical to a model that simply cannot produce JSON. The two need opposite fixes —
+    * one is a config value, the other is a model choice — and telling the agent it emitted bad JSON
+    * when it was cut off makes it re-send the same over-long reply and get cut off again.
+    */
+   private static boolean wasTruncated(JsonArray choices) {
+      JsonElement reason = choices.get(0).getAsJsonObject().get("finish_reason");
+      return reason != null && !reason.isJsonNull() && "length".equals(reason.getAsString());
+   }
+
+   /**
+    * Set by the most recent {@link #requestContent} call. Read only while that call's content is
+    * being parsed, on the same thread, so the single field is sufficient.
+    */
+   private boolean lastReplyTruncated = false;
+
+   /** Marks a fallback caused by the output token cap rather than by an unparseable model. */
+   public static final String TRUNCATED_MARKER = "_truncated";
 
    /**
     * Turns an unparseable reply into something safe to say out loud, or "" to stay quiet.
@@ -309,6 +351,14 @@ public class Player2APIService {
             JsonObject messageObject = choices.get(0).getAsJsonObject().getAsJsonObject("message");
             if (messageObject != null && messageObject.has("content")) {
                LOGGER.info("Finished complete conversation HTTP request last msg={}", lastMessageForDebug);
+               if (wasTruncated(choices)) {
+                  // No JSON parse to fail here — the caller reads this as build DSL or as a memory
+                  // summary — so a cut-off reply would otherwise go through as a half-written plan
+                  // with nothing anywhere saying why it was wrong.
+                  LOGGER.warn("Plain-text LLM reply was cut off by the output token limit "
+                        + "(llm.maxTokens={}); the result is incomplete. Raise it to at least {}.",
+                        LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS);
+               }
                return messageObject.get("content").getAsString();
             }
          }

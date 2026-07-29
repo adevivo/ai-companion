@@ -32,6 +32,11 @@ public final class BuildPlacement {
      *
      * <p>Only ever applied upward. Underground is the one direction that is never intentional for a
      * requested build and, worse, is invisible — the materials are spent and the player sees nothing.
+     *
+     * <p>{@code WorldHelper.UNDERGROUND_THRESHOLD} is kept equal to this. Everything within this
+     * distance of the sky surface is a case handled correctly here, so the terrain read stays the plain
+     * heightmap for those; only offsets larger than this — which land in the refusal branch below — go
+     * looking for a local floor. Change one and change the other.
      */
     public static final int MAX_LIFT = 3;
 
@@ -56,21 +61,15 @@ public final class BuildPlacement {
      * bulk of the footprint; a mean would let a few columns over a cliff edge or a pond drag the
      * whole structure.
      *
+     * <p>{@code terrainY} comes from {@link WorldHelper#groundYNear} rather than the sky heightmap, so
+     * a build inside a cave measures against the cave floor. Reading the heightmap made every
+     * underground build measure as tens of blocks buried and be refused, whatever Y was asked for.
+     *
      * @return empty when there is nothing to compare — a plan of nothing but air (a pure carve-out),
      *         or a footprint whose chunks are not loaded
      */
     public static OptionalInt groundOffset(AltoClefController mod, List<SetBlockCommand> plan) {
-        // Lowest solid block the plan places in each column. Air placements are skipped: the DSL
-        // emits them to hollow out interiors and carve doorways, so counting one as the base would
-        // measure the bottom of a hole instead of the bottom of the structure.
-        Map<Long, Integer> planBase = new HashMap<>();
-        for (SetBlockCommand command : plan) {
-            Block block = BuildMaterials.resolveBlock(command.blockName);
-            if (block == Blocks.AIR || block == Blocks.CAVE_AIR || block == Blocks.VOID_AIR) {
-                continue;
-            }
-            planBase.merge(columnKey(command.x, command.z), command.y, Math::min);
-        }
+        Map<Long, Integer> planBase = columnBases(plan);
         if (planBase.isEmpty()) {
             return OptionalInt.empty();
         }
@@ -80,7 +79,10 @@ public final class BuildPlacement {
         for (Map.Entry<Long, Integer> entry : planBase.entrySet()) {
             int x = unpackX(entry.getKey());
             int z = unpackZ(entry.getKey());
-            int terrain = WorldHelper.surfaceY(mod, x, z);
+            // Measured from the plan's own base layer, not from the sky: inside a cave the heightmap
+            // reports the terrain overhead, which made every underground build measure as tens of
+            // blocks buried and be refused. Above ground this is the same heightmap value as before.
+            int terrain = WorldHelper.groundYNear(mod, x, z, entry.getValue());
             if (terrain < minBuildHeight) {
                 // Unloaded chunk — Level#getHeight answers with the floor of the world for those.
                 // Treating that as terrain would make every offset enormous and reject the build.
@@ -93,6 +95,36 @@ public final class BuildPlacement {
         }
         Collections.sort(offsets);
         return OptionalInt.of(offsets.get(offsets.size() / 2));
+    }
+
+    /**
+     * The lowest layer the plan places a solid block on, across the whole footprint.
+     *
+     * <p>Paired with the offset from {@link #groundOffset}, this is what turns that offset back into
+     * an absolute Y — so a refusal can quote the ground it actually measured instead of the
+     * companion's feet, which are somewhere else entirely whenever the plan is.
+     */
+    public static OptionalInt planBaseY(List<SetBlockCommand> plan) {
+        return columnBases(plan).values().stream().mapToInt(Integer::intValue).min();
+    }
+
+    /**
+     * Lowest solid block the plan places in each column, keyed by {@link #columnKey}.
+     *
+     * <p>Air placements are skipped: the DSL emits them to hollow out interiors and carve doorways,
+     * so counting one as the base would measure the bottom of a hole instead of the bottom of the
+     * structure.
+     */
+    private static Map<Long, Integer> columnBases(List<SetBlockCommand> plan) {
+        Map<Long, Integer> bases = new HashMap<>();
+        for (SetBlockCommand command : plan) {
+            Block block = BuildMaterials.resolveBlock(command.blockName);
+            if (block == Blocks.AIR || block == Blocks.CAVE_AIR || block == Blocks.VOID_AIR) {
+                continue;
+            }
+            bases.merge(columnKey(command.x, command.z), command.y, Math::min);
+        }
+        return bases;
     }
 
     /** The same plan moved vertically by {@code dy}, preserving all relative geometry. */

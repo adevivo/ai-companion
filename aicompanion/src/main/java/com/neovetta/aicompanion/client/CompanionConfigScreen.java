@@ -233,15 +233,17 @@ public final class CompanionConfigScreen {
                         Text.literal("Negative = use the server's default."))
                 .setSaveConsumer(v -> llm.addProperty("temperature", v))
                 .build());
-        cat.addEntry(eb.startIntField(Text.literal("Max Tokens"), intVal(llm, "maxTokens", 200))
-                .setDefaultValue(200)
+        cat.addEntry(eb.startIntField(Text.literal("Max Tokens"), intVal(llm, "maxTokens", 1000))
+                .setDefaultValue(1000)
                 .setTooltip(
-                        Text.literal("Cap on tokens generated per reply. Keep small —"),
-                        Text.literal("replies are spoken dialogue, not essays."),
+                        Text.literal("Cap on tokens generated per reply. Do not go below 1000."),
+                        Text.literal("It is a cap, not a budget — you pay for what is"),
+                        Text.literal("generated, so a high value costs nothing on short"),
+                        Text.literal("replies. Too low and skill commands are cut off"),
+                        Text.literal("mid-reply, so nothing runs at all."),
                         Text.literal("Zero or negative = server default."),
                         Text.literal("Reasoning models (gpt-5.x, o-series) count hidden"),
-                        Text.literal("thinking here and can return an EMPTY reply at 200 —"),
-                        Text.literal("give them 1000+, or pick a non-reasoning model."))
+                        Text.literal("thinking here — give them 2000+."))
                 .setSaveConsumer(v -> llm.addProperty("maxTokens", v))
                 .build());
         if (envApiKeySet()) {

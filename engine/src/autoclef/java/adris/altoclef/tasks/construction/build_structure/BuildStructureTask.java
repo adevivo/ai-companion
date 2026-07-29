@@ -358,25 +358,35 @@ public class BuildStructureTask extends Task {
                     plan = BuildPlacement.shifted(plan, dy);
                     return true;
                 }
-                return refuseGround(dy + " blocks underground");
+                return refuseGround(dy + " blocks underground", dy);
             }
             if (-dy > BuildPlacement.MAX_AIR_GAP) {
-                return refuseGround(-dy + " blocks up in the air");
+                return refuseGround(-dy + " blocks up in the air", dy);
             }
             // At the surface, or deliberately above it — build exactly what was asked for.
             return true;
         }
 
-        /** Abandon the build before anything is spent, telling the agent where the ground actually is. */
-        private boolean refuseGround(String where) {
+        /**
+         * Abandon the build before anything is spent, telling the agent where the ground actually is.
+         *
+         * <p>The ground Y is derived from the same measurement that caused the refusal
+         * ({@code planBaseY + dy}) rather than from the companion's own feet. Reporting the feet made
+         * the message contradict itself — "28 blocks underground … ground level there is y=41" while
+         * y=42 was what had just been asked for — and the model, told the ground was one block lower,
+         * re-aimed one block lower and measured further out. Six identical refusals in one session.
+         */
+        private boolean refuseGround(String where, int dy) {
+            OptionalInt base = BuildPlacement.planBaseY(plan);
             int feetY = Mth.floor(mod.getEntity().getY());
-            LOGGER.info("Refusing build ({}): plan sits {}", description, where);
+            int groundY = base.isPresent() ? base.getAsInt() + dy : feetY - 1;
+            LOGGER.info("Refusing build ({}): plan sits {}, ground measured at y={}", description, where, groundY);
             abortReason = String.format(
                     "Could not build (%s): the plan came out %s, so nothing was placed and no materials were spent. Ground level there is y=%d and your feet are at y=%d — build again using those, and do not claim the structure exists.",
-                    shortDescription(), where, feetY - 1, feetY);
+                    shortDescription(), where, groundY, feetY);
             playerReason = String.format(
                     "I can't build that here — the plan came out %s, so I didn't place anything. Ground is at y=%d.",
-                    where, feetY - 1);
+                    where, groundY);
             return false;
         }
 

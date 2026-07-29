@@ -37,7 +37,11 @@ The build may take a while — it collects materials first. That is normal; wait
 sending the command again.
 
 ## 4. Finish
-`farm 16`, then tell the owner the crop, size and coordinates.
+`farm 16 X Y Z` — the SAME X, Y and Z you built at. Pass them; do not send a bare `farm 16`. By the
+time this runs you have usually walked back to the owner, and without the coordinates it tends
+whatever field is near you instead of the one you just built.
+
+Then tell the owner the crop, size and coordinates.
 
 On error: say what it was, retry once at 5x5, then stop and say what blocked you. No crop specified
 means wheat, no size means 5x5 — pick the default and build in the same turn rather than asking.

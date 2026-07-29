@@ -91,7 +91,7 @@ public class Utils {
     *
     * <p>Models do this under {@code response_format: json_object} — a quoted string satisfies "valid
     * JSON" without being an object, so the mode does not prevent it. Without unwrapping, the raw
-    * content is spoken with its quote marks still attached ({@code <Ava> "Water ready—…"}).
+    * content is spoken with its quote marks still attached ({@code <name> "Water ready—…"}).
     *
     * @return the unwrapped text, or null when the content is not a lone JSON string
     */

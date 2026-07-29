@@ -5,6 +5,108 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.1 — Skills that can finish a sentence, and building underground
+
+Bundles PlayerEngine 1.0.44. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+### ⚠️ Two things to do after updating
+
+**1. Run this command:**
+
+```
+/companion skills reset farming
+```
+
+The Farming skill changed in this version, and a copy already on disk is never overwritten
+automatically — that protects skills you have edited yourself. Without this it keeps tending the wrong
+field (see below). The command backs the old one up to `farming.md.bak`. Fresh installs need nothing.
+
+**2. Open `config/aicompanion.json` and set:**
+
+```json
+"llm": { "maxTokens": 1000 }
+```
+
+The old default of `200` was too small for the skills to work — see below. New installs get 1000
+automatically; an existing config keeps whatever it has, so this one is manual. The companion now
+tells you in red, on every message, while the value is too low.
+
+### The farming skill could never run
+
+- **Fixed: skills no longer get cut off mid-reply.** A skill hands the companion a command to
+  reproduce word for word, and the farming one is about 700 characters. At the old default token
+  limit the reply was truncated part-way through that command every single time, so no command ever
+  ran — the companion simply stood there having said it was starting. Four attempts, nothing built,
+  and the only clue was a JSON parse error in the log.
+- **A cut-off reply now says so.** It was previously reported — to you and to the companion — as
+  "not valid JSON", which is wrong and unfixable: the reply was fine, it just stopped early. The
+  companion would re-send the same too-long command and be cut off again. It's now named properly in
+  chat and in the log, and the companion is asked to be brief instead.
+- **The default token limit is now 1000, up from 200.** This costs nothing: the limit is a ceiling,
+  not a budget — you're billed for what's actually generated, and a short reply is short either way.
+  Use `llm.maxRequests` and `behavior.maxAutonomousTurns` to control spend.
+
+### Farming stops talking over you
+
+- **A tended field no longer repeats itself every few seconds.** Waiting for crops to regrow used to
+  print "standing by for regrowth" and "pass complete: harvested=0, sown=0" on a loop — about 120 lines
+  in half an hour, all saying the same nothing, and loud enough to bury messages that mattered. It now
+  says why it's standing still once, then stays quiet until something actually changes. A *different*
+  reason, like running out of seeds, still comes through straight away, and progress reports during an
+  active pass are unchanged.
+
+### It tends the field it just built
+
+- **Fixed: after building a field it would tend whichever one happened to be nearest.** Between
+  finishing the build and starting to farm there's a pause while it thinks, and it walks back to you
+  during that pause — so "now tending the crops" could mean a field 37 blocks from the one it had just
+  made. This went unnoticed whenever an older field was nearby; build somewhere new and it would find
+  nothing to do while reporting success. `farm` now takes the field's coordinates, and the skill passes
+  the ones it built at.
+- Tending several fields at once still works exactly as before — the range applies around that point,
+  so everything close to it gets worked in the same pass.
+
+### A full inventory no longer brings it to a halt
+
+- **It makes room for itself instead of getting stuck.** With a full inventory it could not pick
+  anything up, and the gather that needed one more log just retried — in one session, 3,814 times over
+  27 minutes, without placing a single block of the farm it was building. The one piece of code that
+  frees a slot could only run if it was already touching the item it was trying to collect, which a
+  full inventory is exactly what prevents. It now runs whenever there's no room.
+- **It tells you.** That whole 27 minutes produced nothing in chat at all — you had to notice and ask.
+  The companion now says "I can't pick anything up — my inventory is full", and tells its own reasoning
+  the same thing, so it goes and deposits something rather than repeating the same request.
+- **"It's unreachable" no longer means "I'm full".** Those are different problems and needed different
+  answers; only one of them was ever reported.
+- **It stops hoovering junk once full.** Walking around, it picks up every stray cobblestone and leaf.
+  Once there's no free slot it will now only take things that stack onto what it's already carrying, so
+  it stops spending its last slots on debris. Below that, collecting is unchanged.
+
+### Building in caves
+
+- **It can place blocks underground.** Ask for a crafting table in a cave and you got "I can't build
+  that here — the plan came out 28 blocks underground" every single time, however you phrased it. It
+  was measuring the ground from the sky, so anything with a roof over it — a cave, a mineshaft, a
+  ravine, the inside of your base — read as buried under the whole hillside and was refused. It now
+  measures the floor it is actually standing on. Building above ground is unchanged.
+- **It stops arguing with itself about where the ground is.** The refusal used to quote a ground level
+  that contradicted the reason it gave, so it would "correct" itself one block lower and fail again —
+  six times in a row in one session before the owner told it to stop.
+- **`groundLevel` is now the block it is standing on**, as the prompt always claimed. Underground it
+  was reporting the surface far overhead, so every height it reasoned about down there was wrong —
+  and standing on a rooftop over water it reported the water, seven blocks down, so a field built
+  "at ground level" would have gone in the lake. It now asks the game which block is holding it up,
+  which is also right when it's stood on the very edge of something.
+
+### Also fixed
+
+- **You get told when it's too far away to hear you.** Past 64 blocks your messages were silently
+  dropped — indistinguishable from a dead companion or a broken model. It now says
+  `(<name> is 154 blocks away and can't hear you — /companion come)`, at most once every 30 seconds.
+
+---
+
 ## 0.2.0 — Farming that actually farms
 
 Bundles PlayerEngine 1.0.39. Self-contained jar as always — don't install a standalone engine

@@ -218,6 +218,22 @@ public class AgentConversationData {
             return;
         }
         lastReplyWasMalformed = true;
+        if (jsonResp.has(Player2APIService.TRUNCATED_MARKER)) {
+            // Telling a truncated reply it was "not valid JSON" is false and unactionable — its JSON
+            // was fine until the cap cut it off — so it re-sends the same over-long command and is
+            // cut off again. Naming the real cause at least lets it shorten.
+            LOGGER.info("Reply was cut off by the token limit; queueing a follow-up asking for a shorter one.");
+            addEventToQueue(new Event.InfoMessage(
+                    "Your last reply was CUT OFF by the output token limit before it finished, so NO "
+                            + "command ran and nothing happened. Reply again and keep it short: put the "
+                            + "command in the command field and leave reason and message brief."));
+            // Only the player can fix the cap, and from their seat the companion just went quiet.
+            getMod().tellOwner(String.format(
+                    "⚠ %s's reply was cut off by the output token limit (llm.maxTokens=%d), so nothing ran. "
+                            + "Set it to %d or more in /companion config.",
+                    getName(), LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS));
+            return;
+        }
         LOGGER.info("Malformed reply produced no command; queueing a follow-up so the plan continues.");
         addEventToQueue(new Event.InfoMessage(
                 "Your last reply was not valid JSON, so NO command ran and nothing happened. "

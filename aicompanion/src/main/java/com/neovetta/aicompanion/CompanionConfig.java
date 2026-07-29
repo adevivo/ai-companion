@@ -358,7 +358,7 @@ public final class CompanionConfig {
                 "endpoint": "http://localhost:3030",
                 "model": "local",
                 "temperature": 0.7,
-                "maxTokens": 200,
+                "maxTokens": 1000,
                 "timeoutMs": 90000,
                 "useGrammar": true,
                 "apiKey": "",
@@ -367,7 +367,8 @@ public final class CompanionConfig {
                 "_usage": "usageReportEveryTokens: print a running token-usage total to chat and the log every N tokens (0 = never). Purely informational — it never blocks a reply. maxRequests is the opposite: a hard per-session request cap that makes the companion stop responding once hit (0 = unlimited, the default). Leave maxRequests at 0 unless you are on a paid endpoint and want a hard stop.",
                 "_apiKey": "Leave blank for a local llama.cpp server (no auth). For a paid hosted API, paste the key here — or better, leave this blank and set the AICOMPANION_LLM_APIKEY environment variable so the secret never lands on disk. The env var wins if both are set.",
                 "_frontier": "To use a hosted OpenAI-compatible model instead of a local one, e.g. xAI/Grok: { \\"endpoint\\": \\"https://api.x.ai\\", \\"model\\": \\"grok-4-1-fast-non-reasoning\\", \\"apiKey\\": \\"xai-...\\" }. NOTE: endpoint is the base URL with NO trailing slash and NO /v1 — the mod appends /v1/chat/completions itself. Pick a non-reasoning model: reasoning models are slower and burn tokens on thinking the companion never uses.",
-                "_openai": "If endpoint is https://api.openai.com, prefer a non-reasoning model such as gpt-4.1-nano, gpt-4o-mini, or gpt-4.1. The gpt-5.x and o-series models are REASONING models: their hidden thinking counts against maxTokens, so at the default 200 they can spend the whole budget thinking and return an EMPTY reply with no error — the companion just goes quiet. Use them only with maxTokens at 1000 or more. (They also ignore temperature; the mod omits it for them automatically.)"
+                "_maxTokens": "Caps the length of ONE reply. Do not set it below 1000. It is a cap, not a budget — you are billed for the tokens actually generated, so a high value costs nothing on short answers, while a low one silently breaks things: skills hand the model a command to repeat verbatim (the farming one is ~700 characters), and if the reply is cut off mid-JSON no command runs at all and the companion just stands there. Use maxRequests / behavior.maxAutonomousTurns to control spend instead. 0 or less = omit it entirely and use the server's own default.",
+                "_openai": "If endpoint is https://api.openai.com, prefer a non-reasoning model such as gpt-4.1-nano, gpt-4o-mini, or gpt-4.1. The gpt-5.x and o-series models are REASONING models: their hidden thinking counts against maxTokens, so on a small budget they can spend the whole thing thinking and return an EMPTY reply with no error — the companion just goes quiet. Give them 2000 or more. (They also ignore temperature; the mod omits it for them automatically.)"
               },
               "tts": {
                 "enabled": false,

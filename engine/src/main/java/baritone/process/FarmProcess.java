@@ -48,8 +48,16 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
    private boolean active;
    private List<BlockPos> locations;
    private int tickCount;
-   /** Throttle for the "nothing to do" diagnostic; reset whenever there is real work. */
-   private int idleLogTicks;
+   /**
+    * The last "nothing to do" line announced, so an unchanging idle state is only said once.
+    *
+    * <p>These messages go to chat, and an idle field stays idle for as long as crops take to regrow —
+    * measured 2026-07-29, a 10-second throttle produced 58 identical lines in one session and buried
+    * an unrelated notice the owner needed to see. Announcing on entry keeps the explanation (a
+    * companion standing still with no reason given is the symptom this was added for) without the
+    * repetition. Cleared whenever a pass does real work, so the next idle period speaks again.
+    */
+   private String lastIdleAnnouncement;
    /** Ticks spent waiting for the async chunk scan to land. Non-zero means we are doing nothing. */
    private int scanPendingTicks;
    /** Throttle for the periodic "what the farm can see" progress line. */
@@ -155,6 +163,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
          this.cursor = 0;
          this.lastPassActions = -1;
          this.idleReplanTicks = 0;
+         // New field (or new range): whatever was last said about the old one no longer applies.
+         this.lastIdleAnnouncement = null;
          this.passHarvested = 0;
          this.passSown = 0;
          this.passSkipped = 0;
@@ -248,13 +258,11 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                this.stallReason = this.passSkipped > 0 && !hasSeeds
                      ? "the field is harvested but I have no seeds left, so some tiles are sitting empty"
                      : "the field is fully harvested and replanted — I am waiting for the crops to regrow";
-               if (this.idleLogTicks++ % 200 == 0) {
-                  this.logDirect(String.format(
-                        "Farm idle: nothing left to do in range %d of %s — scanned=%d, tiles=%d, hasSeeds=%b."
-                              + " Standing by for regrowth.",
-                        this.range, this.center, this.locations.size(),
-                        this.tileOrder == null ? 0 : this.tileOrder.size(), hasSeeds));
-               }
+               this.announceIdle(this.stallReason, String.format(
+                     "Farm idle: nothing left to do in range %d of %s — scanned=%d, tiles=%d, hasSeeds=%b."
+                           + " Standing by for regrowth.",
+                     this.range, this.center, this.locations.size(),
+                     this.tileOrder == null ? 0 : this.tileOrder.size(), hasSeeds));
 
                return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
@@ -271,10 +279,9 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
          if (this.tileOrder.isEmpty()) {
             this.stallReason = "there is no farmland within " + this.range + " blocks of " + this.center
                   + ", so there is nothing here to tend";
-            if (this.idleLogTicks++ % 200 == 0) {
-               this.logDirect(String.format("Farm idle: no farmland found in range %d of %s (scanned=%d).",
-                     this.range, this.center, this.locations.size()));
-            }
+            this.announceIdle(this.stallReason,
+                  String.format("Farm idle: no farmland found in range %d of %s (scanned=%d).",
+                        this.range, this.center, this.locations.size()));
 
             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
          }
@@ -417,16 +424,44 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
    }
 
    /**
+    * Say why nothing is happening, but only when that answer has changed.
+    *
+    * <p>Called from the idle branches on every tick they run, so the comparison is what keeps chat
+    * quiet. A different reason — the field going from "waiting for regrowth" to "out of seeds" — still
+    * comes through immediately.
+    *
+    * <p>Compared on {@code key}, not on the rendered message: the message carries a live scanned-block
+    * count, which drifts by one as chunks load (observed going 880 → 881 mid-idle) and would re-announce
+    * an idle state that had not actually changed.
+    */
+   private void announceIdle(String key, String message) {
+      if (key.equals(this.lastIdleAnnouncement)) {
+         return;
+      }
+      this.lastIdleAnnouncement = key;
+      this.logDirect(message);
+   }
+
+   /**
     * Order every soil tile in range into a serpentine walk — rows along X, alternating direction — so
     * the field is covered predictably instead of by whichever tile happens to be nearest.
     */
    private void planPass() {
-      if (this.lastPassActions >= 0) {
+      // Only worth saying when the pass actually did something. A tended field re-plans every
+      // IDLE_REPLAN_TICKS, so reporting every pass meant a chat line every few seconds saying nothing
+      // happened — 62 of the 63 lines in the 2026-07-29 session were harvested=0, sown=0, skipped=0.
+      // A skip still counts as news: it means a tile could not be reached.
+      boolean didSomething = this.passHarvested + this.passSown + this.passSkipped > 0;
+      if (this.lastPassActions >= 0 && didSomething) {
          this.logDirect(String.format("Farm pass complete over %d tiles: harvested=%d, sown=%d, skipped=%d.",
                this.tileOrder == null ? 0 : this.tileOrder.size(), this.passHarvested, this.passSown, this.passSkipped));
       }
 
       this.lastPassActions = this.passHarvested + this.passSown;
+      if (this.lastPassActions > 0) {
+         // Real work done: let the next idle period explain itself again.
+         this.lastIdleAnnouncement = null;
+      }
       this.passHarvested = 0;
       this.passSown = 0;
       this.passSkipped = 0;

@@ -48,6 +48,29 @@ public final class LlmConfig {
             Integer.parseInt(resolve("aicompanion.llm.maxTokens", "AICOMPANION_LLM_MAXTOKENS", "-1"));
 
     /**
+     * Below this, {@link #maxTokens} is low enough to break features rather than merely cap chat.
+     *
+     * <p>Skills hand the model a command to reproduce verbatim, and the farming one is 693 characters
+     * — around 200 tokens before {@code reason}, {@code message} and the JSON scaffolding are counted.
+     * At the old default of 200 the reply was cut off mid-string on every attempt, so the skill could
+     * never run at all: measured 2026-07-29, four calls, zero commands, nothing built.
+     *
+     * <p>Raising the cap is close to free — {@code max_tokens} bounds a reply, and billing is on the
+     * tokens actually generated, so a high cap costs nothing for a short answer. Spend is bounded by
+     * {@code behavior.maxAutonomousTurns}, {@code triggerPrefix}, {@code thinkThrottleSeconds} and the
+     * request cap instead.
+     *
+     * <p>Only meaningful for a positive {@code maxTokens}: {@code <= 0} means "omit, use the server
+     * default", which is unlimited rather than too low, and must never be warned about.
+     */
+    public static final int MIN_USEFUL_MAX_TOKENS = 1000;
+
+    /** Whether {@link #maxTokens} is set low enough to truncate skill commands. */
+    public static boolean maxTokensTooLow() {
+        return maxTokens > 0 && maxTokens < MIN_USEFUL_MAX_TOKENS;
+    }
+
+    /**
      * Whether to constrain output to a JSON object ({@code response_format: json_object}).
      *
      * <p>Defaults to true. Left off originally because early testing showed clean JSON without it —
