@@ -4,6 +4,7 @@ import adris.altoclef.AltoClefController;
 import adris.altoclef.chains.MobDefenseChain;
 import adris.altoclef.mixins.LivingEntityMixin;
 import adris.altoclef.multiversion.item.ItemVer;
+import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.util.helpers.LookHelper;
 import adris.altoclef.util.helpers.StlHelper;
 import adris.altoclef.util.helpers.StorageHelper;
@@ -18,6 +19,7 @@ import java.util.Optional;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Zoglin;
@@ -82,6 +84,7 @@ public class KillAura {
             && entities.get().getClass() != Zoglin.class
             && entities.get().getClass() != Warden.class
             && entities.get().getClass() != WitherBoss.class
+            && BehaviorConfig.defenseUseShield
             && (mod.getItemStorage().hasItem(Items.SHIELD) || mod.getItemStorage().hasItemInOffhand(mod, Items.SHIELD))
             && mod.getBaritone().getPathingBehavior().isSafeToCancel()) {
             LookHelper.lookAt(mod, entities.get().getEyePosition());
@@ -139,8 +142,24 @@ public class KillAura {
       }
    }
 
+   /**
+    * Ticks between full-strength swings, from the entity's {@code ATTACK_SPEED} attribute — the same
+    * formula vanilla uses in {@code Player#getCurrentItemAttackStrengthDelay}.
+    *
+    * <p>This used to return a flat 5.0F, which meant four full-damage swings a second no matter what
+    * the companion was holding: roughly 2.5x a player's rate with the same diamond sword. Reading the
+    * attribute picks up the held weapon's attack-speed modifier automatically.
+    *
+    * <p>Keeps the old constant as a fallback for entities without the attribute registered, so a
+    * mis-registered attribute degrades to the previous behaviour rather than throwing inside a tick.
+    */
    public float getAttackCooldownProgressPerTick(LivingEntity entity) {
-      return 5.0F;
+      if (entity == null || !entity.getAttributes().hasAttribute(Attributes.ATTACK_SPEED)) {
+         return 5.0F;
+      }
+
+      double attackSpeed = entity.getAttributeValue(Attributes.ATTACK_SPEED);
+      return attackSpeed <= 0.0 ? 5.0F : (float)(1.0 / attackSpeed * 20.0);
    }
 
    public float getAttackCooldownProgress(LivingEntity entity, float baseTime) {

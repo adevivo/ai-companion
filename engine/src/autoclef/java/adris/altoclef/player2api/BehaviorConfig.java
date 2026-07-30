@@ -72,6 +72,94 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_MAXAUTONOMOUSTURNS", "2"));
 
     /**
+     * Whether {@code build_structure} builds with its hands instead of conjuring the structure.
+     *
+     * <p>True by default. With it on, the companion walks to the site, stands somewhere it can actually
+     * reach, and places blocks a few per tick with an arm swing and a placement sound, moving along as
+     * each spot is exhausted. Blocks are still written directly rather than right-clicked — going through
+     * real item use needs scaffolding and support faces and is a known source of stalls — so this is
+     * about the build being physically situated and paced, not about simulating every placement rule.
+     *
+     * <p>Set false to restore the old behaviour: up to 256 blocks a tick, no reach check, no walking, from
+     * anywhere on the map. That path is kept unchanged as a one-line escape hatch if paced building
+     * misbehaves in a real world.
+     */
+    public static volatile boolean buildPhysicalPlacement =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.buildPhysicalPlacement",
+                    "AICOMPANION_BEHAVIOR_BUILDPHYSICALPLACEMENT", "true"));
+
+    /**
+     * Blocks placed per tick when {@link #buildPhysicalPlacement} is on. Clamped to 1..64.
+     *
+     * <p>Two looks like someone working steadily. Raising it finishes large builds sooner at the cost of
+     * blocks appearing in visible clumps; a build the owner cancels out of boredom is worse than one that
+     * looks slightly too quick, so raise this rather than turning physical placement off.
+     */
+    public static volatile int buildBlocksPerTick =
+            Integer.parseInt(resolve("aicompanion.behavior.buildBlocksPerTick",
+                    "AICOMPANION_BEHAVIOR_BUILDBLOCKSPERTICK", "2"));
+
+    /**
+     * Whether hostile mobs treat the companion as they would a player.
+     *
+     * <p>True by default. The companion is a {@code LivingEntity}, not a {@code Player}, and vanilla
+     * hostiles look for targets with an explicit {@code Player.class} filter — so with this off, mobs
+     * walk straight past it and it is only ever attacked in retaliation for swinging first.
+     *
+     * <p>This also decides whether the defence behaviour is reachable at all: everything in
+     * {@link adris.altoclef.chains.MobDefenseChain} hangs off {@code EntityTracker.getHostiles()},
+     * which asks whether a mob is targeting the companion. Set this false and that list goes back to
+     * being permanently empty.
+     */
+    public static volatile boolean mobsTargetCompanion =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.mobsTargetCompanion",
+                    "AICOMPANION_BEHAVIOR_MOBSTARGETCOMPANION", "true"));
+
+    /**
+     * Whether the companion fights back against hostiles that are targeting it.
+     *
+     * <p>True by default. Note that this gates only the deliberate {@code KillEntitiesTask} response
+     * in {@link adris.altoclef.chains.MobDefenseChain}; the opportunistic swing at whatever is already
+     * in arm's reach (the kill aura) is separate and is not affected. Set false and the companion will
+     * absorb hits without ever choosing to engage.
+     */
+    public static volatile boolean defenseFightBack =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.defenseFightBack",
+                    "AICOMPANION_BEHAVIOR_DEFENSEFIGHTBACK", "true"));
+
+    /**
+     * Whether the companion raises a shield when threatened.
+     *
+     * <p>True by default. Gating this to false makes every shield-aware decision behave as though the
+     * companion owns no shield at all, which also (correctly) lowers its estimate of what it can take
+     * on. Known gap: shield durability is not yet wired up for a non-player entity, so a raised shield
+     * currently never wears out — see {@code CompanionEntity#damageArmor} for the armour equivalent
+     * that is wired.
+     */
+    public static volatile boolean defenseUseShield =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.defenseUseShield",
+                    "AICOMPANION_BEHAVIOR_DEFENSEUSESHIELD", "true"));
+
+    /**
+     * Whether the companion may run away — from hostiles it judges it cannot beat, from incoming
+     * arrows, and behind hastily-built projectile walls.
+     *
+     * <p>False by default, deliberately. All of this logic sits behind
+     * {@code EntityTracker.getHostiles()}, which requires a mob to actually be targeting the companion;
+     * before hostile mobs could target a non-player entity at all, that list was permanently empty and
+     * none of this code had ever run in a real world. Turning it on at the same moment as mob aggro
+     * would mean shipping two untested behaviours at once, and the failure mode is the companion
+     * abandoning a farm or a build halfway through to sprint over the horizon.
+     *
+     * <p>With this off the companion stands its ground: it keeps working, and the kill aura plus
+     * {@link #defenseFightBack} handle whatever reaches it. Turn it on once you have watched it get
+     * mobbed and decided you want flight instead.
+     */
+    public static volatile boolean defenseFleeFromHostiles =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.defenseFleeFromHostiles",
+                    "AICOMPANION_BEHAVIOR_DEFENSEFLEEFROMHOSTILES", "false"));
+
+    /**
      * Apply {@link #triggerPrefix} to an incoming chat line. Returns the message the model should see
      * (prefix stripped, trimmed), or {@code null} if this message is not addressed to the companion.
      */

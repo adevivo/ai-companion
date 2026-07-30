@@ -8,6 +8,8 @@ import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
 import net.minecraft.entity.EntityDimensions;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
+import net.minecraft.entity.attribute.DefaultAttributeContainer;
+import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.mob.ZombieEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
@@ -66,12 +68,26 @@ public class AiCompanion implements ModInitializer {
      */
     public static final Identifier TOKEN_HUD_TOGGLE = id("token_hud_toggle");
 
+    /**
+     * Zombie attributes plus {@code GENERIC_ATTACK_SPEED}.
+     *
+     * <p>The zombie set is a convenient starting point (20 health, 0.23 speed, 3 attack damage, 2 armor)
+     * but it omits attack speed, which no mob has and every player does. Without it,
+     * {@code CompanionEntity#getAttackCooldownProgressPerTick} has nothing to read and a held weapon's
+     * attack-speed modifier has no attribute to modify — so the companion swings at a fixed cadence
+     * regardless of what it is holding. 4.0 is the vanilla player base.
+     */
+    public static DefaultAttributeContainer.Builder createCompanionAttributes() {
+        return ZombieEntity.createAttributes()
+                .add(EntityAttributes.GENERIC_ATTACK_SPEED, 4.0);
+    }
+
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
     public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
             .<CompanionEntity>createLiving()
             .spawnGroup(SpawnGroup.MISC)
             .entityFactory(CompanionEntity::new)
-            .defaultAttributes(ZombieEntity::createAttributes)
+            .defaultAttributes(AiCompanion::createCompanionAttributes)
             .dimensions(EntityDimensions.changing(EntityType.PLAYER.getWidth(), EntityType.PLAYER.getHeight()))
             .trackRangeBlocks(64)
             .trackedUpdateRate(1)
@@ -86,7 +102,7 @@ public class AiCompanion implements ModInitializer {
         // Load sysadmin config first so LlmConfig (endpoint/model/sampling) + persona are set before spawn.
         CompanionConfig.load();
         Registry.register(Registries.ENTITY_TYPE, id("companion"), COMPANION);
-        FabricDefaultAttributeRegistry.register(COMPANION, ZombieEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(COMPANION, createCompanionAttributes());
         CompanionCommands.register();
         // Register the chat hook so nearby players' messages route to a companion's brain.
         ConversationManager.init();

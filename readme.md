@@ -172,7 +172,7 @@ comments (`_help` keys) explaining every setting. Full schema:
 
 Sections: `companion.{name,description,systemPrompt,skin}` · `llm.{endpoint,model,…}` ·
 `tts.{enabled,endpoint,voice,…}` ·
-`behavior.{triggerPrefix,thinkThrottleSeconds,buildCostsMaterials,buildGroundCheck,maxAutonomousTurns}` ·
+`behavior.{triggerPrefix,thinkThrottleSeconds,buildCostsMaterials,buildGroundCheck,buildPhysicalPlacement,buildBlocksPerTick,maxAutonomousTurns,mobsTargetCompanion,defenseFightBack,defenseUseShield,defenseFleeFromHostiles}` ·
 `skills.{advertiseInPrompt}`.
 
 ### Choosing a brain
@@ -240,6 +240,12 @@ off by default:
 | `behavior.buildCostsMaterials` | `true` (default): `build_structure` spends real items from the companion's inventory, one per block. If it is short, it **collects the shortfall itself** and then builds — one command does the whole job, rather than bouncing back to the model to fetch one item per turn. Blocks already correct are skipped and cost nothing. Only if gathering fails does it refuse and report what is still missing. `false` restores creative-style building where blocks come from nothing. |
 | `behavior.buildGroundCheck` | `true` (default): a build plan is compared against the real terrain before any block is placed. One-sided by design — a plan that came out **below** ground is lifted onto the surface (up to 3 blocks), since buried is never intended and is invisible once it happens; a plan **above** ground is built exactly as generated, since "on top of the ground" is a one-block gap and towers are legitimately higher. Only a plan more than 16 blocks up is refused, with **no materials spent** and the correct ground Y reported back. Set `false` to disable the check entirely. |
 | `behavior.maxAutonomousTurns` | `2` (default): how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again. Every finished command prompts it for a next step, so without a cap one instruction chains indefinitely — and it starts inventing chores. The counter resets whenever anybody talks to it, and whenever a command **fails**, so gather-then-retry loops still run to completion. `0` = unlimited (the old behaviour). |
+| `behavior.buildPhysicalPlacement` | `true` (default): the companion **walks to the build site and builds with its hands** — a couple of blocks per tick, only ones it can actually reach, choosing somewhere to stand that the plan does not need to fill and that it can get back out of, moving along as each spot is exhausted, with an arm swing and a placement sound. Air cells in a plan (doorways, windows) are carved first, which is what keeps it from sealing itself inside a house cut into a hillside. Blocks are still written directly rather than right-clicked, so orientation-sensitive blocks behave as before. A build it cannot finish reaching reports honestly that it is **partly** built, and repeating the same description resumes it rather than starting over. `false` restores the old instant path: up to 256 blocks in a single tick, no reach check, no walking, from anywhere on the map. |
+| `behavior.buildBlocksPerTick` | `2` (default, clamped 1–64): pacing when the above is on. Raise it to finish large builds sooner, at the cost of blocks appearing in visible clumps. Prefer raising this over turning physical placement off. |
+| `behavior.mobsTargetCompanion` | `true` (default): **hostile mobs hunt the companion the way they hunt you.** It is a `LivingEntity` rather than a real player and vanilla mobs look for targets with a hard-coded player filter, so with this off they walk straight past it and it is only ever attacked in retaliation for swinging first. Covers the goal-based hostiles (zombies, skeletons, spiders, creepers, illagers, blazes, ghasts, slimes, guardians…) plus piglins and hoglins. Endermen keep player-only stare aggro either way. |
+| `behavior.defenseFightBack` | `true` (default): whether the companion deliberately engages hostiles that are targeting it. It always swings at whatever is already in arm's reach regardless of this setting. |
+| `behavior.defenseUseShield` | `true` (default): whether it raises a shield when threatened. Note: shield **durability** is not yet wired for a non-player entity, so a raised shield does not wear out. |
+| `behavior.defenseFleeFromHostiles` | **`false`** (default): whether it may run away from fights it judges it cannot win, dodge arrows, and throw up cover blocks. All of that logic hangs off "is a mob targeting the companion", which was impossible before `mobsTargetCompanion`, so it has never actually run in a real world. Off, the companion stands its ground and keeps working; on, expect it to abandon a farm or a half-built house to sprint over the horizon. Turn it on deliberately, after watching it get mobbed. |
 | `llm.maxRequests` | Hard per-session request cap. Once hit the companion stops responding until restart — a stop, not a throttle. `0` = unlimited. |
 
 ---
@@ -289,15 +295,26 @@ and defines the entity/spawn/config — exactly how Player2NPC consumes PlayerEn
 
 ## Building
 
-**JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`. The jar version
-comes from `engine/gradle.properties` (currently **1.0.33**); adjust the filename if you bump it.
+**JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`.
+
+The engine jar version comes from `engine/gradle.properties` (currently **1.0.46**). The commands below
+glob it rather than naming it, and **clear both output directories first** — the consumer depends on
+`PlayerEngine:+`, so a stale jar left alongside a new one is picked up silently, and a rebuilt jar
+carrying the *same* version is served from Loom's remap cache. If a change to engine code does not seem
+to take effect, bump `mod_version` in `engine/gradle.properties`.
+
+Clearing `engine/build/libs/` matters as much as clearing `aicompanion/libs/`: `gradlew build` does not
+remove jars from previous versions, so the copy glob will happily carry an old one forward alongside the
+new one and leave the consumer resolving between two.
 
 ```bash
 # macOS / Linux
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17          # or your JDK 17 path
 
 # 1. Build the engine (our PlayerEngine fork) and stage its jar for the consumer
-cd engine && ./gradlew build && cp build/libs/PlayerEngine-1.0.33.jar ../aicompanion/libs/ && cd ..
+cd engine && rm -f build/libs/*.jar && ./gradlew build \
+  && rm -f ../aicompanion/libs/PlayerEngine-*.jar \
+  && cp build/libs/PlayerEngine-*.jar ../aicompanion/libs/ && cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion && ./gradlew build      # → build/libs/*.jar
@@ -307,7 +324,7 @@ cd aicompanion && ./gradlew build      # → build/libs/*.jar
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # adjust to your JDK 17 install
 
 # 1. Build the engine fork and stage its jar for the consumer
-cd engine; .\gradlew.bat build; Copy-Item build\libs\PlayerEngine-1.0.33.jar ..\aicompanion\libs\; cd ..
+cd engine; Remove-Item build\libs\*.jar -ErrorAction SilentlyContinue; .\gradlew.bat build; Remove-Item ..\aicompanion\libs\PlayerEngine-*.jar -ErrorAction SilentlyContinue; Copy-Item build\libs\PlayerEngine-*.jar ..\aicompanion\libs\; cd ..
 
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion; .\gradlew.bat build      # -> build\libs\*.jar

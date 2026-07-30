@@ -4,6 +4,7 @@ import adris.altoclef.AltoClefController;
 import adris.altoclef.Debug;
 import adris.altoclef.control.KillAura;
 import adris.altoclef.multiversion.item.ItemVer;
+import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.tasks.construction.ProjectileProtectionWallTask;
 import adris.altoclef.tasks.entity.KillEntitiesTask;
 import adris.altoclef.tasks.movement.CustomBaritoneGoalTask;
@@ -275,7 +276,9 @@ public class MobDefenseChain extends SingleTaskChain {
                   && mod.getMLGBucketChain().doneMLG()
                   && !mod.getMLGBucketChain().isChorusFruiting()) {
                   this.doForceField(mod);
-                  if (mod.getPlayer().getHealth() <= 10.0F && !hasShield(mod)) {
+                  // Projectile walls and arrow-dodging are flight, not defence — both abandon the
+                  // current task to reposition. Gated with the rest of the flee behaviour.
+                  if (BehaviorConfig.defenseFleeFromHostiles && mod.getPlayer().getHealth() <= 10.0F && !hasShield(mod)) {
                      if (StorageHelper.getNumberOfThrowawayBlocks(mod) > 0
                         && !mod.getFoodChain().needsToEat()
                         && mod.getModSettings().isDodgeProjectiles()
@@ -346,11 +349,23 @@ public class MobDefenseChain extends SingleTaskChain {
                            float damage = bestWeapon == null ? 0.0F : bestWeapon.getTier().getAttackDamageBonus() + 1.0F;
                            int shield = hasShield(mod) && bestWeapon != null ? 3 : 0;
                            int canDealWith = (int)Math.ceil(armor * 3.6 / 20.0 + damage * 0.8 + shield);
-                           if (canDealWith < getDangerousnessScore(toDealWithList) && !this.needsChangeOnAttack) {
+                           if (BehaviorConfig.defenseFleeFromHostiles
+                              && canDealWith < getDangerousnessScore(toDealWithList)
+                              && !this.needsChangeOnAttack) {
                               this.runAwayTask = new RunAwayFromHostilesTask(30.0, true);
                               this.runAwayTask.controller = this.controller;
                               this.setTask(this.runAwayTask);
                               return 80.0F;
+                           }
+
+                           // Outmatched but not allowed to flee: fall through and fight. If fighting back
+                           // is off too, yield the chain entirely so whatever the owner asked for keeps
+                           // running — the kill aura still swings at anything already in arm's reach.
+                           if (!BehaviorConfig.defenseFightBack) {
+                              this.runAwayTask = null;
+                              this.needsChangeOnAttack = false;
+                              this.lockedOnEntity = null;
+                              return 0.0F;
                            }
 
                            if (!(this.mainTask instanceof KillEntitiesTask)) {
@@ -370,7 +385,10 @@ public class MobDefenseChain extends SingleTaskChain {
                         return this.cachedLastPriority;
                      } else {
                         this.runAwayTask = null;
-                        if (this.needsChangeOnAttack && this.lockedOnEntity != null && this.lockedOnEntity.isAlive()) {
+                        if (BehaviorConfig.defenseFightBack
+                           && this.needsChangeOnAttack
+                           && this.lockedOnEntity != null
+                           && this.lockedOnEntity.isAlive()) {
                            this.setTask(new KillEntitiesTask(this.lockedOnEntity.getClass()));
                            return 65.0F;
                         } else {
@@ -379,11 +397,16 @@ public class MobDefenseChain extends SingleTaskChain {
                            return 0.0F;
                         }
                      }
-                  } else {
+                  } else if (BehaviorConfig.defenseFleeFromHostiles) {
                      this.runAwayTask = new RunAwayFromHostilesTask(30.0, true);
                      this.runAwayTask.controller = this.controller;
                      this.setTask(this.runAwayTask);
                      return 70.0F;
+                  } else {
+                     // Surrounded, and not allowed to run. Stand and keep working; the kill aura is
+                     // already swinging at whatever is in reach.
+                     this.runAwayTask = null;
+                     return 0.0F;
                   }
                } else {
                   this.killAura.stopShielding(mod);
@@ -395,7 +418,16 @@ public class MobDefenseChain extends SingleTaskChain {
       }
    }
 
+   /**
+    * Whether shield tactics are available. Gated on {@code behavior.defenseUseShield}: with it off,
+    * every shield-aware decision below behaves as though the companion carries no shield, including its
+    * estimate of what it can take on — which is the honest consequence of not being allowed to block.
+    */
    private static boolean hasShield(AltoClefController mod) {
+      if (!BehaviorConfig.defenseUseShield) {
+         return false;
+      }
+
       return mod.getItemStorage().hasItem(Items.SHIELD) || mod.getItemStorage().hasItemInOffhand(mod, Items.SHIELD);
    }
 

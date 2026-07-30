@@ -49,7 +49,10 @@ public class Settings implements IFailableConfigFile {
    private float resourceMineRange = 100.0F;
    private boolean avoidSearchingDungeonChests = true;
    private boolean avoidOceanBlocks = false;
-   private float entityReachRange = 4.0F;
+   // Vanilla player attack reach. Was 4.0F, which let the companion hit things from a block further
+   // out than a person could. PlayerExtraController.inRange is the only real gate on melee distance
+   // (KillAura's own check ORs in a 6.3-block clause and an infinite default range, so it never bites).
+   private float entityReachRange = 3.0F;
    private boolean collectPickaxeFirst = true;
    private boolean replantCrops = true;
    private boolean mobDefense = true;

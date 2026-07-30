@@ -577,16 +577,44 @@ public class CompanionEntity extends LivingEntity
         return false;
     }
 
+    /**
+     * Ticks between full-strength swings, from the {@code GENERIC_ATTACK_SPEED} attribute — the same
+     * formula as {@code PlayerEntity#getAttackCooldownProgressPerTick}. A held weapon's attack-speed
+     * modifier reaches the attribute via {@code detectEquipmentUpdates}, because {@link
+     * #getEquippedStack} is backed by the real inventory.
+     *
+     * <p>Falls back to the engine's old fixed cadence if the attribute somehow isn't registered, so a
+     * missing attribute degrades to the previous behaviour instead of throwing inside a tick.
+     */
+    public float getAttackCooldownProgressPerTick() {
+        if (!this.getAttributes().hasAttribute(EntityAttributes.GENERIC_ATTACK_SPEED)) {
+            return 5.0F;
+        }
+        return (float) (1.0D / this.getAttributeValue(EntityAttributes.GENERIC_ATTACK_SPEED) * 20.0D);
+    }
+
+    /** 0.0 just after a swing, 1.0 once the weapon's cooldown has fully recharged. */
+    public float getAttackCooldownProgress(float baseTime) {
+        return MathHelper.clamp((lastAttackedTicks + baseTime) / this.getAttackCooldownProgressPerTick(), 0.0F, 1.0F);
+    }
+
     // --- Combat: LivingEntity has no attack of its own ---
     @Override
     public boolean tryAttack(Entity target) {
+        // Read the cooldown before resetting it: an attack landed mid-recharge does reduced damage,
+        // exactly like a player spam-clicking. Without this the companion out-DPSes its own gear.
+        float charge = this.getAttackCooldownProgress(0.5F);
         lastAttackedTicks = 0;
         float damage = (float) this.getAttributeValue(EntityAttributes.GENERIC_ATTACK_DAMAGE);
         float knockback = (float) this.getAttributeValue(EntityAttributes.GENERIC_ATTACK_KNOCKBACK);
+        float enchantBonus = 0.0F;
         if (target instanceof LivingEntity living) {
-            damage += EnchantmentHelper.getAttackDamage(this.getMainHandStack(), living.getGroup());
+            enchantBonus = EnchantmentHelper.getAttackDamage(this.getMainHandStack(), living.getGroup());
             knockback += EnchantmentHelper.getKnockback(this);
         }
+        damage *= 0.2F + charge * charge * 0.8F;
+        enchantBonus *= charge;
+        damage += enchantBonus;
         int fire = EnchantmentHelper.getFireAspect(this);
         if (fire > 0) {
             target.setOnFireFor(fire * 4);
@@ -601,8 +629,34 @@ public class CompanionEntity extends LivingEntity
             }
             this.applyDamageEffects(this, target);
             this.onAttacking(target);
+            // Weapon wear. LivingEntity never does this — only PlayerEntity#attack calls postHit, which
+            // is the hook SwordItem/AxeItem/TridentItem use for hurtAndBreak(1) and their on-hit extras.
+            // Use the Item overload: the ItemStack one demands a PlayerEntity we don't have.
+            if (target instanceof LivingEntity living) {
+                ItemStack weapon = this.getMainHandStack();
+                if (!weapon.isEmpty()) {
+                    weapon.getItem().postHit(weapon, living, this);
+                    if (weapon.isEmpty()) {
+                        this.equipStack(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
+                    }
+                }
+            }
         }
         return hit;
+    }
+
+    /**
+     * Armour durability. {@code LivingEntity#damageArmor} is an empty method — only PlayerEntity
+     * overrides it — so without this the companion's armour absorbs damage forever and never breaks.
+     * {@link LivingEntityInventory#damageArmor} was already written for this and had no caller; it
+     * applies vanilla's {@code amount / 4, minimum 1} rule internally.
+     *
+     * <p>The slot indices are spelled out rather than borrowed from {@code PlayerInventory.ARMOR_SLOTS}
+     * to keep this file free of a constant that has to be re-checked on every mapping bump.
+     */
+    @Override
+    public void damageArmor(DamageSource source, float amount) {
+        getLivingInventory().damageArmor(source, amount, new int[]{0, 1, 2, 3});
     }
 
     @Override

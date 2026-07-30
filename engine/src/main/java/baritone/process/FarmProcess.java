@@ -254,7 +254,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             // A pass that changed nothing means the field is tended and we are waiting on growth. Say so
             // and idle, rather than re-planning a pointless pass every tick.
             if (this.lastPassActions == 0 && this.idleReplanTicks++ < IDLE_REPLAN_TICKS) {
-               boolean hasSeeds = this.baritone.getInventoryBehavior().throwaway(false, this::isPlantable);
+               boolean hasSeeds = this.baritone.getInventoryBehavior().selectFromWholeInventory(false, this::isPlantable);
                this.stallReason = this.passSkipped > 0 && !hasSeeds
                      ? "the field is harvested but I have no seeds left, so some tiles are sitting empty"
                      : "the field is fully harvested and replanted — I am waiting for the crops to regrow";
@@ -291,7 +291,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
          BlockState soilState = this.ctx.world().getBlockState(soil);
          BlockState cropState = this.ctx.world().getBlockState(cropPos);
          boolean soulsand = soilState.getBlock() == Blocks.SOUL_SAND;
-         boolean hasSeed = this.baritone.getInventoryBehavior().throwaway(false, soulsand ? this::isNetherWart : this::isPlantable);
+         boolean hasSeed = this.baritone.getInventoryBehavior().selectFromWholeInventory(false, soulsand ? this::isNetherWart : this::isPlantable);
 
          if (this.workLogTicks++ % 200 == 0) {
             this.logDirect(String.format(
@@ -360,7 +360,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             );
             if (rot.isPresent()
                && isSafeToCancel
-               && this.baritone.getInventoryBehavior().throwaway(true, soulsand ? this::isNetherWart : this::isPlantable)) {
+               && this.baritone.getInventoryBehavior().selectFromWholeInventory(true, soulsand ? this::isNetherWart : this::isPlantable)) {
                HitResult result = RayTraceUtils.rayTraceTowards(this.ctx.entity(), rot.get(), this.ctx.playerController().getBlockReachDistance());
                if (result instanceof BlockHitResult && ((BlockHitResult)result).getDirection() == Direction.UP) {
                   this.baritone.getLookBehavior().updateTarget(rot.get(), true);
@@ -382,9 +382,9 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
          if (cropState.getBlock() instanceof BonemealableBlock bonemealable
             && bonemealable.isValidBonemealTarget(this.ctx.world(), cropPos, cropState, true)
             && bonemealable.isBonemealSuccess(this.ctx.world(), this.ctx.world().random, cropPos, cropState)
-            && this.baritone.getInventoryBehavior().throwaway(false, this::isBoneMeal)) {
+            && this.baritone.getInventoryBehavior().selectFromWholeInventory(false, this::isBoneMeal)) {
             Optional<Rotation> rot = RotationUtils.reachable(this.ctx, cropPos);
-            if (rot.isPresent() && isSafeToCancel && this.baritone.getInventoryBehavior().throwaway(true, this::isBoneMeal)) {
+            if (rot.isPresent() && isSafeToCancel && this.baritone.getInventoryBehavior().selectFromWholeInventory(true, this::isBoneMeal)) {
                this.baritone.getLookBehavior().updateTarget(rot.get(), true);
                if (this.ctx.isLookingAt(cropPos)) {
                   this.baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);

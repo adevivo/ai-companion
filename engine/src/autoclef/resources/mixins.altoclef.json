@@ -11,9 +11,13 @@
   ],
   "mixins": [
     "ClientConnectionAccessor",
+    "CompanionTargetableMixin",
     "EntityAccessor",
     "EntityAnimationSwungMixin",
+    "HoglinAiMixin",
     "LivingEntityMixin",
+    "PiglinAiMixin",
+    "TargetGoalAccessor",
     "MixinAbstractFurnaceBlockEntity",
     "PersistentProjectileEntityAccessor",
     "PlayerCollidesWithEntityMixin",

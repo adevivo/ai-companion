@@ -5,6 +5,78 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.2 — Plays by the same rules you do
+
+Bundles PlayerEngine 1.0.46. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating. The new settings are added to `config/aicompanion.json` automatically and
+all default to sensible values.
+
+### Mobs can see it now
+
+- **Hostile mobs hunt the companion the way they hunt you.** They never did before. The companion is a
+  `LivingEntity` rather than a real player, and every vanilla mob looks for targets through a
+  hard-coded player filter — so zombies, skeletons, spiders and creepers walked straight past it. The
+  only way it ever got attacked was retaliation after it swung first. Covers the goal-based hostiles
+  plus piglins and hoglins; piglins honour the gold-armour truce, so kit it out and it can walk the
+  Nether. Endermen still only aggro on real players staring at them.
+- This also switched on the whole defence system, which had **never run once** in a real world: all of
+  it was gated on "is a mob targeting the companion", which was permanently false. Rather than ship
+  that untested, it is behind four settings — fighting back and shield use are on, **running away is
+  off**. The companion stands its ground and keeps working instead of abandoning a farm to sprint over
+  the horizon. Turn `behavior.defenseFleeFromHostiles` on when you want to see the other behaviour.
+
+### Gear wears out
+
+- **Fixed: swords and axes never lost durability.** Mining wore tools down correctly, but melee did
+  not — the attack path was hand-written and never called the hook that damages a weapon on hit. A
+  companion's sword was effectively unbreakable.
+- **Fixed: armour never wore out either**, for the same class of reason. It absorbed damage forever.
+- **Fixed: it swung far too fast.** Attack cadence was a flat 5 ticks regardless of weapon, at full
+  damage every time — roughly 4 swings a second where you get 1.6 with the same diamond sword. It now
+  uses the real attack-speed attribute and scales damage by cooldown like a player does.
+- Melee reach tightened from 4 blocks to the vanilla 3.
+- Known gap: **shields still don't wear out.** Fishing rods, shears, hoes and flint & steel always did.
+
+### Buildings get built instead of appearing
+
+- **`build_structure` now builds with its hands.** It walks to the site, picks somewhere to stand that
+  the plan doesn't need to fill and that it can get back out of, and places a couple of blocks a tick
+  within arm's reach — swinging, making placement noise, and moving along as each spot is used up.
+  Previously up to 256 blocks a tick with no reach check and no walking, which meant a small house
+  materialised in a single tick at coordinates the model named from anywhere on the map.
+- Courses go bottom-up and outside-in, so it never stands where a block has to go and a flat roof
+  partly scaffolds itself. Doorways and windows are carved **first** — that's what stops it sealing
+  itself inside a house cut into a hillside.
+- If it genuinely can't reach the rest (the middle of a wide roof), it says so and finishes those from
+  where it stands rather than stalling. If it gets shut in anyway, it digs out — and isn't charged
+  twice for the blocks it has to replace.
+- **A partly-finished build now says it's partly finished** and can be resumed by repeating the same
+  description; it places only what's missing. Interrupting a build mid-way keeps the plan instead of
+  throwing it away.
+- Duplicate positions in a generated plan are collapsed, which also stops the material bill charging
+  twice for one block.
+- Fixed a bug this exposed: retrying a build re-measured the ground against the part already standing,
+  read its own roof as ground level, and could refuse a job that was half done.
+- `behavior.buildPhysicalPlacement: false` restores the old instant behaviour exactly, if you want it.
+
+### Farming and harvesting replant again
+
+- **Fixed: harvested tiles were left bare, and the companion insisted it was out of seeds while
+  carrying hundreds of them.** Ask it to tend a field and it would strip the wheat, plant nothing, and
+  answer *"I need to get more wheat seeds"* with 418 of them in its pockets. Telling it otherwise
+  didn't help — it genuinely could not see them.
+- The cause was that the farm only ever looked at the companion's **hotbar**, nine of its thirty-six
+  slots. Seeds anywhere else were invisible, and since planting needs the stack in hand, a full
+  backpack of seeds could never be used. Anything the companion picked up while working — which is
+  most of what it carries — landed out of view.
+- It now searches the whole inventory and moves a stack into its hand when it finds one, the way you
+  would. Bone meal had exactly the same blind spot and is fixed with it, so it will fertilise from the
+  backpack too.
+
+---
+
 ## 0.2.1 — Skills that can finish a sentence, and building underground
 
 Bundles PlayerEngine 1.0.44. Self-contained jar as always — don't install a standalone engine

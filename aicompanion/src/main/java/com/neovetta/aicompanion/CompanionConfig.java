@@ -276,8 +276,20 @@ public final class CompanionConfig {
                     bool(behavior, "buildCostsMaterials", BehaviorConfig.buildCostsMaterials);
             BehaviorConfig.buildGroundCheck =
                     bool(behavior, "buildGroundCheck", BehaviorConfig.buildGroundCheck);
+            BehaviorConfig.buildPhysicalPlacement =
+                    bool(behavior, "buildPhysicalPlacement", BehaviorConfig.buildPhysicalPlacement);
+            BehaviorConfig.buildBlocksPerTick =
+                    intVal(behavior, "buildBlocksPerTick", BehaviorConfig.buildBlocksPerTick);
             BehaviorConfig.maxAutonomousTurns =
                     intVal(behavior, "maxAutonomousTurns", BehaviorConfig.maxAutonomousTurns);
+            BehaviorConfig.mobsTargetCompanion =
+                    bool(behavior, "mobsTargetCompanion", BehaviorConfig.mobsTargetCompanion);
+            BehaviorConfig.defenseFightBack =
+                    bool(behavior, "defenseFightBack", BehaviorConfig.defenseFightBack);
+            BehaviorConfig.defenseUseShield =
+                    bool(behavior, "defenseUseShield", BehaviorConfig.defenseUseShield);
+            BehaviorConfig.defenseFleeFromHostiles =
+                    bool(behavior, "defenseFleeFromHostiles", BehaviorConfig.defenseFleeFromHostiles);
         }
 
         JsonObject tts = obj(root, "tts");
@@ -383,8 +395,16 @@ public final class CompanionConfig {
                 "thinkThrottleSeconds": 0,
                 "buildCostsMaterials": true,
                 "buildGroundCheck": true,
+                "buildPhysicalPlacement": true,
+                "buildBlocksPerTick": 2,
                 "maxAutonomousTurns": 2,
-                "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block. If it is short it collects the shortfall itself and then builds, so one command does the whole job; blocks that are already correct are skipped and cost nothing. Set false for creative-style building where blocks come from nothing. buildGroundCheck: when true (default), a build plan is compared against the real terrain first. One-sided by design — a plan that came out below ground is lifted onto the surface (up to 3 blocks), while one above ground is built as generated ('on top of the ground' is a one-block gap, and towers are legitimately higher). Only a plan more than 16 blocks in the air is refused, without spending materials. Set false to disable the check entirely. maxAutonomousTurns: how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again (0 = unlimited). Every finished command prompts it for a next step, so without a cap one instruction can chain indefinitely — and it will invent chores. The counter resets whenever anybody talks to it."
+                "mobsTargetCompanion": true,
+                "defenseFightBack": true,
+                "defenseUseShield": true,
+                "defenseFleeFromHostiles": false,
+                "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block. If it is short it collects the shortfall itself and then builds, so one command does the whole job; blocks that are already correct are skipped and cost nothing. Set false for creative-style building where blocks come from nothing. buildGroundCheck: when true (default), a build plan is compared against the real terrain first. One-sided by design — a plan that came out below ground is lifted onto the surface (up to 3 blocks), while one above ground is built as generated ('on top of the ground' is a one-block gap, and towers are legitimately higher). Only a plan more than 16 blocks in the air is refused, without spending materials. Set false to disable the check entirely. maxAutonomousTurns: how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again (0 = unlimited). Every finished command prompts it for a next step, so without a cap one instruction can chain indefinitely — and it will invent chores. The counter resets whenever anybody talks to it.",
+                "_helpBuilding": "buildPhysicalPlacement: when true (default), the companion walks to the build site and places blocks by hand — a couple per tick, only what it can actually reach, moving along as each spot is used up, with an arm swing and a placement sound. Blocks are still written directly rather than right-clicked, so orientation-sensitive blocks are unaffected, but the build is situated and paced instead of appearing all at once from any distance. A build it cannot finish reaching says so and can be resumed by repeating the same description. Set false to restore the old instant behaviour (up to 256 blocks a tick, no reach check, no walking) if paced building misbehaves. buildBlocksPerTick: pacing when the above is on, clamped 1-64. Raise it to finish large builds sooner at the cost of blocks appearing in visible clumps.",
+                "_helpDefense": "mobsTargetCompanion: when true (default), hostile mobs hunt the companion the way they hunt you. It is a LivingEntity rather than a real player, and vanilla mobs look for targets with a hard-coded player filter, so with this off they walk straight past it and it is only ever attacked in retaliation. Endermen are the exception either way — they keep player-only stare aggro. defenseFightBack: whether it deliberately engages hostiles that are targeting it (default true). It always swings at whatever is already in arm's reach regardless. defenseUseShield: whether it raises a shield when threatened (default true). defenseFleeFromHostiles: whether it may run away, dodge arrows and throw up cover blocks (default FALSE). All of that logic only becomes reachable once mobs can target the companion at all, so it has never run in a real world; leaving it off means the companion stands its ground and keeps working instead of abandoning a farm or a half-built house to sprint over the horizon. Turn it on once you have watched it get mobbed and decided you want flight."
               },
               "skills": {
                 "advertiseInPrompt": true,
