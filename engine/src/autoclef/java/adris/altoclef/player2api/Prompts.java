@@ -14,12 +14,28 @@ public class Prompts {
   public static final String reminderOnOtherUSerMsg = "Last message was from a user that was not your owner.";
 
   /**
-   * Optional persona/personality block injected into the system prompt right after the character
+   * Fallback persona/personality block injected into the system prompt right after the character
    * description (see {@code {{persona}}} in the template). Fed from the consumer's config
    * ({@code companion.systemPrompt}). Empty by default; the engine-owned RULES + JSON schema +
    * valid-commands scaffolding is always kept so config text cannot break command discipline.
+   *
+   * <p>Used only when the {@link Character} carries no persona of its own. A roster of companions
+   * needs one personality each, and this is a process-wide static — see {@link #resolvePersona}.
    */
   public static volatile String persona = "";
+
+  /**
+   * The persona text for one character: its own when it has one, otherwise the global {@link #persona}.
+   *
+   * <p>The fallback is what keeps a single-companion config working unchanged — that setup writes
+   * {@code companion.systemPrompt} into the static and builds characters with no persona of their own.
+   */
+  private static String resolvePersona(Character character) {
+    if (character != null && character.persona() != null && !character.persona().isBlank()) {
+      return character.persona();
+    }
+    return persona == null ? "" : persona;
+  }
 
   private static String aiNPCPromptTemplate = """
       General Instructions:
@@ -102,7 +118,7 @@ public class Prompts {
     String newPrompt = Utils.replacePlaceholders(aiNPCPromptTemplate,
         Map.of("characterDescription", character.description(), "characterName", character.name(),
             "validCommands", validCommandsFormatted, "ownerUsername", ownerUsername,
-            "persona", persona == null ? "" : persona));
+            "persona", resolvePersona(character)));
     return newPrompt;
   }
 

@@ -2,19 +2,25 @@ package com.neovetta.aicompanion.client;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.CompanionSkills;
+import com.neovetta.aicompanion.entity.CompanionEntity;
 import me.shedaniel.clothconfig2.api.ConfigBuilder;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
 import me.shedaniel.clothconfig2.gui.entries.DropdownBoxEntry;
+import me.shedaniel.clothconfig2.impl.builders.SubCategoryBuilder;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.entity.Entity;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 
 import java.io.IOException;
@@ -114,13 +120,20 @@ public final class CompanionConfigScreen {
         }
         final JsonObject config = root;
 
+        // Editing state for the roster, gathered here so the saving runnable can rebuild the whole
+        // "companions" array once every field's save consumer has run. addedName is a one-element
+        // array only because a save consumer needs somewhere effectively-final to write.
+        final List<EntryEditor> editors = readEditors(config);
+        final String[] addedName = {""};
+
         ConfigBuilder builder = ConfigBuilder.create()
                 .setParentScreen(parent)
                 .setTitle(Text.literal("AI Companion"))
-                .setSavingRunnable(() -> save(config));
+                .setSavingRunnable(() -> save(config, editors, addedName[0]));
         ConfigEntryBuilder eb = builder.entryBuilder();
 
-        buildIdentity(builder.getOrCreateCategory(Text.literal("Identity")), eb, config);
+        buildCompanions(builder.getOrCreateCategory(Text.literal("Companions")), eb, config,
+                editors, addedName);
         buildLlm(builder.getOrCreateCategory(Text.literal("LLM")), eb, config);
         buildTts(builder.getOrCreateCategory(Text.literal("Voice (TTS)")), eb, config);
         buildBehavior(builder.getOrCreateCategory(Text.literal("Behavior")), eb, config);
@@ -131,46 +144,156 @@ public final class CompanionConfigScreen {
 
     // ## Categories
 
-    private static void buildIdentity(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
-        JsonObject companion = section(config, "companion");
+    /**
+     * One collapsible section per configured companion, plus a field to add another.
+     *
+     * <p>Edits go into {@code editors}, not straight into {@code config}: entries can be renamed,
+     * removed and added in one sitting, so the {@code companions} array is rebuilt wholesale in
+     * {@link #save} once every field's save consumer has run.
+     */
+    private static void buildCompanions(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config,
+                                        List<EntryEditor> editors, String[] addedName) {
         cat.addEntry(eb.startTextDescription(Text.literal(
-                        "Fields marked * apply after /companion despawn + /companion spawn. Everything else applies when you save."))
+                        "Everything here applies when you save, including to companions already in the world. "
+                                + "A companion spawned before this list existed picks up its settings on the next "
+                                + "/companion reload."))
                 .build());
-        cat.addEntry(eb.startStrField(Text.literal("Name *"), str(companion, "name", "Vetta"))
-                .setDefaultValue("Vetta")
-                .setTooltip(Text.literal("The companion's name — shown above its head and used as its chat identity."))
-                .setSaveConsumer(v -> companion.addProperty("name", v))
-                .build());
-        cat.addEntry(eb.startStrField(Text.literal("Description *"), str(companion, "description", ""))
-                .setDefaultValue("A loyal, level-headed companion who watches your back and speaks plainly.")
-                .setTooltip(Text.literal("A short third-person description of who the companion is."))
-                .setSaveConsumer(v -> companion.addProperty("description", v))
-                .build());
-        cat.addEntry(eb.startStrField(Text.literal("System Prompt"), str(companion, "systemPrompt", ""))
-                .setDefaultValue("You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.")
-                .setTooltip(
-                        Text.literal("Personality/style instructions injected into"),
-                        Text.literal("the companion's system prompt. Applies live"),
-                        Text.literal("on save — even to a spawned companion."))
-                .setSaveConsumer(v -> companion.addProperty("systemPrompt", v))
-                .build());
+        String live = liveCompanionNames();
+        if (live != null) {
+            cat.addEntry(eb.startTextDescription(Text.literal("In the world right now: " + live)).build());
+        }
 
-        // Skin: dropdown of PNGs currently in config/aicompanion/skins/. The JSON form is either a
-        // plain filename string or { file, slim }; normalize to the object form on save.
-        JsonObject skin = skinSection(companion);
-        String current = str(skin, "file", "");
-        cat.addEntry(eb.startSelector(Text.literal("Skin *"), skinOptions(current), current.isBlank() ? DEFAULT_SKIN : current)
-                .setDefaultValue(DEFAULT_SKIN)
+        for (EntryEditor editor : editors) {
+            SubCategoryBuilder sub = eb.startSubCategory(Text.literal(editor.name()));
+            JsonObject entry = editor.json();
+            sub.add(eb.startStrField(Text.literal("Name"), str(entry, "name", ""))
+                    .setDefaultValue("")
+                    .setTooltip(
+                            Text.literal("Shown above its head, used to label its speech in chat,"),
+                            Text.literal("and how you address it: \"" + editor.name() + ", come here\""),
+                            Text.literal("reaches this one and nobody else."))
+                    .setSaveConsumer(v -> entry.addProperty("name", v))
+                    .build());
+            sub.add(eb.startStrField(Text.literal("Description"), str(entry, "description", ""))
+                    .setDefaultValue("")
+                    .setTooltip(Text.literal("A short third-person description of who this companion is."))
+                    .setSaveConsumer(v -> entry.addProperty("description", v))
+                    .build());
+            sub.add(eb.startStrField(Text.literal("System Prompt"), str(entry, "systemPrompt", ""))
+                    .setDefaultValue("")
+                    .setTooltip(
+                            Text.literal("Personality/style instructions injected into this"),
+                            Text.literal("companion's system prompt. Applies live on save —"),
+                            Text.literal("even to one already spawned."))
+                    .setSaveConsumer(v -> entry.addProperty("systemPrompt", v))
+                    .build());
+
+            // Skin: dropdown of PNGs currently in config/aicompanion/skins/. The JSON form is either
+            // a plain filename string or { file, slim }; normalize to the object form on save.
+            JsonObject skin = skinSection(entry);
+            String current = str(skin, "file", "");
+            sub.add(eb.startSelector(Text.literal("Skin"), skinOptions(current),
+                            current.isBlank() ? DEFAULT_SKIN : current)
+                    .setDefaultValue(DEFAULT_SKIN)
+                    .setTooltip(
+                            Text.literal("Pick a 64×64 player-skin PNG. Drop new files into"),
+                            Text.literal("config/aicompanion/skins/ and reopen this screen."))
+                    .setSaveConsumer(v -> skin.addProperty("file", DEFAULT_SKIN.equals(v) ? "" : String.valueOf(v)))
+                    .build());
+            sub.add(eb.startBooleanToggle(Text.literal("Slim Arms"), bool(skin, "slim", false))
+                    .setDefaultValue(false)
+                    .setTooltip(Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."))
+                    .setSaveConsumer(v -> skin.addProperty("slim", v))
+                    .build());
+            sub.add(eb.startBooleanToggle(Text.literal("Remove On Save"), false)
+                    .setDefaultValue(false)
+                    .setTooltip(
+                            Text.literal("Delete this companion from the config when you save."),
+                            Text.literal("Does not despawn one already in the world —"),
+                            Text.literal("use /companion despawn " + editor.name() + " for that."))
+                    .setSaveConsumer(v -> editor.setRemoved(v))
+                    .build());
+            cat.addEntry(sub.build());
+        }
+
+        cat.addEntry(eb.startStrField(Text.literal("Add A Companion"), "")
+                .setDefaultValue("")
                 .setTooltip(
-                        Text.literal("Pick a 64×64 player-skin PNG. Drop new files into"),
-                        Text.literal("config/aicompanion/skins/ and reopen this screen."))
-                .setSaveConsumer(v -> skin.addProperty("file", DEFAULT_SKIN.equals(v) ? "" : String.valueOf(v)))
+                        Text.literal("Type a name and save to add another companion."),
+                        Text.literal("Reopen this screen to edit its description and skin."),
+                        Text.literal("Then /companion spawn " + "<name>" + " to call it."))
+                .setErrorSupplier(v -> {
+                    String s = String.valueOf(v).trim();
+                    if (s.isEmpty()) {
+                        return java.util.Optional.empty(); // blank simply means "don't add one"
+                    }
+                    // Two companions answering to one name is the exact confusion the roster exists
+                    // to prevent, so it is refused here rather than silently dropped on save.
+                    boolean clash = editors.stream()
+                            .anyMatch(e -> str(e.json(), "name", "").equalsIgnoreCase(s));
+                    return clash
+                            ? java.util.Optional.of(Text.literal("There is already a companion called " + s))
+                            : java.util.Optional.empty();
+                })
+                .setSaveConsumer(v -> addedName[0] = v)
                 .build());
-        cat.addEntry(eb.startBooleanToggle(Text.literal("Slim Arms *"), bool(skin, "slim", false))
-                .setDefaultValue(false)
-                .setTooltip(Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."))
-                .setSaveConsumer(v -> skin.addProperty("slim", v))
-                .build());
+    }
+
+    /**
+     * Mutable editing state for one companion: its JSON, the name it had when the screen opened (used
+     * for the section header, which cannot change while the screen is up), and whether it is flagged
+     * for removal.
+     */
+    private static final class EntryEditor {
+        private final JsonObject json;
+        private final String name;
+        private boolean removed;
+
+        EntryEditor(JsonObject json, String name) {
+            this.json = json;
+            this.name = name;
+        }
+
+        JsonObject json() {
+            return this.json;
+        }
+
+        String name() {
+            return this.name;
+        }
+
+        void setRemoved(boolean removed) {
+            this.removed = removed;
+        }
+
+        boolean isRemoved() {
+            return this.removed;
+        }
+    }
+
+    /**
+     * Comma-separated names of the companions currently in the world, or null when there is no local
+     * server to ask.
+     *
+     * <p>Worth showing because "configured" and "spawned" are different things and the tab only
+     * governs the first — a name listed here but not in the world just needs a {@code /companion
+     * spawn}. Only answerable in singleplayer or as a LAN host; on a remote server the client has no
+     * view of the entity list, so the line is omitted rather than guessed at.
+     */
+    private static String liveCompanionNames() {
+        MinecraftServer server = MinecraftClient.getInstance().getServer();
+        if (server == null) {
+            return null;
+        }
+        List<String> names = new ArrayList<>();
+        for (ServerWorld world : server.getWorlds()) {
+            for (Entity entity : world.iterateEntities()) {
+                if (entity instanceof CompanionEntity companion) {
+                    names.add(companion.displayName());
+                }
+            }
+        }
+        return names.isEmpty() ? "(none spawned)" : String.join(", ", names);
     }
 
     private static void buildLlm(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
@@ -329,6 +452,18 @@ public final class CompanionConfigScreen {
                         Text.literal("the window queue into the next turn. 0 = no limit."))
                 .setSaveConsumer(v -> behavior.addProperty("thinkThrottleSeconds", v))
                 .build());
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Companion Cross-Talk"), bool(behavior, "aiCrossTalk", false))
+                .setDefaultValue(false)
+                .setTooltip(
+                        Text.literal("Whether companions overhear and answer EACH OTHER."),
+                        Text.literal("Off by default, and worth leaving off: every"),
+                        Text.literal("forwarded line is a full LLM turn, so two standing"),
+                        Text.literal("together run up requests with nobody talking to"),
+                        Text.literal("them — and each reply prompts another. One"),
+                        Text.literal("measured session logged 382 of these."),
+                        Text.literal("Turn on for the ambience where turns are free."))
+                .setSaveConsumer(v -> behavior.addProperty("aiCrossTalk", v))
+                .build());
         cat.addEntry(eb.startIntField(Text.literal("Max Autonomous Turns"), intVal(behavior, "maxAutonomousTurns", 2))
                 .setDefaultValue(2)
                 .setMin(0)
@@ -374,8 +509,96 @@ public final class CompanionConfigScreen {
 
     // ## Save
 
-    /** Write the edited JSON back to disk, then run the shared reload/apply step on the integrated server. */
-    private static void save(JsonObject config) {
+    /**
+     * Read the {@code companions} array into editable state, one editor per entry.
+     *
+     * <p>A config with no usable roster still gets one editor, seeded from the built-in defaults —
+     * there must always be something on screen to edit, and always at least one companion to spawn.
+     */
+    private static List<EntryEditor> readEditors(JsonObject config) {
+        List<EntryEditor> editors = new ArrayList<>();
+        if (config.has("companions") && config.get("companions").isJsonArray()) {
+            for (JsonElement el : config.getAsJsonArray("companions")) {
+                if (!el.isJsonObject()) {
+                    continue;
+                }
+                JsonObject entry = el.getAsJsonObject().deepCopy();
+                String name = str(entry, "name", "");
+                if (name.isBlank()) {
+                    continue;
+                }
+                editors.add(new EntryEditor(entry, name));
+            }
+        }
+        if (editors.isEmpty()) {
+            editors.add(new EntryEditor(newEntry(CompanionConfig.name()), CompanionConfig.name()));
+        }
+        return editors;
+    }
+
+    /** A fresh roster entry: just a name, everything else left to the built-in defaults. */
+    private static JsonObject newEntry(String name) {
+        JsonObject entry = new JsonObject();
+        entry.addProperty("name", name);
+        return entry;
+    }
+
+    /**
+     * Rebuild {@code companions} from the edited state, write the file, then run the shared
+     * reload/apply step on the integrated server.
+     *
+     * <p>Two things are refused rather than saved, because both fail silently and leave a config that
+     * looks fine: an empty roster (nothing left to spawn) and duplicate names (two companions
+     * answering to one name, which is the confusion the roster exists to remove).
+     */
+    private static void save(JsonObject config, List<EntryEditor> editors, String addedName) {
+        JsonArray companions = new JsonArray();
+        List<String> taken = new ArrayList<>();
+        List<EntryEditor> kept = editors.stream().filter(e -> !e.isRemoved()).toList();
+        if (kept.isEmpty() && !editors.isEmpty()) {
+            // Every companion was flagged for removal. Keeping the first beats saving a config with
+            // nobody in it and no way to add one back except by hand.
+            kept = List.of(editors.get(0));
+            AiCompanion.LOGGER.warn("[{}] config screen: refused to remove every companion — keeping {}",
+                    AiCompanion.MOD_ID, str(kept.get(0).json(), "name", "the first"));
+        }
+        for (EntryEditor editor : kept) {
+            String name = str(editor.json(), "name", "").trim();
+            if (name.isEmpty()) {
+                AiCompanion.LOGGER.warn("[{}] config screen: dropped a companion whose name was cleared",
+                        AiCompanion.MOD_ID);
+                continue;
+            }
+            if (taken.stream().anyMatch(n -> n.equalsIgnoreCase(name))) {
+                AiCompanion.LOGGER.warn("[{}] config screen: dropped duplicate companion name '{}'",
+                        AiCompanion.MOD_ID, name);
+                continue;
+            }
+            editor.json().addProperty("name", name);
+            taken.add(name);
+            companions.add(editor.json());
+        }
+        String added = addedName == null ? "" : addedName.trim();
+        if (!added.isEmpty() && taken.stream().noneMatch(n -> n.equalsIgnoreCase(added))) {
+            JsonObject entry = newEntry(added);
+            companions.add(entry);
+            // Promote it to a real editor as well. The array is rebuilt from `editors` on every save,
+            // and the Add field keeps its text until the screen is reopened — so without this, saving
+            // a second time would rebuild the list without the companion just added.
+            editors.add(new EntryEditor(entry, added));
+            AiCompanion.LOGGER.info("[{}] config screen: added companion '{}'", AiCompanion.MOD_ID, added);
+        }
+        if (companions.isEmpty()) {
+            // Everything was blank or duplicated. Leave the file's roster alone rather than writing
+            // one that cannot spawn anybody.
+            AiCompanion.LOGGER.warn("[{}] config screen: no usable companions after editing — "
+                    + "leaving the existing list untouched", AiCompanion.MOD_ID);
+        } else {
+            config.add("companions", companions);
+        }
+        // The retired single-companion block, in case an old file was opened without a restart first.
+        config.remove("companion");
+
         Path path = CompanionConfig.configPath();
         try {
             Files.writeString(path, PRETTY.toJson(config) + System.lineSeparator());

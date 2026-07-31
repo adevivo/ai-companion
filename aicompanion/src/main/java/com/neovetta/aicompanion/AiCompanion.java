@@ -2,6 +2,7 @@ package com.neovetta.aicompanion;
 
 import adris.altoclef.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
+import com.neovetta.aicompanion.screen.CompanionScreens;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
@@ -103,6 +104,7 @@ public class AiCompanion implements ModInitializer {
         CompanionConfig.load();
         Registry.register(Registries.ENTITY_TYPE, id("companion"), COMPANION);
         FabricDefaultAttributeRegistry.register(COMPANION, createCompanionAttributes());
+        CompanionScreens.register();
         CompanionCommands.register();
         // Register the chat hook so nearby players' messages route to a companion's brain.
         ConversationManager.init();

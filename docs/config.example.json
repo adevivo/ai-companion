@@ -1,16 +1,21 @@
 {
-  "_notes": "companion.systemPrompt is a PERSONA block injected into the engine's hardened prompt (it does NOT replace the RULES/JSON-schema/valid-commands scaffolding). llm.* is applied to the engine at mod init. temperature<0 or maxTokens<=0 => omitted (server default). Do not set maxTokens below 1000: it is a cap, not a budget (you pay for what is generated), and a low value cuts skill commands off mid-reply so nothing runs. companion.skin + behavior.* below are documented for Phase 3b and are not wired yet.",
+  "_notes": "companions[].systemPrompt is a PERSONA block injected into the engine's hardened prompt (it does NOT replace the RULES/JSON-schema/valid-commands scaffolding). llm.* is applied to the engine at mod init. temperature<0 or maxTokens<=0 => omitted (server default). Do not set maxTokens below 1000: it is a cap, not a budget (you pay for what is generated), and a low value cuts skill commands off mid-reply so nothing runs. NOTE: identity used to live in a single 'companion' object; that block was retired in favour of the 'companions' list below and is migrated automatically on first launch (your old file is kept as aicompanion.json.bak).",
   "_frontierTesting": "To test a hosted OpenAI-compatible model (xAI/Grok, OpenAI, etc.): set llm.endpoint (e.g. https://api.x.ai), llm.model (e.g. a NON-reasoning grok id), and supply the bearer key via env AICOMPANION_LLM_APIKEY (preferred, keeps it off disk) or llm.apiKey below. Keep localMode on. Set llm.maxRequests (e.g. 50) as a hard per-session spend cap. Do not commit a real apiKey.",
-  "companion": {
-    "name": "Vetta",
-    "description": "A loyal, level-headed companion who watches your back and speaks plainly.",
-    "systemPrompt": "You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.",
-    "skin": {
-      "file": "",
-      "slim": false,
-      "_help": "Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name (e.g. vetta.png). Blank = default Steve. slim = 3px (Alex) arms."
+  "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt, and skin { file, slim }. Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name; blank = default Steve, slim = 3px (Alex) arms. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
+  "companions": [
+    {
+      "name": "Vetta",
+      "description": "A loyal, level-headed companion who watches your back and speaks plainly.",
+      "systemPrompt": "You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.",
+      "skin": { "file": "", "slim": false }
+    },
+    {
+      "name": "Rook",
+      "description": "A restless scout who ranges far and reports back.",
+      "systemPrompt": "You are eager and a little impatient. You would rather be out past the treeline than standing around camp.",
+      "skin": { "file": "", "slim": true }
     }
-  },
+  ],
   "llm": {
     "endpoint": "http://localhost:3030",
     "model": "local",
@@ -31,11 +36,12 @@
     "speed": 1.0
   },
   "behavior": {
-    "_help": "triggerPrefix: when set (e.g. \"@\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank = answers all nearby chat (the singleplayer default). thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit); messages arriving inside the window are queued, not dropped. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block, and collects the shortfall itself before building; false = creative-style building. buildGroundCheck: when true (default), a build plan is checked against the real terrain. One-sided: a plan below ground is lifted onto the surface (up to 3 blocks), a plan above ground is built as generated, and only one more than 16 blocks in the air is refused (without spending materials). Set false to disable the check entirely. maxAutonomousTurns: how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again (0 = unlimited); the counter resets whenever anybody talks to it.",
+    "_help": "triggerPrefix: when set (e.g. \"@\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank = answers all nearby chat (the singleplayer default). thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit); messages arriving inside the window are queued, not dropped. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block, and collects the shortfall itself before building; false = creative-style building. buildGroundCheck: when true (default), a build plan is checked against the real terrain. One-sided: a plan below ground is lifted onto the surface (up to 3 blocks), a plan above ground is built as generated, and only one more than 16 blocks in the air is refused (without spending materials). Set false to disable the check entirely. maxAutonomousTurns: how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again (0 = unlimited); the counter resets whenever anybody talks to it. aiCrossTalk: whether companions overhear and answer EACH OTHER (default false). Every forwarded line is a full LLM turn, so two standing together run up requests with nobody talking to them, and each reply prompts another — one measured session logged 382. Turn it on only where turns are free.",
     "_helpBuilding": "buildPhysicalPlacement: when true (default), the companion walks to the build site and places blocks by hand — a couple per tick, only what it can reach, moving along as each spot is used up, with an arm swing and a placement sound. Blocks are still written directly rather than right-clicked, so orientation-sensitive blocks are unaffected. A build it cannot finish reaching says so, and repeating the same description resumes it. Set false to restore the old instant behaviour (up to 256 blocks a tick, no reach check, no walking). buildBlocksPerTick: pacing when the above is on, clamped 1-64.",
     "_helpDefense": "mobsTargetCompanion: when true (default), hostile mobs hunt the companion the way they hunt you; with it off they walk straight past it and it is only attacked in retaliation. Endermen keep player-only stare aggro either way. defenseFightBack: whether it deliberately engages hostiles targeting it (default true) — it always swings at whatever is in arm's reach regardless. defenseUseShield: whether it raises a shield (default true). defenseFleeFromHostiles: whether it may run away, dodge arrows and throw up cover (default FALSE, because none of that logic could run before mobs could target it at all, and the failure mode is abandoning a job to sprint over the horizon).",
     "triggerPrefix": "",
     "thinkThrottleSeconds": 0,
+    "aiCrossTalk": false,
     "buildCostsMaterials": true,
     "buildGroundCheck": true,
     "buildPhysicalPlacement": true,

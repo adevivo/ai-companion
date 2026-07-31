@@ -15,7 +15,7 @@ import net.minecraft.world.entity.player.Player;
 
 public class CharacterUtils {
    public static Character DEFAULT_CHARACTER = new Character(
-      "AI agent", "AI", "Greetings", "You are a helpful AI Agent", "minecraft:textures/entity/player/wide/steve.png", new String[0]
+      "AI agent", "AI", "Greetings", "You are a helpful AI Agent", "minecraft:textures/entity/player/wide/steve.png", new String[0], ""
    );
 
    public static Character parseFirstCharacter(Map<String, JsonElement> responseMap) {
@@ -51,7 +51,9 @@ public class CharacterUtils {
                   String[] voiceIds = Utils.getStringArrayJsonSafely(firstCharacter, "voice_ids");
                   JsonObject meta = firstCharacter.get("meta").getAsJsonObject();
                   String skinURL = Utils.getStringJsonSafely(meta, "skin_url");
-                  characters[i] = new Character(name, shortName, greeting, description, skinURL, voiceIds);
+                  // No persona: characters from the Player2 cloud carry no config-side personality
+                  // block, so they fall back to the global Prompts.persona.
+                  characters[i] = new Character(name, shortName, greeting, description, skinURL, voiceIds, "");
                }
 
                return characters;
@@ -94,7 +96,8 @@ public class CharacterUtils {
          voiceIds[i] = buf.readUtf();
       }
 
-      return new Character(name, shortName, greetingInfo, description, skinURL, voiceIds);
+      String persona = buf.readUtf();
+      return new Character(name, shortName, greetingInfo, description, skinURL, voiceIds, persona);
    }
 
    public static void writeToBuf(FriendlyByteBuf buf, Character character) {
@@ -108,6 +111,8 @@ public class CharacterUtils {
       for (String id : character.voiceIds()) {
          buf.writeUtf(id);
       }
+
+      buf.writeUtf(character.persona());
    }
 
    public static Character readFromNBT(CompoundTag compound) {
@@ -123,7 +128,8 @@ public class CharacterUtils {
          voiceIds[i] = voiceIdsList.getString(i);
       }
 
-      return new Character(name, shortName, greetingInfo, description, skinURL, voiceIds);
+      String persona = compound.getString("persona");
+      return new Character(name, shortName, greetingInfo, description, skinURL, voiceIds, persona);
    }
 
    public static void writeToNBT(CompoundTag compound, Character character) {
@@ -139,5 +145,6 @@ public class CharacterUtils {
       }
 
       compound.put("voiceIds", voiceIds);
+      compound.putString("persona", character.persona());
    }
 }

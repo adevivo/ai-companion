@@ -1,9 +1,12 @@
 package com.neovetta.aicompanion.client;
 
 import com.neovetta.aicompanion.AiCompanion;
+import com.neovetta.aicompanion.screen.CompanionScreens;
 import net.fabricmc.api.ClientModInitializer;
+import net.minecraft.client.gui.screen.ingame.HandledScreens;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
@@ -17,6 +20,8 @@ public class AiCompanionClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         EntityRendererRegistry.register(AiCompanion.COMPANION, CompanionRenderer::new);
+        // Right-click a companion with an empty hand to open its inventory (see CompanionEntity#interact).
+        HandledScreens.register(CompanionScreens.TYPE, CompanionScreen::new);
         // /companion config → server sends this packet → open the Cloth Config screen. Must hop to
         // the client thread: network handlers run on netty threads, and screens are main-thread only.
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.OPEN_CONFIG_SCREEN,
@@ -27,13 +32,15 @@ public class AiCompanionClient implements ClientModInitializer {
         // returns); update() only stores primitives, so no client-thread hop is needed.
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.RADAR_UPDATE,
                 (client, handler, buf, responseSender) -> {
+                    int entityId = buf.readVarInt();
+                    String name = buf.readString();
                     double x = buf.readDouble();
                     double y = buf.readDouble();
                     double z = buf.readDouble();
                     Identifier world = buf.readIdentifier();
                     float health = buf.readFloat();
                     float maxHealth = buf.readFloat();
-                    CompanionRadarHud.update(x, y, z, world, health, maxHealth);
+                    CompanionRadarHud.update(entityId, name, x, y, z, world, health, maxHealth);
                 });
 
         // /companion radar → cycle the HUD mode and echo it. Hop to the client thread to touch the player.
@@ -56,6 +63,10 @@ public class AiCompanionClient implements ClientModInitializer {
 
         HudRenderCallback.EVENT.register(CompanionRadarHud::render);
         HudRenderCallback.EVENT.register(CompanionTokenHud::render);
+
+        // Radar snapshots are static and keyed by entity id, so they have to go when the world does —
+        // otherwise the next world's HUD briefly shows the last one's companions.
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> CompanionRadarHud.clear());
 
         // Client keybind that cycles the same mode. Default unbound to avoid conflicts — the user can
         // assign it in Controls, or just use /companion radar.

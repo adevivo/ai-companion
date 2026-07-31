@@ -131,7 +131,13 @@ public class ConversationManager {
     // ## Callbacks (need to register these externally)
 
     /**
-     * Deliver a chat line to every companion within {@link #messagePassingMaxDistance}.
+     * Deliver a chat line to exactly one companion: the one it is addressed to by name, or failing
+     * that the nearest one within {@link #messagePassingMaxDistance}.
+     *
+     * <p>It used to go to <em>every</em> companion in range. With one companion out that is the same
+     * thing; with two it doubles the cost of every instruction and gets two answers to a question
+     * asked once. Addressing by name is how you tell them apart — {@code "Ava, go and mine"} reaches
+     * Ava and nobody else, and the name is stripped before the model sees it.
      *
      * @return lines to show the speaker: that nobody was close enough to hear them, or that
      *         {@code llm.maxTokens} is set too low for the companion to answer properly. Both are
@@ -139,10 +145,14 @@ public class ConversationManager {
      */
     public static List<Component> onUserChatMessage(UserMessage msg) {
         LOGGER.info("User message event={}", msg);
-        // will add to entities close to the user:
-        int delivered = 0;
+
+        // One pass over every conversation: the delivery decision, the diagnostics and the earshot
+        // notice all need the same distances, and getDistanceToUsername walks the world's player list.
+        AgentConversationData nearestData = null;
         float nearest = Float.MAX_VALUE;
-        String nearestName = null;
+        AgentConversationData addressedData = null;
+        String addressedBody = null;
+        float addressedDistance = Float.MAX_VALUE;
         StringBuilder diagnostics = new StringBuilder();
         for (AgentConversationData data : queueData.values()) {
             float distance = StatusUtils.getDistanceToUsername(data.getMod(), msg.userName());
@@ -151,14 +161,27 @@ public class ConversationManager {
                     data.getName(), distance, close, describeWorldBinding(data)));
             if (distance < nearest) {
                 nearest = distance;
-                nearestName = data.getName();
+                nearestData = data;
             }
-            if (close) {
-                data.onEvent(msg);
-                delivered++;
+            // Matched even when out of range, so the earshot notice can name who was being called
+            // rather than whoever happens to be closest.
+            String body = stripAddressedName(msg.message(), data.getName());
+            if (body != null && distance < addressedDistance) {
+                addressedData = data;
+                addressedBody = body;
+                addressedDistance = distance;
             }
         }
-        if (delivered > 0) {
+
+        // Addressed by name wins over merely being closest, so you can talk to one standing behind you.
+        boolean addressed = addressedData != null;
+        AgentConversationData target = addressed ? addressedData : nearestData;
+        float targetDistance = addressed ? addressedDistance : nearest;
+        boolean delivered = target != null && targetDistance < messagePassingMaxDistance;
+        if (delivered) {
+            target.onEvent(addressed ? new UserMessage(addressedBody, msg.userName()) : msg);
+        }
+        if (delivered) {
             // Deliberately every message and deliberately not throttled: at a too-low cap the reply
             // is cut off mid-JSON, so skills silently do nothing while everything else looks fine.
             // It is a standing misconfiguration, and the nagging stops the moment it is corrected.
@@ -176,14 +199,49 @@ public class ConversationManager {
                         + "({} in queueData) — {}",
                 msg.userName(), queueData.size(),
                 diagnostics.length() == 0 ? "queueData is empty" : diagnostics.toString());
-        if (nearestName == null || nearest == Float.MAX_VALUE) {
+        if (target == null || targetDistance == Float.MAX_VALUE) {
             return List.of(); // nothing to point at: no companion, or it is not in this world
         }
-        Optional<String> earshot = outOfEarshotNotice(msg.userName(), nearestName, nearest);
+        // Names whoever the speaker meant — the one they called for, not whoever is closest.
+        Optional<String> earshot = outOfEarshotNotice(msg.userName(), target.getName(), targetDistance);
         if (earshot.isEmpty()) {
             return List.of();
         }
         return List.of(Component.literal(earshot.get()).withStyle(ChatFormatting.GRAY));
+    }
+
+    /**
+     * If {@code message} opens by addressing {@code name}, return what is left after the name;
+     * otherwise return null.
+     *
+     * <p>Case-insensitive, and the name must be followed by the end of the line, whitespace, or a
+     * comma/colon — so "Ava, go and mine" and "ava go and mine" both address Ava while "Avalanche
+     * incoming" addresses nobody. Deliberately prefix-only: matching a name anywhere in the sentence
+     * would route "tell Ava I said hello" to Ava, which is the opposite of what was asked.
+     *
+     * <p>A bare name with nothing after it ("Ava") is delivered whole — calling someone's name is a
+     * complete thing to say, and handing the model an empty string is not.
+     */
+    private static String stripAddressedName(String message, String name) {
+        if (message == null || name == null || name.isBlank()) {
+            return null;
+        }
+        String trimmed = message.strip();
+        if (trimmed.length() < name.length()
+                || !trimmed.regionMatches(true, 0, name, 0, name.length())) {
+            return null;
+        }
+        String rest = trimmed.substring(name.length());
+        if (rest.isEmpty()) {
+            return trimmed;
+        }
+        char boundary = rest.charAt(0);
+        // java.lang.Character spelled out: this file imports adris.altoclef.player2api.Character.
+        if (boundary != ',' && boundary != ':' && !java.lang.Character.isWhitespace(boundary)) {
+            return null;
+        }
+        String body = rest.substring(1).strip();
+        return body.isEmpty() ? trimmed : body;
     }
 
     /**
@@ -209,6 +267,9 @@ public class ConversationManager {
 
     // register when an AI character messages
     public static void onAICharacterMessage(Event.CharacterMessage msg, UUID senderId) {
+        if (!BehaviorConfig.aiCrossTalk) {
+            return; // companions do not overhear each other — see BehaviorConfig#aiCrossTalk
+        }
         UUID sendingUUID = msg.sendingCharacterData().getUUID();
         getCloseDataByUUID(sendingUUID).filter(data -> !(data.getUUID().equals(senderId)))
                 .forEach(data -> {

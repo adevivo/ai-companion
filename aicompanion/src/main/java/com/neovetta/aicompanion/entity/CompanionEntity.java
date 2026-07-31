@@ -7,6 +7,7 @@ import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.util.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
+import com.neovetta.aicompanion.screen.CompanionScreenHandlerFactory;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.entity.IAutomatone;
@@ -29,12 +30,17 @@ import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.data.DataTracker;
+import net.minecraft.entity.data.TrackedData;
+import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Arm;
+import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3i;
@@ -78,6 +84,25 @@ public class CompanionEntity extends LivingEntity
     /** Ticks until the next {@link #maintainBrain()} check — no need to re-resolve the owner 20x/sec. */
     private int brainCheckCooldown = 0;
 
+    /**
+     * Which {@link CompanionConfig.RosterEntry} this companion is, by name. Persisted, because it is
+     * what a companion restored from a save uses to come back as itself — without it every reload
+     * would rebuild every companion from the default entry and a roster would collapse into clones.
+     */
+    private String rosterName = "";
+
+    /**
+     * Skin, tracked so the client can draw each companion differently.
+     *
+     * <p>The filename travels rather than the roster name: the client then needs only the PNG in its
+     * own {@code config/aicompanion/skins/}, never the server's config. That is already how skins
+     * work — they have always been a client-side asset.
+     */
+    private static final TrackedData<String> SKIN_FILE =
+            DataTracker.registerData(CompanionEntity.class, TrackedDataHandlerRegistry.STRING);
+    private static final TrackedData<Boolean> SKIN_SLIM =
+            DataTracker.registerData(CompanionEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+
 
     public CompanionEntity(EntityType<? extends CompanionEntity> type, World world) {
         super(type, world);
@@ -86,6 +111,50 @@ public class CompanionEntity extends LivingEntity
         this.interactionManager = new LivingEntityInteractionManager(this);
         this.inventory = new LivingEntityInventory(this);
         this.hungerManager = new LivingEntityHungerManager();
+    }
+
+    @Override
+    protected void initDataTracker() {
+        super.initDataTracker();
+        this.dataTracker.startTracking(SKIN_FILE, "");
+        this.dataTracker.startTracking(SKIN_SLIM, false);
+    }
+
+    /** Which roster entry this companion is, or blank if it predates the roster. */
+    public String getRosterName() {
+        return this.rosterName;
+    }
+
+    /** Skin PNG filename for the client renderer; blank = the default Steve texture. */
+    public String getSkinFile() {
+        return this.dataTracker.get(SKIN_FILE);
+    }
+
+    /** Whether to draw this companion with 3px (Alex) arms. */
+    public boolean isSkinSlim() {
+        return this.dataTracker.get(SKIN_SLIM);
+    }
+
+    /**
+     * Bind this companion to a roster entry: its name above its head, its skin, and the identity its
+     * brain will be rebuilt from. A null entry (a name that has been deleted from the config since
+     * this companion was spawned) leaves everything as it is rather than silently reverting it to the
+     * default identity — the body keeps the name you gave it and the config edit can be corrected.
+     */
+    public void applyRosterEntry(CompanionConfig.RosterEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        this.rosterName = entry.name();
+        this.setCustomName(Text.literal(entry.name()));
+        this.setCustomNameVisible(true);
+        this.dataTracker.set(SKIN_FILE, entry.skinFile() == null ? "" : entry.skinFile());
+        this.dataTracker.set(SKIN_SLIM, entry.skinSlim());
+    }
+
+    /** This companion's display name, falling back to the default identity's if it somehow has none. */
+    public String displayName() {
+        return this.getCustomName() != null ? this.getCustomName().getString() : CompanionConfig.name();
     }
 
     // --- PlayerEngine capability providers ---
@@ -116,6 +185,11 @@ public class CompanionEntity extends LivingEntity
         if (tag.containsUuid("Owner")) {
             this.ownerUuid = tag.getUuid("Owner");
         }
+        // Restore identity from the roster if the name is still configured. A companion saved before
+        // the roster existed has no RosterName; it keeps its custom name and the default skin, which
+        // is exactly what it looked like before.
+        this.rosterName = tag.getString("RosterName");
+        CompanionConfig.find(this.rosterName).ifPresent(this::applyRosterEntry);
     }
 
     @Override
@@ -127,6 +201,7 @@ public class CompanionEntity extends LivingEntity
         if (this.ownerUuid != null) {
             tag.putUuid("Owner", this.ownerUuid);
         }
+        tag.putString("RosterName", this.rosterName == null ? "" : this.rosterName);
     }
 
     /** Consecutive AI updates that ended in an exception. Reset by any tick that completes. */
@@ -260,6 +335,10 @@ public class CompanionEntity extends LivingEntity
             return; // owner offline — nothing to draw a radar for
         }
         PacketByteBuf buf = PacketByteBufs.create();
+        // Id and name first: with more than one companion out, the client keys its snapshots on the
+        // id and labels the markers with the name.
+        buf.writeVarInt(this.getId());
+        buf.writeString(displayName());
         buf.writeDouble(this.getX());
         buf.writeDouble(this.getY());
         buf.writeDouble(this.getZ());
@@ -497,9 +576,15 @@ public class CompanionEntity extends LivingEntity
             return; // wait for the real owner rather than adopting whoever is nearby
         }
         if (this.controller == null) {
-            initBrain(CompanionConfig.character(), owner);
-            AiCompanion.LOGGER.info("[{}] re-attached brain to restored companion (owner {})",
-                    AiCompanion.MOD_ID, owner.getName().getString());
+            // Its own roster entry, so a restored companion comes back as itself rather than as the
+            // default identity. entryFor also matches on display name, which is what lets a body
+            // spawned before the roster existed re-attach as the right character. An entry that has
+            // since been deleted from the config falls back to the default.
+            CompanionConfig.RosterEntry entry = CompanionConfig.entryFor(this);
+            initBrain(CompanionConfig.character(
+                    entry != null ? entry : CompanionConfig.defaultEntry()), owner);
+            AiCompanion.LOGGER.info("[{}] re-attached brain to restored companion {} (owner {})",
+                    AiCompanion.MOD_ID, displayName(), owner.getName().getString());
         } else if (this.controller.getOwner() != owner) {
             this.controller.setOwner(owner);
         }
@@ -507,6 +592,51 @@ public class CompanionEntity extends LivingEntity
 
     public AltoClefController getController() {
         return this.controller;
+    }
+
+    /** Who owns this companion, or null if it was spawned without an owner. */
+    public UUID getOwnerUuid() {
+        return this.ownerUuid;
+    }
+
+    /**
+     * Right-click with an empty hand to open the companion's inventory.
+     *
+     * <p>The only hands-on way to give it anything. Until now items could reach it only by being
+     * dropped on the floor for {@link #pickupItems()} to find, or by asking the model to go and get
+     * them — and armour had no route at all, despite the companion wearing and wearing out whatever
+     * is in those slots.
+     *
+     * <p>Empty hand specifically, so holding something keeps every other right-click interaction
+     * (feeding it, a future leash, whatever comes later) free. Owner-only: this is the whole of
+     * someone's kit, and a companion is left standing around unattended.
+     */
+    @Override
+    public ActionResult interact(PlayerEntity player, Hand hand) {
+        if (hand != Hand.MAIN_HAND || !player.getStackInHand(hand).isEmpty() || player.isSneaking()) {
+            return super.interact(player, hand);
+        }
+        if (this.getWorld().isClient) {
+            // Swing and open on the server's say-so; the client cannot know who the owner is.
+            return ActionResult.SUCCESS;
+        }
+        if (this.ownerUuid != null && !this.ownerUuid.equals(player.getUuid())) {
+            player.sendMessage(Text.literal(displayName() + " belongs to " + ownerName() + ".")
+                    .formatted(Formatting.GRAY), true);
+            return ActionResult.CONSUME;
+        }
+        player.openHandledScreen(new CompanionScreenHandlerFactory(this));
+        return ActionResult.CONSUME;
+    }
+
+    /** The owner's name for a refusal message, or "someone else" if they are offline. */
+    private String ownerName() {
+        MinecraftServer server = this.getWorld().getServer();
+        if (server == null || this.ownerUuid == null) {
+            return "someone else";
+        }
+        ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
+        return owner != null ? owner.getName().getString() : "someone else";
     }
 
     /** Path to a block position using Baritone (server-side). Phase-1 navigation entrypoint. */

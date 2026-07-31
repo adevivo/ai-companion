@@ -28,6 +28,22 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_THINKTHROTTLESECONDS", "0"));
 
     /**
+     * Whether companions overhear and answer each other's speech.
+     *
+     * <p>Off by default, and the default matters: every forwarded line is a full LLM turn carrying the
+     * whole world-status payload, so two companions standing together generate paid requests with
+     * nobody talking to them. A single measured session logged 382 of these, including runs of four
+     * near-identical sentences in ninety seconds as each one's reply prompted the other to reply again.
+     * The cost scales with the square of how many are out.
+     *
+     * <p>Turn it on for the ambience of companions chatting between themselves, on an endpoint where
+     * turns are free.
+     */
+    public static volatile boolean aiCrossTalk =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.aiCrossTalk",
+                    "AICOMPANION_BEHAVIOR_AICROSSTALK", "false"));
+
+    /**
      * Whether {@code build_structure} charges the companion's inventory for the blocks it places.
      * True (the default) keeps building honest in survival: the companion has to own the materials
      * first, and a build it cannot afford is refused rather than conjured. Set false to restore the

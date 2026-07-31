@@ -5,6 +5,81 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.3 — More than one of them, and a way to hand them things
+
+Bundles PlayerEngine 1.0.47. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating. Your existing companion keeps its name, personality and skin — its
+settings are moved into the new list format for you on first launch, and your previous config file is
+kept as `aicompanion.json.bak` in case you want it back.
+
+### Right-click a companion to open its inventory
+
+Empty hand, no sneaking, and a window opens: all 36 of its storage slots, its four armour slots and
+its offhand, with your own inventory below. Drag items across, shift-click them across, take things
+back.
+
+Until now there was no way to hand a companion anything. Items reached it only by being dropped on
+the floor for it to notice, or by asking it to go and fetch them itself — and armour had no route at
+all, despite the companion wearing armour, taking less damage for it, and wearing it out. Now you can
+kit one out in ten seconds.
+
+Shift-clicking armour or a shield from your side puts it straight into the slot it belongs in rather
+than the first free storage slot. The window closes itself if the companion walks out of reach, and
+only its owner can open it.
+
+### You can have more than one, and tell them apart
+
+Two companions used to be two copies of the same character: same name, same personality, same face,
+both answering to everything you said. Chat showed the same name for both, and every command —
+`stats`, `come`, `despawn`, `skill` — picked one of them arbitrarily and didn't tell you which.
+
+Now identity comes from a list, and the easiest place to edit it is in game: **`/companion config` →
+Companions**. Each configured companion gets its own section — name, description, personality, skin —
+and there's an "Add a companion" box at the bottom. Type a name, save, and you can spawn it:
+
+```
+/companion spawn Rook
+```
+
+A bare `/companion spawn` takes the first companion that isn't already out, so with two configured
+you can spawn both without naming either.
+
+Once they're out:
+
+- **Talk to one of them.** "Rook, go and scout north" reaches Rook and nobody else — the name is
+  stripped before the model sees it. An unaddressed line goes to whichever is nearest, rather than to
+  all of them at once, so asking a question once costs one reply instead of two.
+- **Target commands.** Every subcommand takes an optional name: `/companion stats Rook`,
+  `/companion come Rook`, `/companion skill Rook Harvest`. Without one you get the nearest of your
+  own, chosen consistently rather than at random. And the replies now say who they mean — "Rook
+  coming to 74, 64, 349" instead of "Companion coming to 74, 64, 349".
+- **See who's out.** `/companion list` gives you every companion, how far away, how healthy, and what
+  it's currently working on. Spawning one that's already out is refused, with a note on where it is —
+  in a previous session someone assumed their companion had died, spawned a second, and ended up with
+  two identical ones wandering the same valley.
+- **The radar handles all of them.** One labelled marker each, instead of a single marker flickering
+  between two bodies.
+
+Configure one companion and nothing changes — it behaves exactly as before.
+
+*(For anyone who hand-edits the JSON: identity used to live in a `companion` block. That is now the
+`companions` list, and your old block is folded into it automatically. `/companion config` no longer
+has an Identity tab because it edits the list directly.)*
+
+### Companions no longer talk each other into circles
+
+Two companions standing near each other used to overhear and answer each other, and each answer
+prompted another answer. Every one of those is a full request to the model, with nobody talking to
+them. One session logged 382 of them — including four near-identical sentences in ninety seconds as
+each reply set off the next.
+
+This is now off by default (`behavior.aiCrossTalk`). Turn it on if you want them chatting between
+themselves and you're running a local model where turns are free.
+
+---
+
 ## 0.2.2 — Plays by the same rules you do
 
 Bundles PlayerEngine 1.0.46. Self-contained jar as always — don't install a standalone engine

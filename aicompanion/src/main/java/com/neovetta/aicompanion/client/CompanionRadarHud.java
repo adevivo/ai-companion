@@ -8,6 +8,12 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.MathHelper;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Client-side locator bar that points toward the companion so the owner can walk to it without
  * recalling. Works past entity-tracking range because the server pushes coordinates
@@ -15,9 +21,13 @@ import net.minecraft.util.math.MathHelper;
  * and renders it.
  *
  * <p>State is static and session-scoped (mode is not persisted — not worth a client config file for
- * v1). The receiver writes the snapshot from a netty thread and the HUD callback reads it on the
- * render thread; fields are {@code volatile} and a torn read (new position, stale dimension) self-heals
- * on the next packet ~100ms later, which is acceptable for a cosmetic bar.
+ * v1). Snapshots are keyed by entity id and written from a netty thread while the HUD callback reads
+ * them on the render thread; each snapshot is immutable and swapped in whole, so a reader sees either
+ * the old one or the new one and never a mix.
+ *
+ * <p>One entry per companion. It used to be a single set of fields, which was fine with one companion
+ * and actively wrong with two: both pushed into the same slot ten times a second, so the bar showed
+ * whichever packet landed last and the marker jumped between two bodies.
  */
 public final class CompanionRadarHud {
 
@@ -30,22 +40,27 @@ public final class CompanionRadarHud {
     // close) and OFF remain reachable via /companion radar or the keybind.
     private static volatile Mode mode = Mode.ON;
 
-    // Last snapshot from the server. receivedAtMs == 0 means "never received".
-    private static volatile double x, y, z;
-    private static volatile Identifier worldId;
-    private static volatile float health, maxHealth;
-    private static volatile long receivedAtMs = 0L;
+    /** One companion's last reported position, health and name. */
+    private record Snapshot(String name, double x, double y, double z, Identifier worldId,
+                            float health, float maxHealth, long receivedAtMs) {}
+
+    /** entityId → last snapshot. Written from netty, read from the render thread. */
+    private static final Map<Integer, Snapshot> SNAPSHOTS = new ConcurrentHashMap<>();
 
     /** Store a fresh snapshot (called from the packet receiver). */
-    public static void update(double x, double y, double z, Identifier worldId,
-                              float health, float maxHealth) {
-        CompanionRadarHud.x = x;
-        CompanionRadarHud.y = y;
-        CompanionRadarHud.z = z;
-        CompanionRadarHud.worldId = worldId;
-        CompanionRadarHud.health = health;
-        CompanionRadarHud.maxHealth = maxHealth;
-        CompanionRadarHud.receivedAtMs = System.currentTimeMillis(); // set last: implies the rest are written
+    public static void update(int entityId, String name, double x, double y, double z,
+                              Identifier worldId, float health, float maxHealth) {
+        SNAPSHOTS.put(entityId, new Snapshot(name, x, y, z, worldId, health, maxHealth,
+                System.currentTimeMillis()));
+    }
+
+    /**
+     * Forget every companion. Called on disconnect: the snapshots are static and would otherwise
+     * outlive the world, so joining a second world within the give-up window would draw markers for
+     * companions belonging to the first one.
+     */
+    public static void clear() {
+        SNAPSHOTS.clear();
     }
 
     /** Advance AUTO → ON → OFF → AUTO and return the new mode (for the chat echo / keybind). */
@@ -75,7 +90,7 @@ public final class CompanionRadarHud {
 
     /** Render callback body — registered against {@code HudRenderCallback.EVENT} in the client init. */
     public static void render(GuiGraphics ctx, float tickDelta) {
-        if (mode == Mode.OFF || receivedAtMs == 0L) {
+        if (mode == Mode.OFF || SNAPSHOTS.isEmpty()) {
             return;
         }
         MinecraftClient client = MinecraftClient.getInstance();
@@ -83,25 +98,39 @@ public final class CompanionRadarHud {
         if (player == null || client.world == null || client.options.hudHidden) {
             return;
         }
-        long age = System.currentTimeMillis() - receivedAtMs;
-        if (age > GIVE_UP_MS) {
-            return; // gone too long — stop drawing entirely
+
+        long now = System.currentTimeMillis();
+        Identifier here = client.world.getRegistryKey().getValue();
+
+        // Decide what to draw before drawing any of it: the bar itself is shared, so it must not be
+        // painted at all if every companion turns out to be hidden by AUTO or aged out.
+        List<Reading> readings = new ArrayList<>();
+        for (Map.Entry<Integer, Snapshot> entry : SNAPSHOTS.entrySet()) {
+            Snapshot snap = entry.getValue();
+            long age = now - snap.receivedAtMs();
+            if (age > GIVE_UP_MS) {
+                SNAPSHOTS.remove(entry.getKey()); // despawned, or long gone — stop tracking it
+                continue;
+            }
+            boolean crossDim = snap.worldId() == null || !here.equals(snap.worldId());
+            boolean stale = age > STALE_MS;
+            double dx = snap.x() - player.getX();
+            double dy = snap.y() - player.getY();
+            double dz = snap.z() - player.getZ();
+            double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            // AUTO shows only when it's actually useful: far away, stale, or another dimension.
+            if (mode == Mode.AUTO && !crossDim && !stale && dist <= 16.0) {
+                continue;
+            }
+            readings.add(new Reading(snap, dist, dy, crossDim, stale));
         }
-
-        boolean crossDim = worldId == null
-                || !client.world.getRegistryKey().getValue().equals(worldId);
-        boolean stale = age > STALE_MS;
-        double dx = x - player.getX();
-        double dy = y - player.getY();
-        double dz = z - player.getZ();
-        double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        // AUTO shows only when it's actually useful: far away, stale, or another dimension.
-        if (mode == Mode.AUTO && !crossDim && !stale && dist <= 16.0) {
+        if (readings.isEmpty()) {
             return;
         }
+        // Nearest last, so the one you are most likely walking to is drawn on top of the others.
+        readings.sort(Comparator.comparingDouble(Reading::dist).reversed());
 
-        boolean dim = stale || crossDim;
+        boolean allDim = readings.stream().allMatch(r -> r.stale() || r.crossDim());
         int screenW = ctx.getScaledWindowWidth();
         int screenH = ctx.getScaledWindowHeight();
         int centerX = screenW / 2;
@@ -111,44 +140,58 @@ public final class CompanionRadarHud {
         TextRenderer tr = client.textRenderer;
 
         // Bar background + border + center tick.
-        ctx.fill(barLeft - 1, barY - 1, barRight + 1, barY + BAR_HEIGHT + 1, (dim ? 0x40 : 0x80) << 24);
-        ctx.fill(barLeft, barY, barRight, barY + BAR_HEIGHT, dim ? 0x20FFFFFF : 0x40FFFFFF);
-        ctx.fill(centerX, barY - 2, centerX + 1, barY + BAR_HEIGHT + 2, dim ? 0x60FFFFFF : 0xA0FFFFFF);
+        ctx.fill(barLeft - 1, barY - 1, barRight + 1, barY + BAR_HEIGHT + 1, (allDim ? 0x40 : 0x80) << 24);
+        ctx.fill(barLeft, barY, barRight, barY + BAR_HEIGHT, allDim ? 0x20FFFFFF : 0x40FFFFFF);
+        ctx.fill(centerX, barY - 2, centerX + 1, barY + BAR_HEIGHT + 2, allDim ? 0x60FFFFFF : 0xA0FFFFFF);
 
-        if (crossDim) {
-            ctx.drawCenteredShadowedText(tr, Text.literal("other dimension"),
-                    centerX, barY + BAR_HEIGHT + 3, 0xAAAAAA);
-            return;
+        // One marker per companion on the shared bar; one label line each beneath it. Names are only
+        // worth the space once there is more than one to tell apart.
+        boolean showNames = readings.size() > 1;
+        int labelY = barY + BAR_HEIGHT + 3;
+        for (Reading r : readings) {
+            Snapshot snap = r.snapshot();
+            boolean dim = r.stale() || r.crossDim();
+            boolean healthLow = snap.maxHealth() > 0f && snap.health() < snap.maxHealth() / 3f;
+            int markerColor = healthLow ? COLOR_MARKER_LOW : (dim ? COLOR_MARKER_DIM : COLOR_MARKER);
+            String prefix = showNames ? snap.name() + " " : "";
+
+            if (r.crossDim()) {
+                ctx.drawCenteredShadowedText(tr, Text.literal(prefix + "other dimension"),
+                        centerX, labelY, 0xAAAAAA);
+                labelY += 10;
+                continue;
+            }
+
+            // Bearing relative to where the player is facing (MC yaw convention).
+            double angleTo = Math.toDegrees(Math.atan2(snap.z() - player.getZ(),
+                    snap.x() - player.getX())) - 90.0;
+            double rel = MathHelper.wrapDegrees(angleTo - player.getYaw());
+            if (rel < -90.0) {
+                // Behind and to the left — chevron at the left edge meaning "turn left".
+                ctx.drawShadowedText(tr, Text.literal("«"), barLeft - 7, barY - 2, markerColor);
+            } else if (rel > 90.0) {
+                ctx.drawShadowedText(tr, Text.literal("»"), barRight + 2, barY - 2, markerColor);
+            } else {
+                int markerX = barLeft + (int) Math.round((rel + 90.0) / 180.0 * BAR_WIDTH);
+                ctx.fill(markerX - 1, barY - 2, markerX + 2, barY + BAR_HEIGHT + 2, markerColor);
+            }
+
+            // Distance + vertical hint + staleness note, centered under the bar.
+            String label = prefix + String.format("%.0fm", r.dist());
+            if (r.dy() > 4) {
+                label += " ▲"; // ▲ companion is above
+            } else if (r.dy() < -4) {
+                label += " ▼"; // ▼ companion is below
+            }
+            if (r.stale()) {
+                label += " (last seen)";
+            }
+            ctx.drawCenteredShadowedText(tr, Text.literal(label), centerX, labelY,
+                    dim ? 0xAAAAAA : 0xFFFFFF);
+            labelY += 10;
         }
-
-        // Bearing relative to where the player is facing (MC yaw convention).
-        double angleTo = Math.toDegrees(Math.atan2(dz, dx)) - 90.0;
-        double rel = MathHelper.wrapDegrees(angleTo - player.getYaw());
-
-        boolean healthLow = maxHealth > 0f && health < maxHealth / 3f;
-        int markerColor = healthLow ? COLOR_MARKER_LOW : (dim ? COLOR_MARKER_DIM : COLOR_MARKER);
-
-        if (rel < -90.0) {
-            // Behind and to the left — chevron at the left edge meaning "turn left".
-            ctx.drawShadowedText(tr, Text.literal("«"), barLeft - 7, barY - 2, markerColor);
-        } else if (rel > 90.0) {
-            ctx.drawShadowedText(tr, Text.literal("»"), barRight + 2, barY - 2, markerColor);
-        } else {
-            int markerX = barLeft + (int) Math.round((rel + 90.0) / 180.0 * BAR_WIDTH);
-            ctx.fill(markerX - 1, barY - 2, markerX + 2, barY + BAR_HEIGHT + 2, markerColor);
-        }
-
-        // Distance + vertical hint + staleness note, centered under the bar.
-        String label = String.format("%.0fm", dist);
-        if (dy > 4) {
-            label += " ▲"; // ▲ companion is above
-        } else if (dy < -4) {
-            label += " ▼"; // ▼ companion is below
-        }
-        if (stale) {
-            label += " (last seen)";
-        }
-        ctx.drawCenteredShadowedText(tr, Text.literal(label), centerX, barY + BAR_HEIGHT + 3,
-                dim ? 0xAAAAAA : 0xFFFFFF);
     }
+
+    /** A snapshot worked out relative to the player, ready to draw. */
+    private record Reading(Snapshot snapshot, double dist, double dy, boolean crossDim, boolean stale) {}
 }
