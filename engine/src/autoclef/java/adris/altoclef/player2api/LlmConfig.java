@@ -96,6 +96,22 @@ public final class LlmConfig {
             resolve("aicompanion.llm.apiKey", "AICOMPANION_LLM_APIKEY", "");
 
     /**
+     * Hard character budget for the prompt, oldest turns dropped to fit ({@code <= 0} = no limit).
+     *
+     * <p>Message count alone does not bound the prompt: every turn carries a world/agent status blob,
+     * so the same 64 messages range from ~13k to ~25k characters. Past what the served model can
+     * attend to, the JSON contract at the front of the prompt is what gets lost — the model reasons
+     * fine off the recent turns and answers in prose, so no command runs.
+     *
+     * <p>16000 is set from measurement against one local model: parsed replies had a median prompt of
+     * ~16.6k characters, failed ones ~19.5k, and failure was total by ~24k. A model with a large
+     * context can safely raise this.
+     */
+    public static volatile int maxPromptChars =
+            Integer.parseInt(resolve("aicompanion.llm.maxPromptChars",
+                    "AICOMPANION_LLM_MAXPROMPTCHARS", "16000"));
+
+    /**
      * How many LLM requests may be in flight at once, across every companion.
      *
      * <p>This is what stops one busy companion from freezing the others: at 1 the roster is

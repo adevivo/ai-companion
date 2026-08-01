@@ -396,6 +396,7 @@ public final class CompanionConfig {
             LlmConfig.timeoutMs = intVal(llm, "timeoutMs", LlmConfig.timeoutMs);
             LlmConfig.useGrammar = bool(llm, "useGrammar", LlmConfig.useGrammar);
             LlmConfig.maxRequests = intVal(llm, "maxRequests", LlmConfig.maxRequests);
+            LlmConfig.maxPromptChars = intVal(llm, "maxPromptChars", LlmConfig.maxPromptChars);
             LlmConfig.maxConcurrentRequests =
                     intVal(llm, "maxConcurrentRequests", LlmConfig.maxConcurrentRequests);
             // Rebuild the worker pool if the cap moved — a reload that only changed the number would
@@ -566,7 +567,9 @@ public final class CompanionConfig {
                 "apiKey": "",
                 "maxRequests": 0,
                 "maxConcurrentRequests": 2,
+                "maxPromptChars": 16000,
                 "usageReportEveryTokens": 100000,
+                "_maxPromptChars": "Hard character budget for the prompt; the oldest turns are dropped to fit (0 = no limit). Message count alone does not bound the prompt because every turn carries a world/agent status blob, so the same 64 messages can be 13k or 25k characters. Once the prompt outgrows what your model can attend to, the JSON contract at the FRONT is what gets lost: the companion still reasons correctly off recent turns and picks the right command, but writes it as prose instead of JSON, so nothing runs. Lower this if the companion talks sensibly and then stands still; raise it if your model has a large context.",
                 "_maxConcurrentRequests": "How many LLM requests may be in flight at once across ALL companions. At 1 the roster is single-file: while one companion is thinking, the others cannot, which makes a second companion look broken while the first works a long task. 2 suits a local llama.cpp, which serves one request at a time anyway. Raise it for a hosted endpoint that parallelises, or when several companions are out and expected to work independently — it is also the concurrency half of the spend guardrail, since every extra slot is another request that can be burning tokens at the same instant. Clamped to 1-16.",
                 "_usage": "usageReportEveryTokens: print a running token-usage total to chat and the log every N tokens (0 = never). Purely informational — it never blocks a reply. maxRequests is the opposite: a hard per-session request cap that makes the companion stop responding once hit (0 = unlimited, the default). Leave maxRequests at 0 unless you are on a paid endpoint and want a hard stop.",
                 "_apiKey": "Leave blank for a local llama.cpp server (no auth). For a paid hosted API, paste the key here — or better, leave this blank and set the AICOMPANION_LLM_APIKEY environment variable so the secret never lands on disk. The env var wins if both are set.",

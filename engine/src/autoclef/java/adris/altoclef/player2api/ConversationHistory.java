@@ -12,8 +12,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 public class ConversationHistory {
+   private static final Logger LOGGER = LogManager.getLogger();
    private final List<JsonObject> conversationHistory = new ArrayList<>();
    private final Path historyFile;
    private boolean loadedFromFile = false;
@@ -200,6 +203,55 @@ public class ConversationHistory {
 
    public List<JsonObject> getListJSON() {
       return this.conversationHistory;
+   }
+
+   /**
+     * The history trimmed to fit {@code maxChars}, oldest turns dropped first.
+     *
+     * <p>{@link #MAX_HISTORY} bounds the number of messages, which turns out not to bound the prompt:
+     * every turn carries a full world/agent status blob, and the {@code nearby blocks} map alone can
+     * run to thousands of entries, so 64 messages is anywhere from 13k to 25k characters.
+     *
+     * <p>That matters because the format contract lives at the <em>front</em> of the prompt. Once the
+     * whole thing outgrows what the served model can attend to, the contract is what gets lost: the
+     * model still reasons correctly off the recent turns at the tail and picks sensible commands, but
+     * emits them as prose instead of the JSON envelope, so nothing runs. Measured against one local
+     * model, replies that parsed had a median prompt of ~16.6k characters and replies that failed
+     * ~19.5k, with total failure around 24k.
+     *
+     * <p>The system prompt and the newest message are never dropped — the first carries the contract
+     * and the second is what is actually being asked.
+     */
+   public List<JsonObject> getListJSONBounded(int maxChars) {
+      if (maxChars <= 0 || this.conversationHistory.size() <= 2) {
+         return this.conversationHistory;
+      }
+      int total = 0;
+      for (JsonObject msg : this.conversationHistory) {
+         total += contentLength(msg);
+      }
+      if (total <= maxChars) {
+         return this.conversationHistory;
+      }
+
+      List<JsonObject> kept = new ArrayList<>(this.conversationHistory);
+      int dropped = 0;
+      // Walk forward from the oldest middle message, keeping index 0 and the final entry.
+      while (total > maxChars && kept.size() > 2) {
+         total -= contentLength(kept.remove(1));
+         dropped++;
+      }
+      LOGGER.warn("ConversationHistory: prompt was {} chars over the {} budget — dropped {} oldest "
+                  + "turn(s), {} remain. Long prompts make some models answer in prose instead of JSON, "
+                  + "which runs no command.",
+            total > maxChars ? "still" : "", maxChars, dropped, kept.size());
+      return kept;
+   }
+
+   private static int contentLength(JsonObject msg) {
+      return msg.has("content") && msg.get("content").isJsonPrimitive()
+            ? msg.get("content").getAsString().length()
+            : 0;
    }
 
    // ReminderString adds a reminder to the latest user message if present.

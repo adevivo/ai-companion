@@ -204,7 +204,7 @@ public class Player2APIService {
       JsonObject requestBody = new JsonObject();
       JsonArray messagesArray = new JsonArray();
 
-      for (JsonObject msg : conversationHistory.getListJSON()) {
+      for (JsonObject msg : conversationHistory.getListJSONBounded(LlmConfig.maxPromptChars)) {
          messagesArray.add(msg);
       }
       String lastMessageForDebug = conversationHistory.getListJSON().get(conversationHistory.getListJSON().size() - 1)
@@ -243,6 +243,16 @@ public class Player2APIService {
             } else {
                LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. Raw=<<{}>>",
                      second.getMessage(), retried);
+            }
+            // Before giving up: a model that ignores the JSON envelope usually still answers the
+            // right shape, just rendered as prose — "**Command:** `get coal_ore 29`". Throwing that
+            // away turns a correct decision into a companion that talks and stands still, which is
+            // indistinguishable from a broken brain. Recover the fields if they are legible.
+            JsonObject salvaged = salvageLabelledReply(retried);
+            if (salvaged != null) {
+               LOGGER.warn("Recovered a prose reply that was not JSON: command={}",
+                     salvaged.get("command").getAsString());
+               return salvaged;
             }
             JsonObject fallback = new JsonObject();
             fallback.addProperty("reason", "");
@@ -309,6 +319,81 @@ public class Player2APIService {
     * first; whatever is left is only spoken if it still reads like a sentence rather than machine
     * output. Silence is better than narrating the model's internals at the player.
     */
+   /**
+    * Field labels as models render them when they answer in prose instead of the JSON envelope:
+    * {@code **Command:**}, {@code ## Command}, {@code Command:} — optionally decorated, always
+    * followed by a colon. Each capture runs to the next label or the end of the reply.
+    */
+   private static final java.util.regex.Pattern LABELLED_FIELD = java.util.regex.Pattern.compile(
+         "(?is)(?:^|\\n)[\\s>#*_`-]*(reason|command|message)[\\s*_`]*:\\s*"
+               + "(.*?)(?=\\n[\\s>#*_`-]*(?:reason|command|message)[\\s*_`]*:|\\z)");
+
+   /**
+    * Rebuild the agent contract from a labelled prose reply, or null if it is not legible.
+    *
+    * <p>Deliberately conservative: a command is only accepted if it survives as a single short line
+    * once decoration is stripped. Anything sprawling is prose that happened to contain the word
+    * "command", and inventing a command from it would be worse than dropping the turn.
+    */
+   static JsonObject salvageLabelledReply(String content) {
+      if (content == null || content.isBlank()) {
+         return null;
+      }
+      java.util.regex.Matcher m = LABELLED_FIELD.matcher(content);
+      String reason = null;
+      String command = null;
+      String message = null;
+      while (m.find()) {
+         String value = m.group(2) == null ? "" : m.group(2).trim();
+         switch (m.group(1).toLowerCase(java.util.Locale.ROOT)) {
+            case "reason" -> reason = value;
+            case "command" -> command = value;
+            case "message" -> message = value;
+            default -> { }
+         }
+      }
+      if (command == null && message == null) {
+         return null; // not a labelled reply at all
+      }
+
+      String cleanedCommand = cleanSalvagedCommand(command);
+      String cleanedMessage = speakableFallback(stripDecoration(message == null ? "" : message));
+      if (cleanedCommand.isEmpty() && cleanedMessage.isEmpty()) {
+         return null;
+      }
+
+      JsonObject out = new JsonObject();
+      out.addProperty("reason", stripDecoration(reason == null ? "" : reason));
+      out.addProperty("command", cleanedCommand);
+      out.addProperty("message", cleanedMessage);
+      return out;
+   }
+
+   /** First line only, decoration removed, and rejected outright if it does not look like a command. */
+   private static String cleanSalvagedCommand(String raw) {
+      if (raw == null) {
+         return "";
+      }
+      String line = stripDecoration(raw).lines().findFirst().orElse("").trim();
+      // An empty command is a legitimate answer ("say something, do nothing"), so it is not a failure
+      // — but a sentence is. Real commands are `verb arg arg`, short and unpunctuated.
+      if (line.isEmpty() || line.length() > 80 || !line.matches("[A-Za-z_][A-Za-z0-9_\\- .]*")) {
+         return "";
+      }
+      return line;
+   }
+
+   /**
+    * Strip the backticks, asterisks and quotes Markdown adds.
+    *
+    * <p>Underscores are deliberately left alone: they are Markdown emphasis, but they are also load
+    * bearing in every Minecraft identifier, and stripping them turns {@code get coal_ore 29} into
+    * {@code get coalore 29} — a command that parses and then fails on an item that does not exist.
+    */
+   private static String stripDecoration(String raw) {
+      return raw.replaceAll("[`*]+", "").replaceAll("^[\"'\\s]+|[\"'\\s]+$", "").trim();
+   }
+
    static String speakableFallback(String content) {
       // A lone JSON string is the common shape here — unwrap it so the quote marks are not spoken.
       String unwrapped = Utils.unwrapJsonString(content);
@@ -332,7 +417,7 @@ public class Player2APIService {
       JsonObject requestBody = new JsonObject();
       JsonArray messagesArray = new JsonArray();
 
-      for (JsonObject msg : conversationHistory.getListJSON()) {
+      for (JsonObject msg : conversationHistory.getListJSONBounded(LlmConfig.maxPromptChars)) {
          messagesArray.add(msg);
       }
 
