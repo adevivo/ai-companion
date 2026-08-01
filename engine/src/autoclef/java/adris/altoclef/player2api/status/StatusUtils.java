@@ -231,8 +231,18 @@ public class StatusUtils {
     * exactly. Only {@link AgentStatus} reads this; the raytracing/look code calls
     * {@code getEyePosition()} directly and is unaffected.
     */
+   /**
+    * The bot's position as whole block coordinates, in the form a command takes.
+    *
+    * <p>Was {@code Vec3.toString()}, which renders "(11.902638855274441, 70.0, -46.66562711550304)".
+    * Models copy this field straight into {@code goto}, and that string is not valid argument syntax
+    * — one observed session spent 39 consecutive turns re-issuing it and failing. The precision was
+    * useless to a block-based agent and cost tokens in every prompt besides.
+    */
    public static String getCurrentPosition(AltoClefController mod) {
-      return mod.getEntity().position().toString();
+      net.minecraft.world.phys.Vec3 pos = mod.getEntity().position();
+      return String.format("%d %d %d",
+            (int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
    }
 
    /**
