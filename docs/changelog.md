@@ -5,6 +5,86 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.5 — It can dig, it goes where you send it, and two of them stop taking turns
+
+Bundles PlayerEngine 1.0.55. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating. A new `staircase-mine` skill appears alongside the others; your existing
+skill files are untouched.
+
+### `dig` — a staircase you can walk back up
+
+New command:
+
+```
+dig east 30     # cuts east, ending 30 blocks lower
+dig 15          # 15 down, in whichever direction it's already facing
+dig             # facing direction, 30 down
+```
+
+It descends at 45° — one block down for every block along — so the result is a stairwell you can walk
+out of, not a pit you're stuck at the bottom of. It stops by itself at lava, at water, or near
+bedrock, and tells you where it got to and how deep.
+
+There was no digging command before. Excavation happened as a side effect of walking somewhere, which
+worked but was discoverable by nobody — including the companion, which tried inventing `dig`, then
+reached for `build_structure` (the opposite operation: it *places* blocks and costs materials out of
+its inventory), then tried to run a skill name as a command. None of it produced a staircase.
+
+The bundled **staircase-mine** skill now just asks where you want the entrance and which way, walks
+there, checks it has a pickaxe, and issues one `dig`. Everything else is done for it.
+
+### It goes where you send it
+
+**Every `goto` in the mod travelled to world origin.** The destination was read before it had been
+filled in, so the coordinates were always zero, while the command otherwise looked entirely
+successful. Anything built on movement inherited it: "go to these coordinates" walked to spawn, and
+the old staircase procedure aimed every step at the same wrong place — which is what was seen as a
+companion setting off toward the horizon and never coming back.
+
+Coordinates are also read more forgivingly now. Asked to go to a position it had just been shown, the
+companion would echo it back in the game's own format — brackets, commas, long decimals — which the
+command then rejected; one session spent 39 turns re-sending the same rejected string. Brackets,
+commas and decimals are all accepted, and positions are reported as plain block coordinates.
+
+### Two companions no longer take turns
+
+With more than one out, only one could think at a time. Whichever was busiest held the floor: a
+companion working a long task kept every other one frozen for the duration, so the second looked
+broken while the first worked. Speech was part of it — one companion talking stopped every other one
+thinking until it finished the sentence.
+
+Each companion now thinks independently, and how many can do so at once is configurable
+(`llm.maxConcurrentRequests`, default 2 — raise it for a hosted model or a bigger roster, since every
+extra slot is another request running at the same time).
+
+### It stops claiming to do things it isn't
+
+Three separate versions of the same problem, all fixed:
+
+- **"I'm following you"** while standing still. Asked to follow you, the companion would write your
+  name in lowercase, the lookup was case-sensitive, and it matched nobody — then waited forever
+  without saying so. Names now match regardless of case, and if the player genuinely can't be found it
+  says so after a few seconds instead of pretending.
+- **Talking sensibly and then doing nothing at all.** On a long session the companion would answer
+  perfectly and never act. Its instructions had grown past what the model could hold, and the first
+  thing lost was the part telling it how to phrase a command. Conversations are now trimmed to fit
+  (`llm.maxPromptChars`), and a well-reasoned answer in the wrong format is recovered rather than
+  discarded.
+- **Repeating a command that could never work.** A command that failed was retried indefinitely — one
+  session logged 39 identical attempts, another 30. After three the companion is told plainly that it
+  will not work and to try something else or explain itself.
+
+### Fewer wasted turns
+
+- Invented a command that doesn't exist? The error now lists the ones that do, so it can correct
+  itself on the next turn instead of guessing again.
+- The list of your skills read to the companion as a second menu of commands, and it tried to run the
+  skill names. It now says plainly that those are routines *you* start.
+
+---
+
 ## 0.2.4 — It runs on a real server now, and they don't all sound alike
 
 Bundles PlayerEngine 1.0.48. Self-contained jar as always — don't install a standalone engine
