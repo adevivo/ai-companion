@@ -10,7 +10,6 @@
   "client": [
   ],
   "mixins": [
-    "ClientConnectionAccessor",
     "CompanionTargetableMixin",
     "EntityAccessor",
     "EntityAnimationSwungMixin",
@@ -20,7 +19,6 @@
     "TargetGoalAccessor",
     "MixinAbstractFurnaceBlockEntity",
     "PersistentProjectileEntityAccessor",
-    "PlayerCollidesWithEntityMixin",
     "PlayerDamageMixin",
     "WorldBlockModifiedMixin",
     "baritone.MixinBucketItem",

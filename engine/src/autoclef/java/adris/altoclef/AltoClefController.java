@@ -32,6 +32,7 @@ import adris.altoclef.trackers.TrackerManager;
 import adris.altoclef.trackers.UserBlockRangeTracker;
 import adris.altoclef.trackers.storage.ContainerSubTracker;
 import adris.altoclef.trackers.storage.ItemStorageTracker;
+import adris.altoclef.util.time.ServerClock;
 import baritone.Baritone;
 import baritone.api.IBaritone;
 import baritone.api.component.BaritoneComponents;
@@ -89,6 +90,10 @@ public class AltoClefController {
    public AltoClefController(IBaritone baritone, Character character, String player2GameId) {
       this.baritone = baritone;
       this.ctx = baritone.getEntityContext();
+      // Before anything below constructs a TimerGame. Attaching here rather than relying solely on
+      // SERVER_STARTED means we do not care whether this class was loaded before or after that event
+      // fired — a controller only ever exists while a server is running.
+      ServerClock.attach(this.ctx.world().getServer());
       this.commandExecutor = new CommandExecutor(this);
       this.taskRunner = new TaskRunner(this);
       this.trackerManager = new TrackerManager(this);
@@ -159,10 +164,12 @@ public class AltoClefController {
       ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
          ConversationManager.onServerStopping();
          BaritoneComponents.clearAll();
+         ServerClock.detach();
       });
    }
 
    public static void staticServerTick(MinecraftServer server) {
+      ServerClock.attach(server);
       ConversationManager.injectOnTick(server);
    }
 

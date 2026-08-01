@@ -20,7 +20,6 @@ import baritone.api.utils.input.Input;
 import baritone.pathing.movement.MovementHelper;
 import java.util.Arrays;
 import java.util.function.Predicate;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -137,7 +136,8 @@ public class PlaceBlockNearbyTask extends Task {
    }
 
    private BlockPos getCurrentlyLookingBlockPlace(AltoClefController mod) {
-      if (Minecraft.getInstance().hitResult instanceof BlockHitResult bhit) {
+      // The companion's own look raycast, not the client's crosshair — see place() below.
+      if (mod.getBaritone().getEntityContext().objectMouseOver() instanceof BlockHitResult bhit) {
          BlockPos bpos = bhit.getBlockPos();
          IEntityContext ctx = mod.getBaritone().getEntityContext();
          if (MovementHelper.canPlaceAgainst(ctx, bpos)) {
@@ -162,7 +162,10 @@ public class PlaceBlockNearbyTask extends Task {
    private boolean place(AltoClefController mod, BlockPos targetPlace) {
       if (!mod.getExtraBaritoneSettings().isInteractionPaused() && this.blockEquipped()) {
          mod.getInputControls().hold(Input.SNEAK);
-         HitResult mouseOver = Minecraft.getInstance().hitResult;
+         // Upstream read the client's crosshair target here, which does not exist on a dedicated
+         // server. objectMouseOver() raytraces from the companion's own eyes along its own look
+         // vector, which is what this always meant for a headless agent.
+         HitResult mouseOver = mod.getBaritone().getEntityContext().objectMouseOver();
          if (mouseOver != null && mouseOver.getType() == Type.BLOCK) {
             InteractionHand hand = InteractionHand.MAIN_HAND;
             if (((IInteractionManagerProvider)mod.getEntity())

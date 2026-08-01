@@ -8,6 +8,8 @@ import baritone.api.utils.BetterBlockPos;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 
@@ -19,6 +21,16 @@ public class RenderCommand extends Command {
    @Override
    public void execute(CommandSourceStack source, String label, IArgConsumer args, IBaritone baritone) throws CommandException {
       args.requireMax(0);
+      if (FabricLoader.getInstance().getEnvironmentType() != EnvType.CLIENT) {
+         this.logDirect(source, "The render command only works on a client - a dedicated server has nothing to redraw.");
+         return;
+      }
+
+      // Kept out of execute() so that verifying this method never has to resolve a client class.
+      this.renderOnClient(source, baritone);
+   }
+
+   private void renderOnClient(CommandSourceStack source, IBaritone baritone) {
       Minecraft mc = Minecraft.getInstance();
       mc.execute(() -> {
          BetterBlockPos origin = baritone.getEntityContext().feetPos();

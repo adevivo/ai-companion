@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
-import net.minecraft.client.Minecraft;
+import org.apache.logging.log4j.LogManager;
 import net.minecraft.core.Vec3i;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -196,7 +196,13 @@ public final class Settings {
    public final Settings.Setting<Integer> followRadius = new Settings.Setting<>(3);
    public final Settings.Setting<Boolean> disableCompletionCheck = new Settings.Setting<>(false);
    public final Settings.Setting<Long> cachedChunksExpirySeconds = new Settings.Setting<>(-1L);
-   public final Settings.Setting<Consumer<Component>> logger = new Settings.Setting<>(message -> Minecraft.getInstance().gui.getChat().addMessage(message));
+   /**
+    * Default sink for baritone log output. Upstream pushed this into the client's chat HUD, which
+    * does not exist on a dedicated server; nothing in this fork overrides the setting, so that
+    * default was a latent crash. Goes to the server log instead.
+    */
+   public final Settings.Setting<Consumer<Component>> logger = new Settings.Setting<>(
+         message -> LogManager.getLogger("baritone").info(message.getString()));
    public final Settings.Setting<Boolean> verboseCommandExceptions = new Settings.Setting<>(false);
    public final Settings.Setting<Double> yLevelBoxSize = new Settings.Setting<>(15.0);
    public final Settings.Setting<Color> colorCurrentPath = new Settings.Setting<>(Color.RED);

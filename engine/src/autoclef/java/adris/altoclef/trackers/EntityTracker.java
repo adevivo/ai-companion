@@ -1,8 +1,6 @@
 package adris.altoclef.trackers;
 
 import adris.altoclef.Debug;
-import adris.altoclef.eventbus.EventBus;
-import adris.altoclef.eventbus.events.PlayerCollidedWithEntityEvent;
 import adris.altoclef.mixins.PersistentProjectileEntityAccessor;
 import adris.altoclef.trackers.blacklisting.EntityLocateBlacklist;
 import adris.altoclef.util.ItemTarget;
@@ -41,24 +39,22 @@ public class EntityTracker extends Tracker {
    private final HashMap<String, Player> playerMap = new HashMap<>();
    private final HashMap<String, Vec3> playerLastCoordinates = new HashMap<>();
    private final EntityLocateBlacklist entityBlacklist = new EntityLocateBlacklist();
+   /**
+    * Nothing populates these in this fork. Upstream filled them from a {@code Player.touch()} mixin
+    * that only fired for the client's own {@code LocalPlayer}, which crashed a dedicated server and
+    * could never have matched anyway: our agent is a {@code CompanionEntity extends LivingEntity},
+    * not a {@code Player}, so it was never a key in these maps. The mixin is gone; the queries below
+    * are kept as tracker API and simply report no collisions.
+    */
    private final HashMap<LivingEntity, List<Entity>> entitiesCollidingWithPlayerAccumulator = new HashMap<>();
    private final HashMap<LivingEntity, HashSet<Entity>> entitiesCollidingWithPlayer = new HashMap<>();
 
    public EntityTracker(TrackerManager manager) {
       super(manager);
-      EventBus.subscribe(PlayerCollidedWithEntityEvent.class, evt -> this.registerPlayerCollision(evt.player, evt.other));
    }
 
    private static Class squashType(Class<?> type) {
       return Player.class.isAssignableFrom(type) ? Player.class : type;
-   }
-
-   private void registerPlayerCollision(LivingEntity player, Entity entity) {
-      if (!this.entitiesCollidingWithPlayerAccumulator.containsKey(player)) {
-         this.entitiesCollidingWithPlayerAccumulator.put(player, new ArrayList<>());
-      }
-
-      this.entitiesCollidingWithPlayerAccumulator.get(player).add(entity);
    }
 
    public boolean isCollidingWithPlayer(LivingEntity player, Entity entity) {
