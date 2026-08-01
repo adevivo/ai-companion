@@ -177,8 +177,18 @@ public final class CompanionSkills {
         if (SKILLS.isEmpty()) {
             return "";
         }
+        // Spelled out at length because the short version — "skills your owner can invoke (by name)"
+        // — reads to a model as a second command list, and it emitted a skill name as its command:
+        // "the user mentioned digging a descending staircase, which means I need to use the
+        // 'staircase-mine' command". A skill name is never a command; the instructions arrive as a
+        // message when the owner invokes one.
         StringBuilder sb = new StringBuilder(
-                "You have these skills your owner can invoke (by name, or via /companion skill <name>):");
+                "REFERENCE ONLY — these are named routines YOUR OWNER can start, not commands you may "
+                        + "run. NEVER put one of these names in your command field; it is not a command "
+                        + "and it will fail. When your owner starts one you will simply receive its "
+                        + "instructions as a message, and you carry them out using the ordinary commands. "
+                        + "If your owner describes a task that matches one of these but has not started "
+                        + "it, do the work with ordinary commands, or say which one they should start:");
         for (Skill s : SKILLS.values()) {
             sb.append("\n- ").append(s.key());
             if (!s.description().isEmpty()) {
