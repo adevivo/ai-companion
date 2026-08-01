@@ -52,6 +52,19 @@ public class AgentConversationData {
     private boolean lastReplyWasMalformed = false;
 
     /**
+     * The last command+error seen, and how many times running it has failed identically.
+     *
+     * <p>A command that fails the same way twice will not start working on the third try, and the
+     * retry is actively harmful: each attempt appends the command and its error to the conversation,
+     * crowding out useful context and showing the model its own rejected output as precedent. One
+     * session logged 39 consecutive identical failures on a malformed {@code goto} and 30 on a
+     * command that does not exist.
+     */
+    private String lastFailureSignature = null;
+    private int repeatedFailures = 0;
+    private static final int MAX_REPEATED_FAILURES = 3;
+
+    /**
      * Whether the turn currently in flight was self-triggered — driven only by {@code InfoMessage}
      * command feedback, with nobody having spoken to the companion.
      */
@@ -381,11 +394,38 @@ public class AgentConversationData {
                 LOGGER.info("Skipping command stop for cmd={} because queue not empty", stopReason.commandName());
             }
         } else if (stopReason instanceof CommandExecutionStopReason.Error) {
-            LOGGER.info("adding cmd={} to queue because it errored", stopReason.commandName());
-            addEventToQueue(new InfoMessage(String.format(
-                    "Command feedback: %s FAILED. The error was %s.",
-                    stopReason.commandName(),
-                    ((CommandExecutionStopReason.Error) stopReason).errMsg())));
+            String failed = stopReason.commandName();
+            String error = ((CommandExecutionStopReason.Error) stopReason).errMsg();
+            String signature = failed + " " + error;
+            if (signature.equals(lastFailureSignature)) {
+                repeatedFailures++;
+            } else {
+                lastFailureSignature = signature;
+                repeatedFailures = 1;
+            }
+
+            if (repeatedFailures >= MAX_REPEATED_FAILURES) {
+                // Re-issuing a command that fails the same way is not going to start working, and the
+                // retry is not free: every attempt appends the command and its error to the history,
+                // which both crowds out useful context and shows the model its own bad output as
+                // precedent to copy. Observed at 39 consecutive identical failures on one malformed
+                // goto and 30 on a command that does not exist.
+                LOGGER.warn("Command {} failed {} times with the same error; telling the agent to stop "
+                        + "retrying it. Error was: {}", failed, repeatedFailures, error);
+                addEventToQueue(new InfoMessage(String.format(
+                        "Command feedback: %s has now FAILED %d times with the same error, so it will "
+                                + "not work however it is phrased. STOP re-issuing it. The error was %s. "
+                                + "Either use a DIFFERENT command from the valid list, or generate an "
+                                + "empty command `\"\"` and tell the owner plainly that you cannot do this "
+                                + "and what you tried.",
+                        failed, repeatedFailures, error)));
+                repeatedFailures = 0;
+                lastFailureSignature = null;
+            } else {
+                LOGGER.info("adding cmd={} to queue because it errored", failed);
+                addEventToQueue(new InfoMessage(String.format(
+                        "Command feedback: %s FAILED. The error was %s.", failed, error)));
+            }
         } else if ("@stop".equals(stopReason.commandName().trim())) {
             // A cancel only happens while an explicit `stop` is in flight, and it fires twice: once for
             // the task being torn down and once for `@stop` itself. Prompt for a next step on the
