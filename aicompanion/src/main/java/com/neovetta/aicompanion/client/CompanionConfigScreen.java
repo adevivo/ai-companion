@@ -56,6 +56,29 @@ public final class CompanionConfigScreen {
     /** Skin dropdown sentinel for "no custom skin" — maps to {@code ""} in the file. */
     private static final String DEFAULT_SKIN = "(default)";
 
+    /** Shown when a companion sets no voice of its own, i.e. it falls back to the global one. */
+    private static final String DEFAULT_VOICE = "(use global tts.voice)";
+
+    /**
+     * Kokoro voice suggestions for the per-companion picker. The prefix encodes accent and gender:
+     * {@code af_}/{@code am_} American female/male, {@code bf_}/{@code bm_} British female/male.
+     * The stack serves 68 in total including other languages — {@code GET /v1/audio/voices} lists
+     * them all and the box takes free text, so a name missing here is still usable.
+     *
+     * <p>Ordered with the five the project's own {@code tts/README.md} recommends first, then the
+     * rest of the English set, so the top of the list is the tested ground.
+     */
+    private static final List<String> VOICE_SUGGESTIONS = List.of(
+            // README's starting points
+            "af_heart", "af_bella", "af_sky", "am_michael", "bm_george",
+            // remaining American female / male
+            "af_alloy", "af_aoede", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river",
+            "af_sarah",
+            "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_onyx", "am_puck",
+            // British female / male
+            "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+            "bm_daniel", "bm_fable", "bm_lewis");
+
     /**
      * Endpoint suggestions for the LLM combobox — OpenAI-compatible base URLs, WITHOUT {@code /v1}
      * because the engine appends {@code /v1/chat/completions}. Gemini is deliberately absent: its
@@ -239,6 +262,30 @@ public final class CompanionConfigScreen {
                     .setDefaultValue(false)
                     .setTooltip(Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."))
                     .setSaveConsumer(v -> skin.addProperty("slim", v))
+                    .build());
+
+            // Voice lives here rather than on the TTS tab: it is part of an identity, and a roster
+            // sharing one voice is hard to follow by ear. Blank stays meaningful — it defers to the
+            // global tts.voice, so an existing config sounds exactly as it did.
+            String currentVoice = str(entry, "voice", "");
+            List<String> voiceOptions = new ArrayList<>();
+            voiceOptions.add(DEFAULT_VOICE);
+            voiceOptions.addAll(VOICE_SUGGESTIONS);
+            if (!currentVoice.isBlank() && !voiceOptions.contains(currentVoice)) {
+                voiceOptions.add(currentVoice); // a hand-picked id from the other 40 stays selectable
+            }
+            sub.add(eb.startStringDropdownMenu(Text.literal("Voice"),
+                            currentVoice.isBlank() ? DEFAULT_VOICE : currentVoice, opaqueCells())
+                    .setSelections(voiceOptions)
+                    .setSuggestionMode(true)
+                    .setDefaultValue(DEFAULT_VOICE)
+                    .setTooltip(
+                            Text.literal("Kokoro voice for this companion. af_/am_ = American"),
+                            Text.literal("female/male, bf_/bm_ = British. Type to search, or"),
+                            Text.literal("enter any id freely — the stack serves 68."),
+                            Text.literal("List them: curl http://localhost:8880/v1/audio/voices"))
+                    .setSaveConsumer(v -> entry.addProperty("voice",
+                            DEFAULT_VOICE.equals(String.valueOf(v)) ? "" : String.valueOf(v)))
                     .build());
             sub.add(eb.startBooleanToggle(Text.literal("Remove On Save"), false)
                     .setDefaultValue(false)
@@ -457,11 +504,13 @@ public final class CompanionConfigScreen {
                 .setDefaultValue("kokoro")
                 .setSaveConsumer(v -> tts.addProperty("model", v))
                 .build());
-        cat.addEntry(eb.startStrField(Text.literal("Voice"), str(tts, "voice", "af_heart"))
-                .setDefaultValue("af_heart")
-                .setTooltip(Text.literal("Voice id. List available ones: curl http://localhost:8880/v1/audio/voices"))
-                .setSaveConsumer(v -> tts.addProperty("voice", v))
-                .build());
+        // Voice moved to the Companions tab, per companion. tts.voice survives in the file as the
+        // fallback for an entry that sets none, but editing it here would invite configuring one
+        // voice for everybody — which is the thing worth avoiding.
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                        "Voice is set per companion — see the Companions tab. A companion that "
+                                + "picks none falls back to \"voice\" in aicompanion.json.")
+                .formatted(Formatting.GRAY)).build());
         cat.addEntry(eb.startDoubleField(Text.literal("Speed"), dbl(tts, "speed", 1.0))
                 .setDefaultValue(1.0)
                 .setTooltip(Text.literal("Playback speed multiplier (1.0 = normal)."))

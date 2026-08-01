@@ -51,8 +51,13 @@ public final class CompanionConfig {
      * already folded in — blank means "use the global {@link Prompts#persona}", which is how a config
      * with only the legacy {@code companion} block keeps working.
      */
+    /**
+     * @param voice Kokoro voice id for this companion, or blank to use the global {@code tts.voice}.
+     *              Carried into {@code Character.voiceIds()[0]}, which the engine prefers over the
+     *              global setting — see {@link #character(RosterEntry)}.
+     */
     public record RosterEntry(String name, String description, String persona,
-                              String skinFile, boolean skinSlim) {}
+                              String skinFile, boolean skinSlim, String voice) {}
 
     /**
      * The identity used when the config supplies none, and the fallback for any field a roster entry
@@ -61,7 +66,7 @@ public final class CompanionConfig {
      */
     private static final RosterEntry BUILT_IN_DEFAULT = new RosterEntry("Vetta",
             "A loyal, level-headed Minecraft companion who speaks plainly and watches your back.",
-            "", "", false);
+            "", "", false, "");
 
     /**
      * Every identity a companion can be spawned as, in file order; never empty.
@@ -125,11 +130,17 @@ public final class CompanionConfig {
         return character(defaultEntry());
     }
 
-    /** The engine-facing identity for one roster entry, including its own persona. */
+    /**
+     * The engine-facing identity for one roster entry, including its own persona and voice.
+     *
+     * <p>{@code voiceIds} carries the per-companion voice: {@code Player2APIService.textToSpeech}
+     * uses {@code voiceIds[0]} when it is non-blank and falls back to the global {@code tts.voice}
+     * otherwise, so an entry that sets no voice keeps the old behaviour exactly.
+     */
     public static Character character(RosterEntry entry) {
         String n = entry.name();
         return new Character(n, n, "Hi, I'm " + n + " — your companion.", entry.description(), "",
-                new String[0], entry.persona());
+                new String[]{entry.voice()}, entry.persona());
     }
 
     /** Read config (writing the default first if missing) and apply it to the engine config statics. */
@@ -460,7 +471,11 @@ public final class CompanionConfig {
                 slim = bool(skin, "slim", false);
             }
         }
-        return new RosterEntry(entryName.strip(), entryDescription, persona, file, slim);
+        // Blank is meaningful: it means "no per-companion override", which sends the engine an empty
+        // voiceIds[0] and lets it fall back to the global tts.voice.
+        String voice = str(o, "voice", fallback.voice()).strip();
+
+        return new RosterEntry(entryName.strip(), entryDescription, persona, file, slim, voice);
     }
 
     /** Whether the LLM API key came from the launch environment (mirrors {@code LlmConfig.resolve}). */
@@ -525,13 +540,14 @@ public final class CompanionConfig {
     /** Default config written when {@code config/aicompanion.json} does not exist. */
     private static final String DEFAULT_JSON = """
             {
-              "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt (personality/style, injected into the engine's hardened prompt rather than replacing it), and skin { file, slim }. Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name; blank = default Steve, slim = 3px (Alex) arms. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
+              "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt (personality/style, injected into the engine's hardened prompt rather than replacing it), skin { file, slim }, and voice (a Kokoro voice id such as af_heart or bm_george; blank = use tts.voice, so give each companion its own or they all sound alike). Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name; blank = default Steve, slim = 3px (Alex) arms. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
               "companions": [
                 {
                   "name": "Vetta",
                   "description": "A loyal, level-headed companion who watches your back and speaks plainly.",
                   "systemPrompt": "You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.",
-                  "skin": { "file": "", "slim": false }
+                  "skin": { "file": "", "slim": false },
+                  "voice": ""
                 }
               ],
               "llm": {
@@ -556,7 +572,7 @@ public final class CompanionConfig {
                 "model": "kokoro",
                 "voice": "af_heart",
                 "speed": 1.0,
-                "_help": "Local voice output via Kokoro. Start the stack first: 'cd tts && docker compose up -d', then set enabled=true. The MINECRAFT CLIENT calls this endpoint (the server only sends it the text), so it must be reachable from the client machine. Voices: curl http://localhost:8880/v1/audio/voices. Only the companion's spoken 'message' is voiced — never commands or reasoning."
+                "_help": "Local voice output via Kokoro. Start the stack first: 'cd tts && docker compose up -d', then set enabled=true. The MINECRAFT CLIENT calls this endpoint (the server only sends it the text), so it must be reachable from the client machine. Voices: curl http://localhost:8880/v1/audio/voices. 'voice' here is only the FALLBACK — set a voice per companion under 'companions' so they can be told apart by ear. Only the companion's spoken 'message' is voiced — never commands or reasoning."
               },
               "behavior": {
                 "triggerPrefix": "",
