@@ -22,6 +22,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -132,14 +133,48 @@ public final class CompanionConfigScreen {
                 .setSavingRunnable(() -> save(config, editors, addedName[0]));
         ConfigEntryBuilder eb = builder.entryBuilder();
 
-        buildCompanions(builder.getOrCreateCategory(Text.literal("Companions")), eb, config,
-                editors, addedName);
-        buildLlm(builder.getOrCreateCategory(Text.literal("LLM")), eb, config);
-        buildTts(builder.getOrCreateCategory(Text.literal("Voice (TTS)")), eb, config);
-        buildBehavior(builder.getOrCreateCategory(Text.literal("Behavior")), eb, config);
-        buildSkills(builder.getOrCreateCategory(Text.literal("Skills")), eb, config);
+        ConfigCategory companions = builder.getOrCreateCategory(Text.literal("Companions"));
+        ConfigCategory llm = builder.getOrCreateCategory(Text.literal("LLM"));
+        ConfigCategory tts = builder.getOrCreateCategory(Text.literal("Voice (TTS)"));
+        ConfigCategory behavior = builder.getOrCreateCategory(Text.literal("Behavior"));
+        ConfigCategory skills = builder.getOrCreateCategory(Text.literal("Skills"));
+
+        // On every tab, because the warning form of this matters no matter where you land.
+        for (ConfigCategory cat : List.of(companions, llm, tts, behavior, skills)) {
+            addScopeNotice(cat, eb);
+        }
+
+        buildCompanions(companions, eb, config, editors, addedName);
+        buildLlm(llm, eb, config);
+        buildTts(tts, eb, config);
+        buildBehavior(behavior, eb, config);
+        buildSkills(skills, eb, config);
 
         return builder.build();
+    }
+
+    /**
+     * Says which {@code aicompanion.json} this screen is editing.
+     *
+     * <p>It always edits the local config directory. In singleplayer or as a LAN host that is the
+     * same file the server reads, so saving applies immediately. Connected to a remote server it is
+     * the <em>client's</em> copy, which nothing reads — the server has its own, and no packet carries
+     * edits to it. That case is silent otherwise: the screen opens, saves without complaint, and
+     * changes nothing, so it gets the loud version.
+     */
+    private static void addScopeNotice(ConfigCategory cat, ConfigEntryBuilder eb) {
+        if (MinecraftClient.getInstance().getServer() != null) {
+            cat.addEntry(eb.startTextDescription(Text.literal(
+                            "Editing this world's config/aicompanion.json — changes apply on save.")
+                    .formatted(Formatting.GRAY)).build());
+            return;
+        }
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                        "You are on a multiplayer server, and this screen CANNOT change its settings. "
+                                + "It is editing your own client's config/aicompanion.json, which the server "
+                                + "never reads. To configure the companions here, edit "
+                                + "config/aicompanion.json on the server and run /companion reload.")
+                .formatted(Formatting.RED)).build());
     }
 
     // ## Categories
@@ -617,7 +652,12 @@ public final class CompanionConfigScreen {
                         AiCompanion.MOD_ID, updated);
             });
         } else {
-            AiCompanion.LOGGER.info("[{}] config screen: saved {} (no local server running — applies on next world load)",
+            // Connected to a remote server: this is the client's own copy of the file and the server
+            // reads its own. Saying "applies on next world load" would be wrong — it never applies
+            // there at all.
+            AiCompanion.LOGGER.info("[{}] config screen: saved {} — this is the client's local config. "
+                            + "A multiplayer server reads its own copy; edit config/aicompanion.json there "
+                            + "and run /companion reload.",
                     AiCompanion.MOD_ID, path);
         }
     }
