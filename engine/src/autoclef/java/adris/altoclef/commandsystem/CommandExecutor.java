@@ -41,7 +41,10 @@ public class CommandExecutor {
 
          try {
             if (command == null) {
-               getException.accept(new CommandException("Invalid command:" + part));
+               getException.accept(new CommandException("Invalid command: " + part
+                     + ". The valid commands are: "
+                     + this.commandSheet.keySet().stream().sorted().collect(java.util.stream.Collectors.joining(", "))
+                     + ". Pick one of these or generate an empty command \"\"."));
                this.executeRecursive(commands, parts, index + 1, onFinish, getException);
             } else {
                command.run(this.mod, part, () -> this.executeRecursive(commands, parts, index + 1, onFinish, getException));
@@ -96,7 +99,13 @@ public class CommandExecutor {
          }
 
          if (!this.commandSheet.containsKey(command)) {
-            throw new CommandException("Command " + command + " does not exist.");
+            // Name the alternatives. The reader is a language model, and "does not exist" alone gives
+            // it nothing to correct towards — it re-issues the same invented command until something
+            // stops it. Observed with `dig`, `home-guard` and `position`, the last two invented from
+            // words that appear in a skill's prose.
+            throw new CommandException("Command " + command + " does not exist. The valid commands are: "
+                  + this.commandSheet.keySet().stream().sorted().collect(java.util.stream.Collectors.joining(", "))
+                  + ". Pick one of these or generate an empty command \"\".");
          } else {
             return this.commandSheet.get(command);
          }
