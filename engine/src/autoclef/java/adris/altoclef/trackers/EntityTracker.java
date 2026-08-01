@@ -255,8 +255,32 @@ public class EntityTracker extends Tracker {
    public boolean isPlayerLoaded(String name) {
       this.ensureUpdated();
       synchronized (BaritoneHelper.MINECRAFT_LOCK) {
-         return this.playerMap.containsKey(name);
+         return resolveUsername(name) != null;
       }
+   }
+
+   /**
+    * The loaded player whose name matches {@code name} ignoring case, or null.
+    *
+    * <p>Matching used to be exact, and the agent does not reliably reproduce capitalisation: asked to
+    * follow an owner called Dauk808 it issued {@code follow dauk808}, the lookup found nobody, and
+    * {@code FollowPlayerTask} sat in "doing nothing until player loads into render distance" while
+    * the companion cheerfully reported that it was following. Minecraft usernames are unique
+    * case-insensitively, so there is nothing to disambiguate.
+    */
+   private String resolveUsername(String name) {
+      if (name == null) {
+         return null;
+      }
+      if (this.playerMap.containsKey(name)) {
+         return name;
+      }
+      for (String loaded : this.playerMap.keySet()) {
+         if (loaded.equalsIgnoreCase(name)) {
+            return loaded;
+         }
+      }
+      return null;
    }
 
    public List<String> getAllLoadedPlayerUsernames() {
@@ -268,17 +292,21 @@ public class EntityTracker extends Tracker {
    public Optional<Vec3> getPlayerMostRecentPosition(String name) {
       this.ensureUpdated();
       synchronized (BaritoneHelper.MINECRAFT_LOCK) {
-         return Optional.ofNullable(this.playerLastCoordinates.getOrDefault(name, null));
+         // Case-insensitive for the same reason as resolveUsername: the name comes from the model.
+         for (java.util.Map.Entry<String, Vec3> entry : this.playerLastCoordinates.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name)) {
+               return Optional.ofNullable(entry.getValue());
+            }
+         }
+         return Optional.empty();
       }
    }
 
    public Optional<Player> getPlayerEntity(String name) {
-      if (this.isPlayerLoaded(name)) {
-         synchronized (BaritoneHelper.MINECRAFT_LOCK) {
-            return Optional.of(this.playerMap.get(name));
-         }
-      } else {
-         return Optional.empty();
+      this.ensureUpdated();
+      synchronized (BaritoneHelper.MINECRAFT_LOCK) {
+         String resolved = resolveUsername(name);
+         return resolved == null ? Optional.empty() : Optional.ofNullable(this.playerMap.get(resolved));
       }
    }
 
