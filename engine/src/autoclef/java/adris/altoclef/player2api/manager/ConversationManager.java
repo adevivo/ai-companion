@@ -1,5 +1,6 @@
 package adris.altoclef.player2api.manager;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -35,15 +36,6 @@ import net.minecraft.server.MinecraftServer;
 public class ConversationManager {
     public static final Logger LOGGER = LogManager.getLogger();
 
-    public static class Lock {
-        public static boolean waitingForResponseLock = false; // prevents conversation processing before onLLMResponse
-                                                              // called
-
-        public static boolean isConversationLocked() {
-            return waitingForResponseLock || TTSManager.isLocked();
-        }
-    }
-
     public static ConcurrentHashMap<UUID, AgentConversationData> queueData = new ConcurrentHashMap<>();
     public static final float messagePassingMaxDistance = 64; // let messages between entities pass iff <= this maximum
     private static boolean hasInit = false;
@@ -69,7 +61,37 @@ public class ConversationManager {
         }
     }
 
-    private static List<LLMCompleter> llmCompleters = List.of(new LLMCompleter());
+    /**
+     * Shared pool of LLM workers, one request in flight each.
+     *
+     * <p>Sized rather than one-per-companion on purpose. A local llama.cpp serves requests one at a
+     * time regardless, hosted providers rate-limit bursts, and an unbounded fan-out across a roster
+     * is how a paid endpoint produces a surprise bill. The cap is what bounds concurrent spend;
+     * {@link AgentConversationData#getPriority()} — longest-waiting wins — is what keeps it fair, and
+     * that only works if slots are contended rather than dedicated.
+     *
+     * <p>Workers are stateless with respect to the endpoint: the {@code Player2APIService} travels
+     * with each request, so a future per-companion endpoint needs no change here.
+     */
+    private static volatile List<LLMCompleter> llmCompleters = newPool(LlmConfig.maxConcurrentRequests);
+
+    private static List<LLMCompleter> newPool(int size) {
+        int bounded = Math.max(1, Math.min(size, 16));
+        List<LLMCompleter> pool = new ArrayList<>(bounded);
+        for (int i = 0; i < bounded; i++) {
+            pool.add(new LLMCompleter());
+        }
+        LOGGER.info("ConversationManager: LLM pool sized {}", bounded);
+        return pool;
+    }
+
+    /** Resize the pool when {@code llm.maxConcurrentRequests} changes on a config reload. */
+    public static void resizePool(int size) {
+        int bounded = Math.max(1, Math.min(size, 16));
+        if (bounded != llmCompleters.size()) {
+            llmCompleters = newPool(bounded);
+        }
+    }
 
     // ## Utils
     public static AgentConversationData getOrCreateEventQueueData(AltoClefController mod) {
@@ -98,9 +120,8 @@ public class ConversationManager {
         int dropped = queueData.size();
         queueData.clear();
         lastEarshotNotice.clear();
-        Lock.waitingForResponseLock = false;
-        // The completer list is static, so an in-flight request at shutdown would otherwise leave it
-        // permanently "busy" and mute the companion for the rest of the game process.
+        // The pool is static, so an in-flight request at shutdown would otherwise leave a slot
+        // permanently "busy" and shrink the pool for the rest of the game process.
         llmCompleters.forEach(LLMCompleter::reset);
         TTSManager.reset();
         Player2APIService.resetSessionCounters();
@@ -340,21 +361,43 @@ public class ConversationManager {
                 reason, states);
     }
 
+    /**
+     * Dispatch as many ready conversations as there are free pool slots, longest-waiting first.
+     *
+     * <p>Was one conversation per tick, and — because the single {@code dataToProcess} was fed to
+     * every free completer — the same one repeatedly. Every companion with queued work now gets a
+     * turn as soon as a slot frees, instead of the busiest one holding the floor.
+     */
     private static void process(Consumer<Event.CharacterMessage> onCharacterEvent, Consumer<String> onErrEvent) {
-        Optional<AgentConversationData> dataToProcess = queueData.values().stream().filter(data -> {
-            return data.getPriority() != 0;
-        }).max(Comparator.comparingLong(AgentConversationData::getPriority));
-        boolean anyCompleterFree = llmCompleters.stream().anyMatch(LLMCompleter::isAvailible);
-        if (dataToProcess.isEmpty()) {
+        List<AgentConversationData> ready = queueData.values().stream()
+                .filter(data -> data.getPriority() != 0)
+                .sorted(Comparator.comparingLong(AgentConversationData::getPriority).reversed())
+                .toList();
+        // Materialized before dispatching: a lazy filter would re-evaluate isAvailible() after the
+        // previous hand-off had already claimed a slot.
+        List<LLMCompleter> free = llmCompleters.stream()
+                .filter(LLMCompleter::isAvailible)
+                .toList();
+
+        if (ready.isEmpty()) {
             reportStallIfWorkPending("no conversation had a non-zero priority");
-        } else if (!anyCompleterFree) {
-            reportStallIfWorkPending("every LLM completer reports itself busy");
+            return;
         }
-        llmCompleters.stream().filter(LLMCompleter::isAvailible).forEach(completer -> {
-            dataToProcess.ifPresent(data -> {
-                data.process(onCharacterEvent, onErrEvent, completer);
-            });
-        });
+        if (free.isEmpty()) {
+            reportStallIfWorkPending(String.format(
+                    "all %d LLM pool slots are busy — raise llm.maxConcurrentRequests if this persists",
+                    llmCompleters.size()));
+            return;
+        }
+
+        int dispatched = Math.min(ready.size(), free.size());
+        for (int i = 0; i < dispatched; i++) {
+            ready.get(i).process(onCharacterEvent, onErrEvent, free.get(i));
+        }
+        if (ready.size() > dispatched) {
+            LOGGER.debug("ConversationManager: {} conversation(s) waiting on a free pool slot",
+                    ready.size() - dispatched);
+        }
     }
 
     // side effects are here:
@@ -370,12 +413,10 @@ public class ConversationManager {
             AgentSideEffects.onError(server, errMsg);
         };
 
-        if (!Lock.isConversationLocked()) {
-            process(onCharacterEvent, onErrEvent);
-        } else {
-            reportStallIfWorkPending(String.format("conversation is locked (waitingForResponse=%s, tts=%s)",
-                    Lock.waitingForResponseLock, TTSManager.isLocked()));
-        }
+        // No global gate any more. A conversation excludes itself while its own turn is in flight or
+        // its own voice is still going (see getPriority), which is all the exclusion that was ever
+        // needed — the process-wide version additionally froze every other companion.
+        process(onCharacterEvent, onErrEvent);
 
         TTSManager.injectOnTick(server);
     }

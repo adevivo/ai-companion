@@ -475,6 +475,20 @@ public final class CompanionConfigScreen {
                         Text.literal("A cost guardrail for paid endpoints."))
                 .setSaveConsumer(v -> llm.addProperty("maxRequests", v))
                 .build());
+        cat.addEntry(eb.startIntField(Text.literal("Max Concurrent Requests"),
+                        intVal(llm, "maxConcurrentRequests", 2))
+                .setDefaultValue(2)
+                .setMin(1)
+                .setMax(16)
+                .setTooltip(
+                        Text.literal("How many companions may be thinking at once."),
+                        Text.literal("At 1 they take turns, so a second companion looks"),
+                        Text.literal("frozen while the first works a long task."),
+                        Text.literal("2 suits a local llama.cpp; raise it for a hosted"),
+                        Text.literal("endpoint or a bigger roster. More slots = more"),
+                        Text.literal("tokens burning at the same instant."))
+                .setSaveConsumer(v -> llm.addProperty("maxConcurrentRequests", v))
+                .build());
         cat.addEntry(eb.startLongField(Text.literal("Usage Report Every N Tokens"), longVal(llm, "usageReportEveryTokens", 100000L))
                 .setDefaultValue(100000L)
                 .setMin(0L)

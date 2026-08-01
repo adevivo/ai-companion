@@ -96,6 +96,22 @@ public final class LlmConfig {
             resolve("aicompanion.llm.apiKey", "AICOMPANION_LLM_APIKEY", "");
 
     /**
+     * How many LLM requests may be in flight at once, across every companion.
+     *
+     * <p>This is what stops one busy companion from freezing the others: at 1 the roster is
+     * effectively single-file, which is what the old shared single completer amounted to. It is also
+     * the concurrency half of the spend guardrail — {@link #maxRequests} caps requests per session,
+     * this caps how many can be burning at the same instant.
+     *
+     * <p>2 suits a local llama.cpp, which serves one request at a time anyway, so a larger pool only
+     * queues inside the server. Raise it for a hosted endpoint that parallelises, or when several
+     * companions are out and expected to work independently. Clamped to 1..16.
+     */
+    public static volatile int maxConcurrentRequests =
+            Integer.parseInt(resolve("aicompanion.llm.maxConcurrentRequests",
+                    "AICOMPANION_LLM_MAXCONCURRENTREQUESTS", "2"));
+
+    /**
      * Cost guardrail for frontier testing: max LLM requests per server session ({@code <= 0} = unlimited,
      * the default). Once exceeded, calls fail fast with a clear message instead of hitting the paid API —
      * so a runaway feedback loop can't quietly rack up spend while you are away.

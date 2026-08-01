@@ -31,7 +31,12 @@ public class AgentConversationData {
 
     private final Deque<Event> eventQueue = new ConcurrentLinkedDeque<>();
     private long lastProcessTime = 0L;
-    private boolean isProcessing = false;
+    /**
+     * Set on the server thread when a turn is dispatched and cleared on the LLM callback thread, so
+     * it must be volatile: this is now the only thing stopping one conversation being processed
+     * twice concurrently, and a stale read either double-dispatches or strands the companion.
+     */
+    private volatile boolean isProcessing = false;
     private boolean enabled = true;
 
     // Armed by onGreeting(), consumed by the turn that answers it. Both used to be initialized true
@@ -95,6 +100,11 @@ public class AgentConversationData {
     // (for now it is #ns from last processing time)
     public long getPriority() {
         if (!enabled || isProcessing || eventQueue.isEmpty()) {
+            return 0;
+        }
+        // Wait for this companion's own sentence to finish before composing the next one. Only its
+        // own: another companion talking is no reason for this one to stop thinking.
+        if (adris.altoclef.player2api.manager.TTSManager.isSpeaking(getUUID())) {
             return 0;
         }
         long sinceLast = System.nanoTime() - lastProcessTime;
@@ -191,7 +201,7 @@ public class AgentConversationData {
                 requeueAfterMalformedReply(jsonResp, replied);
             }
         };
-        completer.processToJson(mod.getPlayer2APIService(), historyWithWrappedStatus, onLLMResponse, onErrMsg, true);
+        completer.processToJson(mod.getPlayer2APIService(), historyWithWrappedStatus, onLLMResponse, onErrMsg);
     }
 
     /**

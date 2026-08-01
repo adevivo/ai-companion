@@ -193,7 +193,7 @@ public class BuildStructureTask extends Task {
             }, errStr -> {
                 LOGGER.info("LLM Transport Error={}", errStr);
                 llmResult = Optional.of(Either.right(errStr));
-            }, false);
+            });
         }
 
         @Override

@@ -47,7 +47,7 @@ public class AgentSideEffects {
                 // }
             }
             TTSManager.TTS(characterMessage.message(), sendingCharacterData.getCharacter(),
-                    sendingCharacterData.getPlayer2apiService());
+                    sendingCharacterData.getPlayer2apiService(), sendingCharacterData.getUUID());
             ConversationManager.onAICharacterMessage(characterMessage,
                     characterMessage.sendingCharacterData().getUUID());
         }

@@ -5,6 +5,7 @@ import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.TtsConfig;
+import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.AltoClefController;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -395,6 +396,11 @@ public final class CompanionConfig {
             LlmConfig.timeoutMs = intVal(llm, "timeoutMs", LlmConfig.timeoutMs);
             LlmConfig.useGrammar = bool(llm, "useGrammar", LlmConfig.useGrammar);
             LlmConfig.maxRequests = intVal(llm, "maxRequests", LlmConfig.maxRequests);
+            LlmConfig.maxConcurrentRequests =
+                    intVal(llm, "maxConcurrentRequests", LlmConfig.maxConcurrentRequests);
+            // Rebuild the worker pool if the cap moved — a reload that only changed the number would
+            // otherwise keep the old pool for the rest of the session.
+            ConversationManager.resizePool(LlmConfig.maxConcurrentRequests);
             LlmConfig.usageReportEveryTokens =
                     longVal(llm, "usageReportEveryTokens", LlmConfig.usageReportEveryTokens);
             // API key: env/sysprop wins (so the secret need not live on disk); otherwise the file
@@ -559,7 +565,9 @@ public final class CompanionConfig {
                 "useGrammar": true,
                 "apiKey": "",
                 "maxRequests": 0,
+                "maxConcurrentRequests": 2,
                 "usageReportEveryTokens": 100000,
+                "_maxConcurrentRequests": "How many LLM requests may be in flight at once across ALL companions. At 1 the roster is single-file: while one companion is thinking, the others cannot, which makes a second companion look broken while the first works a long task. 2 suits a local llama.cpp, which serves one request at a time anyway. Raise it for a hosted endpoint that parallelises, or when several companions are out and expected to work independently — it is also the concurrency half of the spend guardrail, since every extra slot is another request that can be burning tokens at the same instant. Clamped to 1-16.",
                 "_usage": "usageReportEveryTokens: print a running token-usage total to chat and the log every N tokens (0 = never). Purely informational — it never blocks a reply. maxRequests is the opposite: a hard per-session request cap that makes the companion stop responding once hit (0 = unlimited, the default). Leave maxRequests at 0 unless you are on a paid endpoint and want a hard stop.",
                 "_apiKey": "Leave blank for a local llama.cpp server (no auth). For a paid hosted API, paste the key here — or better, leave this blank and set the AICOMPANION_LLM_APIKEY environment variable so the secret never lands on disk. The env var wins if both are set.",
                 "_frontier": "To use a hosted OpenAI-compatible model instead of a local one, e.g. xAI/Grok: { \\"endpoint\\": \\"https://api.x.ai\\", \\"model\\": \\"grok-4-1-fast-non-reasoning\\", \\"apiKey\\": \\"xai-...\\" }. NOTE: endpoint is the base URL with NO trailing slash and NO /v1 — the mod appends /v1/chat/completions itself. Pick a non-reasoning model: reasoning models are slower and burn tokens on thinking the companion never uses.",
