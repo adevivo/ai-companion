@@ -5,6 +5,61 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.4 — It runs on a real server now, and they don't all sound alike
+
+Bundles PlayerEngine 1.0.48. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating.
+
+### It works on a dedicated server
+
+Until now it didn't, and it failed badly: the companion spawned, stood there doing nothing, and the
+first time you walked into it the server dropped you with *"Internal server error"*. Every version up
+to this one was single-player-only in practice, whatever the description said.
+
+The cause was code that only exists in the Minecraft client being reached by the server. In single
+player the two run in the same process, so nothing ever noticed. On a dedicated server the companion's
+AI threw on its very first tick and could never take one, and a separate piece of the same problem
+crashed the player's connection on contact.
+
+Both are fixed, along with two more of the same kind waiting further along — one in placing blocks,
+one in the engine's logging. A companion on a dedicated server now spawns, paths, fights, gathers,
+completes tasks and survives a restart.
+
+If you run a server, note that its timings are measured in server ticks. A server running below 20
+ticks per second stretches every wait the companion makes, so it will feel slower under load than it
+does on your own machine. That is expected, not a fault.
+
+### Each companion can have its own voice
+
+Voice used to be one setting shared by everyone, so a roster of three was three identical voices —
+which rather undoes having given them separate names, faces and personalities.
+
+It now belongs to the companion. **`/companion config` → Companions**, and each one has a **Voice**
+picker beside its skin, with the common Kokoro voices listed and searchable. `af_`/`am_` are American
+female/male, `bf_`/`bm_` British, and you can type any voice id your setup serves if it isn't in the
+list.
+
+Leave it on *(use global tts.voice)* and nothing changes — that companion uses the shared setting
+exactly as before. The Voice tab keeps that shared setting as the fallback.
+
+### The config screen now admits when it can't reach the server
+
+`/companion config` opens on a multiplayer server, lets you change anything, saves without complaint
+— and changes nothing. It edits the copy of the config on *your* machine, and the server reads its
+own.
+
+It said nothing about this, and the log even claimed the changes would apply on the next world load,
+which they never would. Every tab now says which file it is editing, in red when that file is going
+nowhere.
+
+To configure companions on a server, edit `config/aicompanion.json` **on the server** and run
+`/companion reload`. Voice, personality, skins, LLM settings — all of it lives there. In single player
+and on a LAN host the screen works exactly as it always has.
+
+---
+
 ## 0.2.3 — More than one of them, and a way to hand them things
 
 Bundles PlayerEngine 1.0.47. Self-contained jar as always — don't install a standalone engine
