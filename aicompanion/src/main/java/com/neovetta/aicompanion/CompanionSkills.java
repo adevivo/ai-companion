@@ -43,7 +43,8 @@ public final class CompanionSkills {
      * meant to be edited.
      */
     private static final String[] BUNDLED =
-            {"lumberjack.md", "home-guard.md", "farming.md", "harvest.md", "fishing.md"};
+            {"lumberjack.md", "home-guard.md", "farming.md", "harvest.md", "fishing.md",
+                    "staircase-mine.md"};
 
     // Insertion-ordered so listings/suggestions read in filename order. Guarded by the class monitor.
     private static final Map<String, Skill> SKILLS = new LinkedHashMap<>();
