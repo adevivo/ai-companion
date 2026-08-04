@@ -349,14 +349,40 @@ String systemPrompt = Prompts.getAINPCSystemPrompt(
 `aiPersistantData.updateSystemPrompt()` so the change takes effect on the next turn without restarting
 the conversation.
 
-## Open question: does stance persist?
+## Stance persists — decided
 
-**Decide this before estimating.** The stance gate is otherwise self-contained, but if stance doesn't
-survive a relog, every companion silently reverts to `ESCORT` on world load — and a user who parked one
-in `WORK` will file that as a bug.
+**Resolved: stance survives a relog.** The alternative was every companion silently reverting on world
+load, which a user who parked one in `WORK` would rightly file as a bug.
 
-Either it persists (new storage, alongside whatever 0.2.8 builds for protected regions) or it resets by
-design and the release note says so plainly. Don't leave it implicit.
+It goes in **entity NBT**, not a config file and not `SavedData`. Stance is per-companion state that
+should travel with the body — the same argument that already puts `RosterName` and `Owner` there.
+`CompanionEntity` has the read/write pair already (`readCustomDataFromNbt` `:213`,
+`writeCustomDataToNbt` `:231`); this is two lines in each, following the `RosterName` pattern exactly.
+
+Store the enum **by name, not ordinal**. Ordinals renumber the moment `GUARD` is added back and every
+saved companion silently changes stance.
+
+### The migration default is not the spawn default
+
+Worth getting right, because the obvious implementation is wrong. A companion saved under 0.2.6 has
+today's full capability. If it loads with no stance tag and falls back to `ESCORT`, it silently loses
+`dig`, `farm` and `build_structure` — an existing companion halfway through a job would just stop being
+able to do it, with nothing explaining why.
+
+So:
+
+- **Absent tag** (saved before stances existed) ⇒ `FREE`. Preserves exactly what that companion could
+  already do. `tag.getString` returns `""` when the key is missing, which is the signal.
+- **Fresh spawn** ⇒ `ESCORT`. The safe default only applies to companions created after the feature
+  exists.
+
+Say this plainly in the changelog: existing companions keep full capability and need `/companion stance
+escort` to opt in; new ones start escorted.
+
+### Not shared with 0.2.8
+
+Protected regions are world state and belong in `SavedData`/JSON. Stance is entity state. There's no
+common store to build and no reason to couple the two releases.
 
 ## Enforcement, not just advertising
 
@@ -472,7 +498,8 @@ Persist as `SavedData`/`PersistentState` keyed per-world, or as JSON under
 convention (`CompanionSkills.skillsDir()`, `CompanionConfig.extractTtsSetup`). JSON is probably right:
 it's hand-editable, which fits the same philosophy as editable skill markdown.
 
-If 0.2.7 decided stance should persist, this is where both land — build one store, not two.
+Independent of stance persistence, which 0.2.7 puts in entity NBT — that's per-companion state, this is
+world state. No shared store, no coupling between the two releases.
 
 ### Marking a region
 
