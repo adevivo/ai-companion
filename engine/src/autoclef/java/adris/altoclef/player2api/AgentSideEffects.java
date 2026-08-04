@@ -108,6 +108,21 @@ public class AgentSideEffects {
             return;
         }
 
+        // Owner-only plumbing. Filtering it out of the system prompt is necessary but not sufficient:
+        // the model sees its own earlier turns, so a command it read once it can emit again. Reject it
+        // here — the agent's own dispatch path, so the owner and the idle-command plumbing that share
+        // CommandExecutor are unaffected — and route the reason back through the same error channel as
+        // an invalid command, which lands in gameDebugMessages and lets the model correct itself.
+        String bareName = commandWithPrefix.substring(cmdExecutor.getCommandPrefix().length()).trim().split("\\s+")[0];
+        if (CommandExecutor.isOwnerOnly(bareName)) {
+            LOGGER.info("Refusing owner-only command from the agent: {}", commandWithPrefix);
+            onStop.accept(new CommandExecutionStopReason.Error(commandWithPrefix,
+                    "`" + bareName + "` can only be run by your owner, not by you. "
+                            + "Ask them to run it if it needs doing, and pick another command or none."));
+            mod.runUserTask(new LookAtOwnerTask());
+            return;
+        }
+
         // add quotes to build_structure so it gets proccessed as one arg:
         String processedCommandWithPrefix = commandWithPrefix.replaceFirst(
                 "^(@build_structure)\\s+(?![\"'])(.+)$",

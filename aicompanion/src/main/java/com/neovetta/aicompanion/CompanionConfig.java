@@ -234,6 +234,9 @@ public final class CompanionConfig {
                     // pushing one identity into every live brain is how two distinct companions turn
                     // back into clones on the first reload.
                     companion.applyRosterEntry(entryFor(companion));
+                    // Retune combat without a restart. Base values, so this is idempotent across
+                    // repeated reloads and equipment modifiers still stack on top.
+                    companion.applyCombatConfig();
                     AltoClefController ctrl = companion.getController();
                     if (ctrl != null && ctrl.getAIPersistantData() != null) {
                         ctrl.getAIPersistantData().updateSystemPrompt();
@@ -439,6 +442,15 @@ public final class CompanionConfig {
                     bool(behavior, "defenseFleeFromHostiles", BehaviorConfig.defenseFleeFromHostiles);
         }
 
+        JsonObject combat = obj(root, "combat");
+        if (combat != null) {
+            CombatConfig.attackDamageBase =
+                    dbl(combat, "attackDamageBase", CombatConfig.attackDamageBase);
+            CombatConfig.armorBase = dbl(combat, "armorBase", CombatConfig.armorBase);
+            CombatConfig.maxHealth = dbl(combat, "maxHealth", CombatConfig.maxHealth);
+            CombatConfig.followRange = dbl(combat, "followRange", CombatConfig.followRange);
+        }
+
         JsonObject tts = obj(root, "tts");
         if (tts != null) {
             TtsConfig.enabled = bool(tts, "enabled", TtsConfig.enabled);
@@ -601,6 +613,13 @@ public final class CompanionConfig {
                 "_help": "triggerPrefix: when set (e.g. \\"@\\"), only chat starting with it reaches the companion, and the prefix is stripped before the model sees it. Blank (default) = it answers all nearby chat, which is what you want in singleplayer. Set it on a paid endpoint or a shared world so ambient chatter costs nothing. thinkThrottleSeconds: minimum seconds between LLM turns (0 = no limit). Messages arriving inside the window are queued, not dropped — they fold into the next turn. buildCostsMaterials: when true (default), build_structure spends real items from the companion's inventory, one per block. If it is short it collects the shortfall itself and then builds, so one command does the whole job; blocks that are already correct are skipped and cost nothing. Set false for creative-style building where blocks come from nothing. buildGroundCheck: when true (default), a build plan is compared against the real terrain first. One-sided by design — a plan that came out below ground is lifted onto the surface (up to 3 blocks), while one above ground is built as generated ('on top of the ground' is a one-block gap, and towers are legitimately higher). Only a plan more than 16 blocks in the air is refused, without spending materials. Set false to disable the check entirely. maxAutonomousTurns: how many actions the companion may take on its own initiative after finishing what you asked, before it waits to be spoken to again (0 = unlimited). Every finished command prompts it for a next step, so without a cap one instruction can chain indefinitely — and it will invent chores. The counter resets whenever anybody talks to it. aiCrossTalk: whether companions overhear and answer EACH OTHER. Off by default, and worth leaving off — every forwarded line is a full LLM turn, so two companions standing together run up requests with nobody talking to them, and each reply prompts another reply. One measured session logged 382 of these, including four near-identical sentences in ninety seconds. Turn it on for the ambience of them chatting between themselves, on an endpoint where turns are free.",
                 "_helpBuilding": "buildPhysicalPlacement: when true (default), the companion walks to the build site and places blocks by hand — a couple per tick, only what it can actually reach, moving along as each spot is used up, with an arm swing and a placement sound. Blocks are still written directly rather than right-clicked, so orientation-sensitive blocks are unaffected, but the build is situated and paced instead of appearing all at once from any distance. A build it cannot finish reaching says so and can be resumed by repeating the same description. Set false to restore the old instant behaviour (up to 256 blocks a tick, no reach check, no walking) if paced building misbehaves. buildBlocksPerTick: pacing when the above is on, clamped 1-64. Raise it to finish large builds sooner at the cost of blocks appearing in visible clumps.",
                 "_helpDefense": "mobsTargetCompanion: when true (default), hostile mobs hunt the companion the way they hunt you. It is a LivingEntity rather than a real player, and vanilla mobs look for targets with a hard-coded player filter, so with this off they walk straight past it and it is only ever attacked in retaliation. Endermen are the exception either way — they keep player-only stare aggro. defenseFightBack: whether it deliberately engages hostiles that are targeting it (default true). It always swings at whatever is already in arm's reach regardless. defenseUseShield: whether it raises a shield when threatened (default true). defenseFleeFromHostiles: whether it may run away, dodge arrows and throw up cover blocks (default FALSE). All of that logic only becomes reachable once mobs can target the companion at all, so it has never run in a real world; leaving it off means the companion stands its ground and keeps working instead of abandoning a farm or a half-built house to sprint over the horizon. Turn it on once you have watched it get mobbed and decided you want flight."
+              },
+              "combat": {
+                "attackDamageBase": 1.0,
+                "armorBase": 0.0,
+                "maxHealth": 20.0,
+                "followRange": 16.0,
+                "_help": "The companion's own combat stat line, before any weapon or armour it is holding. The defaults are exact player parity, which is the point: the companion is built on a zombie's attribute set, and a zombie has 3.0 attack damage and 2.0 armour where a player has 1.0 and 0.0. Left alone, that is triple damage bare-handed riding on top of whatever it holds — a diamond sword hitting for 10 where yours hits for 8 — plus two points of armour out of nowhere. Raise these if you want a tougher companion for a hard modpack; that is a fine thing to want, it just has to be asked for. followRange is how far it will look for something to fight, in blocks: 16 is a person's engagement distance, the zombie default of 35 is a mob's aggro radius and is far enough that it starts fights with things you cannot see. Changes apply to live companions on /companion reload."
               },
               "skills": {
                 "advertiseInPrompt": true,

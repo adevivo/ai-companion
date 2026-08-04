@@ -54,6 +54,19 @@ public class KillAura {
       this.attackedLastTick = false;
    }
 
+   /**
+    * Add an entity to this tick's target list.
+    *
+    * <p>A ghast fireball additionally becomes {@link #forceHit}, which is the one thing attacked
+    * without waiting for the weapon cooldown — see the two call sites in {@link #tickEnd} and
+    * {@link #performDelayedAttack}. That exemption is deliberate and should stay: batting a fireball
+    * back has no damage-charge component, a player does it by spam-clicking, and the window is short
+    * enough that waiting out a cooldown means eating the fireball instead. Gating it would make the
+    * companion strictly worse at this than the person standing next to it.
+    *
+    * <p>Note this is the <em>only</em> assignment to {@code forceHit}, and {@link #tickStart} clears
+    * it every tick — so it is always a fireball and can never go stale across ticks.
+    */
    public void applyAura(Entity entity) {
       this.targets.add(entity);
       if (entity instanceof LargeFireball) {
@@ -109,6 +122,7 @@ public class KillAura {
             this.performDelayedAttack(mod);
             break;
          case SMART:
+            // Uncooled by design — forceHit is only ever a ghast fireball. See applyAura.
             if (this.forceHit != null) {
                this.attack(mod, this.forceHit, true);
             } else if (!mod.getFoodChain().needsToEat()
@@ -125,6 +139,7 @@ public class KillAura {
          && !mod.getMLGBucketChain().isFalling(mod)
          && mod.getMLGBucketChain().doneMLG()
          && !mod.getMLGBucketChain().isChorusFruiting()) {
+         // Uncooled by design — forceHit is only ever a ghast fireball. See applyAura.
          if (this.forceHit != null) {
             this.attack(mod, this.forceHit, true);
          }
@@ -166,11 +181,28 @@ public class KillAura {
       return Mth.clamp((((LivingEntityMixin)entity).getLastAttackedTicks() + baseTime) / this.getAttackCooldownProgressPerTick(entity), 0.0F, 1.0F);
    }
 
+   /**
+    * Hit every target in range, on the weapon's cooldown.
+    *
+    * <p>This used to swing at every target on every tick with no cooldown check at all — twenty
+    * attacks a second per target, each landing at roughly a fifth of the weapon's damage because the
+    * charge never got a chance to build. The damage was not the problem; knockback applies on every
+    * swing, so anything it engaged was stunlocked and never got to act. That is a speedrunning-bot
+    * affordance, not something a companion should be capable of.
+    *
+    * <p>What still separates {@code FASTEST} from {@code DELAY} is breadth, not rate: this hits
+    * everything in range where {@code DELAY} picks only the nearest. Reachable only by setting the
+    * strategy deliberately — the default is {@code SMART} ({@code Settings#forceFieldStrategy}).
+    */
    private void performFastestAttack(AltoClefController mod) {
       if (!mod.getFoodChain().needsToEat()
          && !mod.getMLGBucketChain().isFalling(mod)
          && mod.getMLGBucketChain().doneMLG()
          && !mod.getMLGBucketChain().isChorusFruiting()) {
+         if (mod.getPlayer() == null || this.getAttackCooldownProgress(mod.getPlayer(), 0.0F) < 1.0F) {
+            return;
+         }
+
          for (Entity entity : this.targets) {
             this.attack(mod, entity);
          }

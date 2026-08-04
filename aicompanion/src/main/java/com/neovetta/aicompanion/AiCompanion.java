@@ -70,17 +70,40 @@ public class AiCompanion implements ModInitializer {
     public static final Identifier TOKEN_HUD_TOGGLE = id("token_hud_toggle");
 
     /**
-     * Zombie attributes plus {@code GENERIC_ATTACK_SPEED}.
+     * Zombie attributes, corrected to a player's combat stat line.
      *
-     * <p>The zombie set is a convenient starting point (20 health, 0.23 speed, 3 attack damage, 2 armor)
-     * but it omits attack speed, which no mob has and every player does. Without it,
-     * {@code CompanionEntity#getAttackCooldownProgressPerTick} has nothing to read and a held weapon's
-     * attack-speed modifier has no attribute to modify — so the companion swings at a fixed cadence
-     * regardless of what it is holding. 4.0 is the vanilla player base.
+     * <p>The zombie set is a convenient starting point for the non-combat attributes (20 health,
+     * 0.23 speed, follow range) but its combat numbers are a mob's, and a companion that fights the
+     * player's fights should fight on the player's terms:
+     *
+     * <ul>
+     *   <li>{@code ATTACK_SPEED} — zombies have none, every player does. Without it,
+     *       {@link CompanionEntity#getAttackCooldownProgressPerTick} has nothing to read and a held
+     *       weapon's attack-speed modifier has no attribute to modify, so the companion swings at a
+     *       fixed cadence regardless of what it is holding. 4.0 is the vanilla player base.
+     *   <li>{@code ATTACK_DAMAGE} — the zombie default is 3.0 against a player's 1.0. That is 3x
+     *       bare-handed, and it rides on top of every weapon: a diamond sword (+7) hit for 10.0
+     *       instead of 8.0. Gear should be the only thing that makes a companion hit harder.
+     *   <li>{@code ARMOR} — the zombie default is 2.0 against a player's 0.0, i.e. two free points of
+     *       armour with nothing equipped.
+     * </ul>
+     *
+     * <p>{@code MOVEMENT_SPEED} is deliberately left at the mob-scale 0.23. Baritone drives this
+     * entity through input overrides and that value is load-bearing for navigation; if it needs
+     * tuning it gets its own change and its own playtest, so a movement regression can't hide inside
+     * a combat fix.
+     *
+     * <p>Deliberately reads no config. This builder runs during static init — before
+     * {@link #onInitialize()} has loaded {@code aicompanion.json} — so anything it read would be the
+     * built-in default anyway. Server overrides are applied per-entity by
+     * {@link CompanionEntity#applyCombatConfig()}, which has the further advantage of taking effect
+     * on {@code /companion reload} instead of only at restart.
      */
     public static DefaultAttributeContainer.Builder createCompanionAttributes() {
         return ZombieEntity.createAttributes()
-                .add(EntityAttributes.GENERIC_ATTACK_SPEED, 4.0);
+                .add(EntityAttributes.GENERIC_ATTACK_SPEED, 4.0)
+                .add(EntityAttributes.GENERIC_ATTACK_DAMAGE, CombatConfig.DEFAULT_ATTACK_DAMAGE)
+                .add(EntityAttributes.GENERIC_ARMOR, CombatConfig.DEFAULT_ARMOR);
     }
 
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */

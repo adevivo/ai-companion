@@ -6,6 +6,7 @@ import adris.altoclef.player2api.Player2APIService;
 import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.util.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
+import com.neovetta.aicompanion.CombatConfig;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.screen.CompanionScreenHandlerFactory;
 import baritone.api.IBaritone;
@@ -28,6 +29,8 @@ import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.attribute.EntityAttribute;
+import net.minecraft.entity.attribute.EntityAttributeInstance;
 import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.data.DataTracker;
@@ -111,6 +114,10 @@ public class CompanionEntity extends LivingEntity
         this.interactionManager = new LivingEntityInteractionManager(this);
         this.inventory = new LivingEntityInventory(this);
         this.hungerManager = new LivingEntityHungerManager();
+        // Runs for a fresh spawn and for one restored from a save, so a companion created before the
+        // combat.* block existed picks the new values up on its next load rather than keeping the
+        // zombie stat line forever. NBT is read after this and overwrites current health, as it should.
+        applyCombatConfig();
     }
 
     @Override
@@ -150,6 +157,34 @@ public class CompanionEntity extends LivingEntity
         this.setCustomNameVisible(true);
         this.dataTracker.set(SKIN_FILE, entry.skinFile() == null ? "" : entry.skinFile());
         this.dataTracker.set(SKIN_SLIM, entry.skinSlim());
+    }
+
+    /**
+     * Push the {@code combat.*} config onto this companion's attributes.
+     *
+     * <p>Called at spawn and again on {@code /companion reload}, so retuning combat does not need a
+     * restart. Sets base values rather than adding modifiers: equipment modifiers stack on top of the
+     * base and would be double-counted if this ran twice against a modifier.
+     *
+     * <p>Health is clamped rather than left dangling — lowering {@code maxHealth} below a companion's
+     * current health would otherwise leave it displaying more hearts than it has.
+     */
+    public void applyCombatConfig() {
+        setBase(EntityAttributes.GENERIC_ATTACK_DAMAGE, CombatConfig.attackDamageBase);
+        setBase(EntityAttributes.GENERIC_ARMOR, CombatConfig.armorBase);
+        setBase(EntityAttributes.GENERIC_MAX_HEALTH, CombatConfig.maxHealth);
+        setBase(EntityAttributes.GENERIC_FOLLOW_RANGE, CombatConfig.followRange);
+        if (this.getHealth() > this.getMaxHealth()) {
+            this.setHealth(this.getMaxHealth());
+        }
+    }
+
+    /** Set one attribute's base value, ignoring attributes this entity somehow doesn't have. */
+    private void setBase(EntityAttribute attribute, double value) {
+        EntityAttributeInstance instance = this.getAttributeInstance(attribute);
+        if (instance != null) {
+            instance.setBaseValue(value);
+        }
     }
 
     /** This companion's display name, falling back to the default identity's if it somehow has none. */

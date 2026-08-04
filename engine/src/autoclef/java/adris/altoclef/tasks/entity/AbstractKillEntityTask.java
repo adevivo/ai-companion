@@ -9,6 +9,7 @@ import adris.altoclef.util.helpers.StorageHelper;
 import adris.altoclef.util.slots.PlayerSlot;
 import java.util.List;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.Item;
@@ -82,8 +83,27 @@ public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
       return null;
    }
 
+   /**
+    * Ticks between full-strength swings, from the entity's {@code ATTACK_SPEED} attribute — the same
+    * formula vanilla uses in {@code Player#getCurrentItemAttackStrengthDelay}, and the same fix
+    * already applied in {@link adris.altoclef.control.KillAura#getAttackCooldownProgressPerTick}.
+    *
+    * <p>This used to return a flat 5.0F: four full-damage swings a second regardless of what was
+    * being held, against the 1.6 a diamond sword actually allows. Because {@link
+    * #getAttackCooldownProgress} gates on this, the melee kill task was swinging at roughly 2.5x a
+    * player's rate with the same weapon — every one of them at full charge, since the gate only
+    * passes once the (too-short) cooldown has elapsed.
+    *
+    * <p>Keeps the old constant as a fallback for entities without the attribute registered, so a
+    * mis-registered attribute degrades to the previous behaviour rather than throwing inside a tick.
+    */
    public float getAttackCooldownProgressPerTick(LivingEntity entity) {
-      return 5.0F;
+      if (entity == null || !entity.getAttributes().hasAttribute(Attributes.ATTACK_SPEED)) {
+         return 5.0F;
+      }
+
+      double attackSpeed = entity.getAttributeValue(Attributes.ATTACK_SPEED);
+      return attackSpeed <= 0.0 ? 5.0F : (float)(1.0 / attackSpeed * 20.0);
    }
 
    public float getAttackCooldownProgress(LivingEntity entity, float baseTime) {

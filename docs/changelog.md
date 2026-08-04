@@ -5,6 +5,87 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.6 — It fights like a person now
+
+Bundles PlayerEngine 1.0.56. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating. A new `combat` block appears in `aicompanion.json` with your existing
+settings untouched. **Companions you already have will get weaker**, on purpose — read on.
+
+### It was fighting with a zombie's stat line
+
+A companion is built on a zombie's attributes, which is a sensible starting point for health and
+movement and a bad one for combat. A zombie has **3.0 attack damage** where a player has 1.0, and
+**2.0 armour** where a player has 0.0. Nothing announced this and nothing asked for it.
+
+So before picking anything up, a companion hit three times as hard bare-handed as its owner, and that
+advantage rode on top of every weapon — a diamond sword in its hand did 10 damage where the same sword
+in yours does 8. It also walked around wearing two invisible points of armour.
+
+All three are now exactly a player's. A companion is dangerous because of what it's holding, which is
+the only reason it should ever have been dangerous.
+
+Follow range came down too, from 35 blocks to 16. That number decides how far away it will notice
+something worth fighting; 35 is a monster's aggro radius and is far enough that a companion standing
+still starts fights with things nobody has seen yet.
+
+### It was swinging four times a second, at full strength
+
+Separate defect, same symptom, and this was the one making combat look like one-hit kills.
+
+A weapon has a cooldown — the reason a real sword fight is a rhythm rather than a blur, and the reason
+spam-clicking in vanilla does almost nothing. The companion's melee routine was told that cooldown was
+a flat five ticks no matter what it held. A diamond sword's actual figure is twelve and a half.
+
+The effect wasn't quite what it looked like. It wasn't hitting harder per swing; it was hitting **two
+and a half times as often as the weapon allows, every one of them fully charged**. And because knockback
+lands on every swing, whatever it was fighting got knocked back before it could act, then knocked back
+again, and never got a turn. Nothing was being one-shot. Things were being held down until they died,
+which is arguably worse to watch — the fight never looked contested.
+
+It now reads the weapon's real attack speed, so a companion swings at the rate a player holding the
+same thing would. The "hit everything in range" strategy, which isn't on by default, was also skipping
+the cooldown entirely; it no longer does.
+
+Deflecting ghast fireballs is deliberately left alone. That has no charge-up, a player does it by
+spam-clicking, and the window is short enough that waiting out a cooldown means eating the fireball.
+
+**Expect your companion to be noticeably worse in a fight, and to start taking real damage.** That is
+the change working. It also means the eating, shielding and defensive behaviour is being properly
+exercised for the first time — if something there misbehaves, this release is why it surfaced.
+
+### You can make it stronger, on purpose
+
+The four numbers are yours now, under a new `combat` block:
+
+```
+combat.attackDamageBase   (1.0 — player parity)
+combat.armorBase          (0.0)
+combat.maxHealth          (20.0)
+combat.followRange        (16.0)
+```
+
+Raise them if you want a tougher companion for a hard modpack — that's a perfectly reasonable thing to
+want. The point of this release isn't that companions must be weak, it's that the advantage has to be
+asked for rather than handed over quietly. Changes apply to live companions on `/companion reload`, no
+restart needed.
+
+### It can no longer reset its own memory
+
+Four commands were being offered to the companion as things it might choose to do: wiping its own
+conversation memory, switching its own brain off, reloading settings, and a leftover beat-the-game
+routine. Two of them already carried the note "can ONLY be run by the user (NOT the agent)" — which was
+the only thing enforcing it, i.e. nothing was.
+
+A companion talking itself into a fresh start and forgetting the afternoon is not a hypothetical worth
+waiting for. They're no longer listed to the model, and they're refused if it asks for one anyway. You
+can still run all four yourself; nothing you could do before has been taken away.
+
+Smaller side benefit: four fewer commands described in full on every single request to the model.
+
+---
+
 ## 0.2.5 — It can dig, it goes where you send it, and two of them stop taking turns
 
 Bundles PlayerEngine 1.0.55. Self-contained jar as always — don't install a standalone engine
