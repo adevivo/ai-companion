@@ -265,9 +265,17 @@ policy class early just to hold four strings.
 
 ---
 
-# 0.2.7 — Stances
+# 0.2.7 — Stances, and surviving a fight
 
-Makes unsafe actions *impossible* rather than discouraged, and shrinks the system prompt on every call.
+Two threads. Stances make unsafe actions *impossible* rather than discouraged and shrink the system
+prompt on every call. Healing and retreat make 0.2.6's combat change actually mean something — right
+now a companion regenerates faster than anything can hurt it, and its decision to run doesn't consider
+whether it's hurt.
+
+**Note for scheduling:** the healing fix is the one item here that arguably belongs in 0.2.6. A
+companion that heals a full heart every half second is still effectively unkillable, so the 0.2.6
+combat playtest will under-report the change. Deferred deliberately, but if the playtest is
+uninformative, this is why — pull it forward rather than re-tuning combat.
 
 ## Verified seams
 
@@ -458,10 +466,145 @@ already handles this correctly.
 Worth calling out in the changelog explicitly, because a user with a customized `home-guard.md` will
 otherwise be confused about why it still behaves like a bodyguard.
 
+## Healing costs food
+
+A companion currently regenerates **1.0 HP every 10 ticks — 2 HP per second — forever, at zero cost.**
+Near-death to full in ten seconds. Vanilla's *peak burst* rate is its permanent floor.
+
+### Why
+
+`LivingEntityHungerManager.regenerateOnly` deliberately omits `addExhaustion`, and its javadoc explains
+the reasoning: `update()` adds exhaustion on every heal, exhaustion drains saturation and then food, and
+a companion with no working way to eat would starve.
+
+The reasoning is circular, and the omission is self-defeating. Exhaustion is the *only* thing that
+drains saturation, and `update()` is never called for a companion. So:
+
+- `foodSaturationLevel` sits at 20.0 forever, `foodLevel` at 20 forever
+- `saturation > 0 && foodLevel >= 20` is permanently true — the fast-regen branch never yields to the
+  slow one
+- it heals `min(saturation, 6.0) / 6.0` = a flat **1.0 HP per 10 ticks**, indefinitely
+
+Vanilla hits the same rate but pays 6.0 exhaustion per heal (≈1.5 saturation), giving ~13 heals before
+dropping to 1 HP per 4 seconds and starting to burn food. **A player cannot sustain 2 HP/s.**
+
+### It also made the whole food system inert
+
+Because food never falls below 20:
+
+- `EatCommand` refuses with "already at full food" — *always* (`EatCommand.java:49`). Eating is
+  unreachable, and its comment already points at `regenerateOnly` as the cause.
+- `FoodChain`'s fillup check (`getFoodLevel() >= 20`) never fires.
+- `/companion food` and the `meat` command report a permanent 20/20.
+
+Four commands that currently cannot do anything become real as a side effect of this fix.
+
+### The fix
+
+Replace `regenerateOnly` with a companion tick that runs, in order:
+
+1. The exhaustion → saturation → food conversion (the first block of `update()`).
+2. Both regen branches **with** their `addExhaustion(f)` / `addExhaustion(6.0F)` calls.
+3. **Not** the `foodLevel <= 0` starvation-damage branch.
+
+Dropping starvation is the deliberate part. A hungry companion should stop regenerating and wait to be
+fed; it should not die of neglect in a corner while its owner is offline. Healing has a cost, running
+out of food has a consequence, and neither is lethal on its own.
+
+### Required: persist the hunger state
+
+**`CompanionEntity` does not save hunger.** `LivingEntityHungerManager` has `readNbt`/`writeNbt` and
+nothing calls them — food and saturation reset to 20/20 on every world load. Without this, a relog
+refills the bar and erases the cost, which reinstates most of the bug.
+
+Add it to `readCustomDataFromNbt` (`:213`) / `writeCustomDataToNbt` (`:231`) alongside `Inventory` and
+`RosterName`. Absent tag ⇒ the existing 20/20 defaults, so old saves migrate cleanly.
+
+### Open question for implementation
+
+Does the companion reliably feed itself once food can actually drop? `FoodChain` exists and `eat`
+works, but neither has ever run against a non-full bar, so both are effectively untested. Verify before
+shipping — a companion that gets hungry and never eats is a worse bug than one that heals too fast.
+
+## Retreat is health-aware
+
+Today's flee decision (`MobDefenseChain.java:346-359`) **does not consider health at all.** It compares
+gear against crowd size:
+
+```java
+int canDealWith = ceil(armor * 3.6 / 20.0 + damage * 0.8 + shield);
+if (canDealWith < getDangerousnessScore(toDealWithList)) → RunAwayFromHostilesTask(30.0, true)
+```
+
+| Kit | `canDealWith` | Flees from |
+|---|---|---|
+| Bare hands, no armour | 0 | 1+ |
+| Iron sword | 3 | 4+ |
+| Diamond sword | 4 | 5+ |
+| Diamond sword + full iron | 6 | 7+ |
+| …plus shield | 9 | 10+ |
+
+So a companion at 1 HP with a diamond sword stands and fights a zombie, and one at full health with
+bare hands runs from a zombie. The only health check anywhere in the chain is `getHealth() <= 10.0F` at
+`:281`, which gates *projectile dodging and cover walls* — not disengaging — and is skipped entirely if
+it carries a shield.
+
+This was written for a bot that could stunlock its way out of anything, so it never needed a health
+input. 0.2.6 removed the stunlock.
+
+### Fold health into the existing comparison
+
+Scale the capability number by health fraction, plus a hard floor:
+
+```java
+float frac = entity.getHealth() / entity.getMaxHealth();
+int canDealWith = ceil((armor * 3.6 / 20.0 + damage * 0.8 + shield) * frac);
+// and, regardless of gear:
+if (frac < 0.25f) → flee
+```
+
+### Re-engagement is not a component
+
+**Deliberately no state machine, no "return to the fight" task, no memory of what it fled from.** The
+same evaluation runs every tick. A fleeing companion heals as it goes; if a mob follows and the
+companion is healthy enough that its gear says it can win, it turns and fights, exactly as it would
+have on first contact. If it's still hurt, it keeps running. The behaviour people expect falls out of
+one health-aware check rather than being built.
+
+One implementation caveat: right at the threshold this can oscillate — flee, heal one tick's worth,
+engage, take a hit, flee. A small dead band on the health term (or holding the decision for ~20 ticks
+once made) fixes it. That's a detail inside the check, not a second system.
+
+### Letting the LLM override the run instinct
+
+Worth having, and worth being careful about where it sits.
+
+**The cornered case should be deterministic, not a judgement call.** "It's fleeing but making no
+progress" is directly detectable — if `RunAwayFromHostilesTask` fails to path or the companion's
+distance from the nearest hostile hasn't improved in ~40 ticks, stop fleeing and fight. That's instant
+and reliable. An LLM round trip is seconds; a cornered companion is dead before the reply lands. Don't
+put a network call on the critical path of a fight.
+
+**What the LLM should own is pre-commitment, not reaction.** The model can't react at tick speed, but it
+can decide *ahead of time* that this fight is worth not running from — holding a doorway while the
+owner escapes, defending something that matters, buying time. Two seams for that:
+
+- **Stance.** `GUARD`, when it exists, means "hold this ground" — that's the declarative version of the
+  same instruction, and it's why the two threads in this release belong together.
+- **A short-lived override command.** Something like `stand_ground [seconds]`, defaulting to ~30s and
+  expiring on its own, that suppresses the flee branch while active. Expiry matters: a permanent
+  override is how a companion ends up dying for a fight nobody remembers starting.
+
+Surface the flee decision to the model through `gameDebugMessages` when it fires, so it knows it ran
+and why. That's context for its *next* decision, not a prompt for an in-fight one.
+
 ## Expected effect
 
 - Prompt shrinks by roughly a third in `ESCORT`/`PARKED` (13–17 commands advertised instead of 24), on
   **every** call, forever.
+- Healing costs food, so a fight has a lasting cost and `eat`/`food`/`meat`/`FoodChain` do something for
+  the first time.
+- A hurt companion runs; a healthy one fights; neither needs a re-engagement system to do it.
 - A companion in `ESCORT` structurally cannot dig, farm, or build. The house-demolition failure mode
   becomes unreachable rather than unlikely — *for companions in `ESCORT`*. `WORK` and `FREE` still need
   0.2.8.
