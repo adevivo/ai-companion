@@ -198,6 +198,17 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_DEFENSEBRAVERY", "2.0"));
 
     /**
+     * Whether the companion puts on better armour from its own inventory without being told.
+     *
+     * <p>On by default. Nothing else does this — armour handed to a companion sat in its pack while it
+     * kept fighting unprotected, and there was no message to say so. Compares defence, toughness and
+     * Protection, so it will not swap a good piece for a worse one.
+     */
+    public static volatile boolean autoEquipArmor =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.autoEquipArmor",
+                    "AICOMPANION_BEHAVIOR_AUTOEQUIPARMOR", "true"));
+
+    /**
      * Whether the companion walks over to pick up food lying on the ground near it.
      *
      * <p>On by default. A companion only collects what it physically stands on, and mob drops scatter

@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.65. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.66. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -118,6 +118,19 @@ again once they're fine. `/companion hud` cycles that to always-on, then off ent
 Works at any distance — it rides the same signal as the locator bar, so a companion off working across
 the map still reports in. A row greys out and marks itself if it's gone quiet or is in another
 dimension, rather than silently showing you a stale reading.
+
+### It wears the armour you give it
+
+Hand a companion a full set of diamond and it used to carry it around and keep fighting in its shirt.
+Armour was only ever put on if you asked for it by name, and nothing said otherwise — the set just sat
+in the pack.
+
+It now puts on anything better than what it's wearing, checking about once a second. Defence, toughness
+and Protection all count, so it won't swap a good piece for a worse one, and whatever comes off goes
+back into the pack rather than being lost. Durability is ignored on purpose: a nearly-broken diamond
+helmet protects exactly as well as a fresh one right up until it breaks.
+
+Turn it off with `behavior.autoEquipArmor` if you'd rather decide yourself.
 
 ### It runs when it's hurt, not when its gear looks weak
 
