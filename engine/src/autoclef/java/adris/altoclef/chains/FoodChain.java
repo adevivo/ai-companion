@@ -140,6 +140,31 @@ public class FoodChain extends SingleTaskChain {
       return this.isTryingToEat;
    }
 
+   /**
+    * Always active, so {@link #getPriority} actually runs.
+    *
+    * <p><b>This chain had never executed a single time.</b> {@code TaskRunner.tick} only asks a chain
+    * for its priority when {@code isActive()} says yes, and the inherited
+    * {@code SingleTaskChain.isActive()} answers {@code mainTask != null}. Every scrap of eating logic —
+    * scoring the inventory, {@code needsToEat}, {@code startEat} — lives inside {@code getPriority()},
+    * which also ends by calling {@code setTask(null)}. So the chain needed a task to be asked, and
+    * being asked was the only thing that could have given it one: a closed loop it could never enter.
+    *
+    * <p>Every other chain doing per-tick work in {@code getPriority} — mob defence, unstuck, MLG,
+    * world survival, pre-equip — returns true here. {@code FoodChain} was the one that did not, and it
+    * silently disabled automatic eating for the entire life of the mod. It also kept the static
+    * {@code hasFood} permanently false, which is why {@code needsToEat()} answered "no" to outside
+    * callers like {@code MobDefenseChain} as well.
+    *
+    * <p>Being always active is not the same as always winning: {@code getPriority} still returns
+    * {@code NEGATIVE_INFINITY} in every case except needing to go and collect food, so it costs one
+    * cheap evaluation a tick and never preempts anything. Exactly how {@code PreEquipItemChain} works.
+    */
+   @Override
+   public boolean isActive() {
+      return true;
+   }
+
    @Override
    public float getPriority() {
       if (this.controller == null) {

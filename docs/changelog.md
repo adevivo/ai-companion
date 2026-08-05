@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.62. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.63. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -33,8 +33,11 @@ hidden by the one before it:
 
 - **A meal gave nothing back.** Filling a hunger bar is something only players do, and a companion
   isn't one — so every item eaten was destroyed for no benefit.
-- **Feeding itself never happened.** Automatic eating worked by pretending to right-click, and that
-  route is broken for a companion in a way that fails silently. It had never fed itself once.
+- **The part of the mod that decides when to eat had never once run.** It was only ever consulted when
+  it already had a job on, and the only thing that could give it a job was being consulted — a circle
+  it could never get inside. Everything to do with feeding itself sat behind that.
+- **Feeding itself never happened.** Automatic eating also worked by pretending to right-click, and
+  that route is broken for a companion in a way that fails silently.
 - **`eat` always refused.** With food pinned at 20/20 there was never a reason to eat, so the command
   answered "already full" every time it was asked.
 
