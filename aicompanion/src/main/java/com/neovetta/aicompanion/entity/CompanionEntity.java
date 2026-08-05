@@ -46,6 +46,7 @@ import net.minecraft.util.Arm;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.Vec3i;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
@@ -263,6 +264,53 @@ public class CompanionEntity extends LivingEntity
     }
 
     /** Consecutive AI updates that ended in an exception. Reset by any tick that completes. */
+    /** Last tick's position, for charging movement exhaustion. Null until the first tick. */
+    private Vec3d lastExhaustionPos;
+    /** Whether it was airborne last tick, so a jump is charged once rather than every airborne tick. */
+    private boolean wasOnGroundForExhaustion = true;
+
+    /**
+     * Charge exhaustion for moving about, the way {@code PlayerEntity#updateStatistics} does.
+     *
+     * <p>Without this a companion is never hungry. Healing was the only thing in the whole mod that
+     * ever called {@code addExhaustion}, so one that stayed unhurt could cross the world, mine out a
+     * hillside and win a string of fights for free — a playtest showed saturation pinned at exactly
+     * 10.0 across eight minutes of hard work, which is also why automatic eating had never once had a
+     * reason to fire.
+     *
+     * <p>Vanilla numbers, and vanilla's odd shape: ordinary walking is free, and only sprinting,
+     * swimming and jumping actually cost anything. Baritone sprints and jumps constantly, so this is
+     * the difference between hunger being a real resource and being decorative.
+     */
+    private void tickExhaustion() {
+        Vec3d now = this.getPos();
+        if (this.lastExhaustionPos != null) {
+            double dx = now.x - this.lastExhaustionPos.x;
+            double dy = now.y - this.lastExhaustionPos.y;
+            double dz = now.z - this.lastExhaustionPos.z;
+            // Centimetres, as vanilla measures it, so the per-metre rates below read the same as
+            // PlayerEntity's.
+            int cm = Math.round(MathHelper.sqrt((float) (dx * dx + dy * dy + dz * dz)) * 100.0f);
+            if (cm > 0) {
+                if (this.isSwimming()) {
+                    this.hungerManager.addExhaustion(0.01f * cm * 0.01f);
+                } else if (this.isSubmergedInWater() || this.isTouchingWater()) {
+                    this.hungerManager.addExhaustion(0.01f * cm * 0.01f);
+                } else if (this.isOnGround() && this.isSprinting()) {
+                    this.hungerManager.addExhaustion(0.1f * cm * 0.01f);
+                }
+            }
+        }
+        this.lastExhaustionPos = now;
+
+        // Charge the take-off, not the flight: an airborne tick is not a fresh jump.
+        boolean onGround = this.isOnGround();
+        if (this.wasOnGroundForExhaustion && !onGround && this.getVelocity().y > 0.0) {
+            this.hungerManager.addExhaustion(this.isSprinting() ? 0.2f : 0.05f);
+        }
+        this.wasOnGroundForExhaustion = onGround;
+    }
+
     private int aiFailures;
     /** Set once the AI has failed too many times in a row; cleared by `/companion reload`. */
     private boolean aiDisabled;
@@ -364,6 +412,9 @@ public class CompanionEntity extends LivingEntity
         super.tick();
         this.tickHandSwing();
         if (!this.getWorld().isClient) {
+            // Order matters: bank this tick's exertion before the hunger manager converts exhaustion
+            // into saturation and food, so effort is paid for in the same tick it happens.
+            tickExhaustion();
             // Every tick, not age-gated: the regen timer counts ticks. Outside the brain gate too,
             // so a companion with no controller attached still heals — and still gets hungry doing it.
             this.hungerManager.tickCompanion(this);
@@ -794,6 +845,8 @@ public class CompanionEntity extends LivingEntity
     // --- Combat: LivingEntity has no attack of its own ---
     @Override
     public boolean tryAttack(Entity target) {
+        // Swinging costs the same 0.1 exhaustion it costs a player. See tickExhaustion().
+        this.hungerManager.addExhaustion(0.1f);
         // Read the cooldown before resetting it: an attack landed mid-recharge does reduced damage,
         // exactly like a player spam-clicking. Without this the companion out-DPSes its own gear.
         float charge = this.getAttackCooldownProgress(0.5F);

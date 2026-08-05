@@ -63,6 +63,12 @@ and correctly: poison does affect them.
 It still won't go foraging on its own — `food` remains something you ask for. That's deliberate for
 now; a companion that wanders off hunting on its own initiative is a bigger change than this one.
 
+**Effort makes them hungry, not just injury.** Healing was the only thing that cost a companion
+anything, which meant one that stayed unhurt could cross the world, mine out a hillside and win a run
+of fights entirely for free — a test run had saturation sitting at exactly the same number through
+eight minutes of hard work. Sprinting, swimming, jumping and swinging a weapon now cost what they cost
+you. Plain walking is still free, same as it is for you.
+
 **A hungry companion stops healing and waits. It will not starve to death.** Running out of food has a
 real consequence without turning "you went to bed" into a corpse in the morning.
 
@@ -72,7 +78,7 @@ top your companions up.
 
 ### A readout for how they're doing
 
-New panel in the top-left corner, one line per companion:
+New panel in the top-right corner, one line per companion:
 
 ```
   Ava    ██████████ 15   ██████████ 17

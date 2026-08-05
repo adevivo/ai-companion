@@ -14,16 +14,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Compact health/hunger panel for every companion reporting in, drawn top-left.
+ * Compact health/hunger panel for every companion reporting in, drawn top-right.
  *
  * <p>Fed by the same {@link com.neovetta.aicompanion.AiCompanion#RADAR_UPDATE} snapshot the radar uses,
  * so it works past entity-tracking range and costs no extra traffic. Same threading contract as
  * {@link CompanionRadarHud}: written from netty, read on the render thread, each snapshot immutable and
  * swapped in whole so a reader sees one version or the other and never a mix.
  *
- * <p>Top-left is deliberate. The player's own health and hunger flank the hotbar and the radar sits
- * just above it, so anything bottom-aligned would either collide or push those around; the top-left
- * corner is empty in vanilla except for the F3 overlay, which is modal anyway.
+ * <p>Top-right is deliberate. The player's own health and hunger flank the hotbar and the radar sits
+ * just above it, so anything bottom-aligned would collide; the top-left corner is taken by the token
+ * HUD, which this was landing underneath. Top-right is empty in vanilla apart from status effect icons,
+ * which sit lower and are transient.
  *
  * <p>Rows are one line each so the panel scales with the roster instead of with the screen — the thing
  * that ruled out mirroring vanilla's heart and drumstick rows, which run ~180px per companion.
@@ -170,7 +171,15 @@ public final class CompanionStatusHud {
         }
         nameWidth = Math.min(nameWidth, NAME_MAX_WIDTH);
 
-        int healthBarX = MARGIN_X + nameWidth + GAP;
+        // Right-aligned: the token HUD owns the top-left corner (PANEL_X/Y = 4) and this was landing
+        // underneath it. Lay the columns out left-to-right as before, then shift the whole block so its
+        // right edge sits a margin in from the screen edge — that way the bars stay aligned with each
+        // other however long the names are, instead of ragged against the right edge.
+        int panelWidth = nameWidth + GAP + BAR_WIDTH + GAP + NUMBER_WIDTH + GAP
+                + BAR_WIDTH + GAP + NUMBER_WIDTH;
+        int panelLeft = ctx.getScaledWindowWidth() - MARGIN_X - panelWidth;
+
+        int healthBarX = panelLeft + nameWidth + GAP;
         int healthNumX = healthBarX + BAR_WIDTH + GAP;
         int foodBarX = healthNumX + NUMBER_WIDTH + GAP;
         int foodNumX = foodBarX + BAR_WIDTH + GAP;
@@ -178,7 +187,7 @@ public final class CompanionStatusHud {
 
         // One backing plate behind the whole panel rather than per row — cheaper, and it reads as a
         // single element instead of a stack of unrelated strips.
-        ctx.fill(MARGIN_X - 3, MARGIN_Y - 3, panelRight + 2,
+        ctx.fill(panelLeft - 3, MARGIN_Y - 3, panelRight + 2,
                 MARGIN_Y + rows.size() * ROW_HEIGHT, COLOR_TRACK);
 
         int y = MARGIN_Y;
@@ -192,7 +201,7 @@ public final class CompanionStatusHud {
             while (tr.getWidth(name) > NAME_MAX_WIDTH && name.length() > 1) {
                 name = name.substring(0, name.length() - 1);
             }
-            ctx.drawShadowedText(tr, Text.literal(name), MARGIN_X, y, textColor);
+            ctx.drawShadowedText(tr, Text.literal(name), panelLeft, y, textColor);
 
             int healthColor = r.healthFraction() > 0.6f ? COLOR_HEALTH_OK
                     : r.healthFraction() > 0.3f ? COLOR_HEALTH_MID : COLOR_HEALTH_LOW;
@@ -212,10 +221,12 @@ public final class CompanionStatusHud {
             }
             ctx.drawShadowedText(tr, Text.literal(String.valueOf(snap.food())), foodNumX, y, textColor);
 
+            // Marker to the left of the name, not past the right edge — that would hang off screen
+            // now the panel is right-aligned.
             if (r.crossDim()) {
-                ctx.drawShadowedText(tr, Text.literal("↗"), panelRight + 1, y, COLOR_TEXT_DIM);
+                ctx.drawShadowedText(tr, Text.literal("↗"), panelLeft - 10, y, COLOR_TEXT_DIM);
             } else if (r.stale()) {
-                ctx.drawShadowedText(tr, Text.literal("?"), panelRight + 1, y, COLOR_TEXT_DIM);
+                ctx.drawShadowedText(tr, Text.literal("?"), panelLeft - 10, y, COLOR_TEXT_DIM);
             }
 
             y += ROW_HEIGHT;
