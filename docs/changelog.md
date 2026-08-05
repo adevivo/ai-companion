@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.59. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.60. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -38,9 +38,16 @@ hidden by the one before it:
 - **`eat` always refused.** With food pinned at 20/20 there was never a reason to eat, so the command
   answered "already full" every time it was asked.
 
-All three are fixed. A companion now eats by itself when it gets hungry — visibly, over the normal few
-seconds, with the sound and the crumbs — and keeps going until it's full rather than taking one bite.
-Asking it to `eat` does the same thing in one go instead of once per mouthful.
+All three are fixed. A companion now eats by itself — visibly, over the normal few seconds, with the
+sound and the crumbs — and keeps going until it's full rather than taking one bite. Asking it to `eat`
+does the same thing in one go instead of once per mouthful.
+
+**It tops up while it's safe, rather than waiting until it's desperate.** The old rules only counted a
+companion as hungry once it was badly hurt or nearly starving — which are precisely the moments it
+can't eat, because a fight pulls its weapon back into its hand and interrupts every mouthful. Watching
+it stand at full health with food to spare and a pack full of meat, then walk into a fight and die
+still holding it, made the problem plain: it could only ever try when it was already too late. Now it
+eats between fights, and it won't try during one.
 
 **Rotten flesh is good food for a companion**, and it now knows that. It never made them ill in the
 first place — the nausea is something the game only applies to players — but the companion had

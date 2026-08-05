@@ -1,6 +1,7 @@
 package adris.altoclef.chains;
 
 import adris.altoclef.AltoClefController;
+import adris.altoclef.Debug;
 import adris.altoclef.Settings;
 import adris.altoclef.multiversion.FoodComponentWrapper;
 import adris.altoclef.multiversion.item.ItemVer;
@@ -70,6 +71,11 @@ public class FoodChain extends SingleTaskChain {
       // restart the use timer forever and it would chew without ever swallowing.
       if (entity != null && !entity.isUsingItem() && entity.getMainHandItem().getItem() == food) {
          entity.startUsingItem(InteractionHand.MAIN_HAND);
+         // Traceable on purpose: this chain was silent, so a playtest could show a companion starving
+         // beside a full pack with no way to tell whether it had tried to eat and failed or never
+         // tried at all. Internal log only — it must not reach chat or the model's context.
+         Debug.logInternal("FoodChain: started eating " + food + " (food "
+               + controller.getBaritone().getEntityContext().hungerManager().getFoodLevel() + "/20)");
       }
    }
 
@@ -128,7 +134,13 @@ public class FoodChain extends SingleTaskChain {
                   this.requestFillup = false;
                }
 
-               if (hasFood && (this.needsToEat() || this.requestFillup) && this.cachedPerfectFood.isPresent()) {
+               // Never eat while something is hunting it. Not a policy choice so much as an admission:
+               // the defence chain re-equips a weapon every tick during a fight, so the food never
+               // stays in hand long enough for a bite to finish, and trying anyway just thrashes the
+               // hotbar between sword and snack. Being topped up beforehand is what actually helps,
+               // which is what the new branch in needsToEat() is for.
+               boolean threatened = !this.controller.getEntityTracker().getHostiles().isEmpty();
+               if (!threatened && hasFood && (this.needsToEat() || this.requestFillup) && this.cachedPerfectFood.isPresent()) {
                   this.startEat(this.controller, this.cachedPerfectFood.get());
                } else {
                   this.stopEat(this.controller);
@@ -189,6 +201,23 @@ public class FoodChain extends SingleTaskChain {
             Item best = this.cachedPerfectFood.get();
             int fills = Optional.ofNullable(ItemVer.getFoodComponent(best)).map(FoodComponentWrapper::getHunger).orElse(-1);
             return fills > 0 && fills <= need;
+         } else if (this.cachedPerfectFood.isPresent()) {
+            // Top up whenever it is worth doing, rather than only once things are already bad.
+            //
+            // Every branch above triggers on being hurt or nearly starving — and those are exactly the
+            // moments a companion cannot eat, because combat re-equips its weapon every tick and
+            // interrupts the meal. A playtest caught the consequence exactly: it stood at full health
+            // with 17/20 food and four rotten flesh in its pack for forty-nine seconds without eating,
+            // then went into a fight, got to 8 health, finally qualified as "hungry enough", could not
+            // eat because it was being shot at, and died. It could only ever try when it could not
+            // succeed.
+            //
+            // A little waste is fine — a companion is not playing for food efficiency, and being full
+            // before the fight starts is worth more than the last point of a rotten flesh.
+            int need = 20 - foodLevel;
+            Item best = this.cachedPerfectFood.get();
+            int fills = Optional.ofNullable(ItemVer.getFoodComponent(best)).map(FoodComponentWrapper::getHunger).orElse(-1);
+            return fills > 0 && fills - need <= 2;
          } else {
             return false;
          }
