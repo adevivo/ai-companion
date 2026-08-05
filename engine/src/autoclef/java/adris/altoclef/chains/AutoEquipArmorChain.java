@@ -9,11 +9,12 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ArmorItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
 
 /**
- * Wear the best armour in the pack, without being asked.
+ * Wear the best armour in the pack, and keep a shield in the offhand, without being asked.
  *
  * <p>Nothing did this. {@code EquipArmorTask} exists but is only ever reached through the {@code equip}
  * command or the speedrun tasks, so a companion handed a full set of diamond would carry it around and
@@ -29,7 +30,6 @@ import net.minecraft.world.item.enchantment.Enchantments;
  */
 public class AutoEquipArmorChain extends SingleTaskChain {
 
-   /** The four slots worth managing. The offhand belongs to the shield logic in {@code MobDefenseChain}. */
    private static final EquipmentSlot[] ARMOR_SLOTS = {
       EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET
    };
@@ -67,7 +67,37 @@ public class AutoEquipArmorChain extends SingleTaskChain {
       }
       this.lastCheckMs = now;
       this.equipBestArmor(this.controller);
+      this.equipShield(this.controller);
       return Float.NEGATIVE_INFINITY;
+   }
+
+   /**
+    * Keep a carried shield in the offhand.
+    *
+    * <p>Nothing did this either. The shield branches in {@code MobDefenseChain} and {@code KillAura}
+    * each call {@code forceEquipItemToOffhand} themselves, but only from inside narrow situational
+    * checks — a creeper already swelling, an arrow already in flight, a mob already in melee range. A
+    * shield you start equipping once the arrow has been fired is a shield you are not blocking with.
+    * Carrying it in the offhand permanently is what a player does, and it costs the companion nothing:
+    * the offhand is otherwise unused.
+    *
+    * <p>Only ever fills an empty offhand. If something else is in there — a totem, a block someone
+    * handed over — that was a deliberate choice by whoever put it there, and quietly overwriting it
+    * would be worse than going without the shield.
+    */
+   private void equipShield(AltoClefController mod) {
+      if (!BehaviorConfig.defenseUseShield) {
+         return;
+      }
+      LivingEntity self = mod.getEntity();
+      if (self == null || !self.getItemBySlot(EquipmentSlot.OFFHAND).isEmpty()) {
+         return;
+      }
+      if (!mod.getItemStorage().hasItem(Items.SHIELD)) {
+         return;
+      }
+      mod.getSlotHandler().forceEquipItemToOffhand(Items.SHIELD);
+      mod.log("Shield in hand.");
    }
 
    /** Put on anything in the pack that beats what is currently worn, slot by slot. */

@@ -18,6 +18,7 @@ import adris.altoclef.util.helpers.BaritoneHelper;
 import adris.altoclef.util.helpers.EntityHelper;
 import adris.altoclef.util.helpers.LookHelper;
 import adris.altoclef.util.helpers.ProjectileHelper;
+import adris.altoclef.util.helpers.ShieldHelper;
 import adris.altoclef.util.helpers.StorageHelper;
 import adris.altoclef.util.helpers.WorldHelper;
 import adris.altoclef.util.slots.PlayerSlot;
@@ -112,27 +113,27 @@ public class MobDefenseChain extends SingleTaskChain {
       return fuse <= 0.001F ? distance : distance * 0.2;
    }
 
+   /**
+    * Stop and block.
+    *
+    * <p>Only commits — pausing pathing, holding sneak, claiming to be shielding — if the shield
+    * actually went up. It used to commit unconditionally, which meant that on every tick where the
+    * raise silently failed (which, until the offhand and right-click bugs were fixed, was every tick)
+    * the companion stood rooted and sneaking in front of whatever was hitting it, taking the damage
+    * with none of the protection.
+    *
+    * <p>The old body also shuffled food out of the main hand first, because a held right-click would
+    * otherwise have eaten it instead of blocking. Driving the offhand explicitly makes the hand
+    * unambiguous, so that no longer applies — and it was inventory churn on every tick of a fight.
+    */
    private static void startShielding(AltoClefController mod) {
+      if (!ShieldHelper.raiseShield(mod)) {
+         return;
+      }
       shielding = true;
       ((PathingBehavior)mod.getBaritone().getPathingBehavior()).requestPause();
       mod.getExtraBaritoneSettings().setInteractionPaused(true);
-      if (!mod.getPlayer().isBlocking()) {
-         ItemStack handItem = StorageHelper.getItemStackInSlot(PlayerSlot.getEquipSlot(mod.getInventory()));
-         if (ItemVer.isFood(handItem)) {
-            for (ItemStack spaceSlot : mod.getItemStorage().getItemStacksPlayerInventory(false)) {
-               if (spaceSlot.isEmpty()) {
-                  mod.getSlotHandler().clickSlot(PlayerSlot.getEquipSlot(mod.getInventory()), 0, ClickType.QUICK_MOVE);
-                  return;
-               }
-            }
-
-            Optional<Slot> garbage = StorageHelper.getGarbageSlot(mod);
-            garbage.ifPresent(slot -> mod.getSlotHandler().forceEquipItem(StorageHelper.getItemStackInSlot(slot).getItem()));
-         }
-      }
-
       mod.getInputControls().hold(Input.SNEAK);
-      mod.getInputControls().hold(Input.CLICK_RIGHT);
    }
 
    /** Below this fraction of max health the companion runs regardless of what it is carrying. */
@@ -382,7 +383,7 @@ public class MobDefenseChain extends SingleTaskChain {
          }
 
          mod.getInputControls().release(Input.SNEAK);
-         mod.getInputControls().release(Input.CLICK_RIGHT);
+         ShieldHelper.lowerShield(mod);
          mod.getExtraBaritoneSettings().setInteractionPaused(false);
          shielding = false;
       }

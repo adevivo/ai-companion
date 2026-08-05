@@ -148,9 +148,10 @@ public final class BehaviorConfig {
      *
      * <p>True by default. Gating this to false makes every shield-aware decision behave as though the
      * companion owns no shield at all, which also (correctly) lowers its estimate of what it can take
-     * on. Known gap: shield durability is not yet wired up for a non-player entity, so a raised shield
-     * currently never wears out — see {@code CompanionEntity#damageArmor} for the armour equivalent
-     * that is wired.
+     * on, and stops {@code AutoEquipArmorChain} putting one in the offhand.
+     *
+     * <p>Durability is wired up as of 0.2.7 — see {@code CompanionEntity#damageShield}. Before that a
+     * companion's shield blocked normally but never wore out or broke, which no player's does.
      */
     public static volatile boolean defenseUseShield =
             Boolean.parseBoolean(resolve("aicompanion.behavior.defenseUseShield",

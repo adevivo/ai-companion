@@ -82,14 +82,24 @@ public class SlotHandler {
       }
    }
 
+   /**
+    * Move {@code toEquip} out of the pack and into the offhand, swapping whatever was there back.
+    *
+    * <p>This addressed the wrong slot entirely. {@code LivingEntityInventory.getItem}/{@code setItem}
+    * walk a combined view ordered main(36), armor(4), offhand(1), so index 0 is <em>main slot 0</em>,
+    * not the offhand — index 40 is. The old code read main[0], found a shield somewhere in the pack,
+    * and moved it to main[0]. Nothing ever reached the offhand, so every shield branch in
+    * {@code MobDefenseChain} and {@code KillAura} sat forever at "the offhand is not a shield yet",
+    * re-shuffling the pack each tick and never raising anything.
+    */
    public void forceEquipItemToOffhand(Item toEquip) {
       LivingEntityInventory inventory = ((IInventoryProvider)this.controller.getEntity()).getLivingInventory();
-      ItemStack offhandStack = inventory.getItem(0);
+      ItemStack offhandStack = (ItemStack)inventory.offHand.get(0);
       if (!offhandStack.is(toEquip)) {
          for (int i = 0; i < inventory.main.size(); i++) {
             ItemStack potential = (ItemStack)inventory.main.get(i);
             if (potential.is(toEquip)) {
-               inventory.setItem(0, potential);
+               inventory.offHand.set(0, potential);
                inventory.main.set(i, offhandStack);
                this.registerSlotAction();
                return;

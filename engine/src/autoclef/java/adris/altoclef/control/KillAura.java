@@ -6,6 +6,7 @@ import adris.altoclef.mixins.LivingEntityMixin;
 import adris.altoclef.multiversion.item.ItemVer;
 import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.util.helpers.LookHelper;
+import adris.altoclef.util.helpers.ShieldHelper;
 import adris.altoclef.util.helpers.StlHelper;
 import adris.altoclef.util.helpers.StorageHelper;
 import adris.altoclef.util.helpers.WorldHelper;
@@ -253,30 +254,15 @@ public class KillAura {
       }
    }
 
+   /** Block a melee attacker. Commits only if the shield went up — see {@code MobDefenseChain}'s twin. */
    public void startShielding(AltoClefController mod) {
+      if (!ShieldHelper.raiseShield(mod)) {
+         return;
+      }
       this.shielding = true;
       ((PathingBehavior)mod.getBaritone().getPathingBehavior()).requestPause();
       mod.getExtraBaritoneSettings().setInteractionPaused(true);
-      if (!mod.getPlayer().isBlocking()) {
-         ItemStack handItem = StorageHelper.getItemStackInSlot(PlayerSlot.getEquipSlot(mod.getInventory()));
-         if (ItemVer.isFood(handItem)) {
-            List<ItemStack> spaceSlots = mod.getItemStorage().getItemStacksPlayerInventory(false);
-            if (!spaceSlots.isEmpty()) {
-               for (ItemStack spaceSlot : spaceSlots) {
-                  if (spaceSlot.isEmpty()) {
-                     mod.getSlotHandler().clickSlot(PlayerSlot.getEquipSlot(mod.getInventory()), 0, ClickType.QUICK_MOVE);
-                     return;
-                  }
-               }
-            }
-
-            Optional<Slot> garbage = StorageHelper.getGarbageSlot(mod);
-            garbage.ifPresent(slot -> mod.getSlotHandler().forceEquipItem(StorageHelper.getItemStackInSlot(slot).getItem()));
-         }
-      }
-
       mod.getInputControls().hold(Input.SNEAK);
-      mod.getInputControls().hold(Input.CLICK_RIGHT);
    }
 
    public void stopShielding(AltoClefController mod) {
@@ -291,7 +277,7 @@ public class KillAura {
          }
 
          mod.getInputControls().release(Input.SNEAK);
-         mod.getInputControls().release(Input.CLICK_RIGHT);
+         ShieldHelper.lowerShield(mod);
          mod.getInputControls().release(Input.JUMP);
          mod.getExtraBaritoneSettings().setInteractionPaused(false);
          this.shielding = false;

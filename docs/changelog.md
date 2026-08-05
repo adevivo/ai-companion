@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.66. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.67. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -131,6 +131,35 @@ back into the pack rather than being lost. Durability is ignored on purpose: a n
 helmet protects exactly as well as a fresh one right up until it breaks.
 
 Turn it off with `behavior.autoEquipArmor` if you'd rather decide yourself.
+
+### And it can finally use a shield
+
+A companion has always had the code to raise a shield — against a swelling creeper, against incoming
+arrows, against something in melee range. None of it had ever worked. Give a companion a shield and it
+would keep it in the pack forever and take every hit unblocked, while the mod believed it was blocking.
+
+Three faults, stacked:
+
+- **The shield never reached the offhand.** The routine meant to put it there had an off-by-a-whole-list
+  error and was writing into the first slot of the pack instead. So every shield check sat permanently
+  at "no shield in the offhand yet", shuffling the pack each tick and never getting anywhere.
+- **Raising it did nothing.** Blocking was done by pretending to hold right-click — the same dead route
+  that stopped companions eating, in a second place. It only ever does anything while the companion is
+  looking directly at a block, and even then it fails silently.
+- **It braced for a hit it wasn't blocking.** Whenever raising the shield failed, the companion still
+  stopped moving, crouched, and stood its ground in front of whatever was attacking it. All of the
+  commitment, none of the protection. It now only holds still if the shield is actually up.
+
+All three are fixed, and a carried shield now lives in the offhand permanently rather than being
+scrambled for once the arrow is already in the air. If you've put something else in the offhand, that
+stays — the shield waits.
+
+**Shields wear out now, too.** Blocking worked out to be free: damage was stopped exactly as it is for
+you, but the shield never lost durability and could never break. That's a permanent advantage no player
+has. A companion's shield now takes the same wear yours does, and breaks the same way.
+
+`behavior.defenseUseShield` turns the whole thing off, and correctly makes it fight more cautiously,
+since it knows it's going in without one.
 
 ### It runs when it's hurt, not when its gear looks weak
 

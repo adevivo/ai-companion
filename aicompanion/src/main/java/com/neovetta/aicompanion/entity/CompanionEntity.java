@@ -37,6 +37,7 @@ import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.text.Text;
@@ -933,6 +934,34 @@ public class CompanionEntity extends LivingEntity
         return slot.getType() == EquipmentSlot.Type.ARMOR
                 ? this.inventory.armor.get(slot.getEntitySlotId())
                 : ItemStack.EMPTY;
+    }
+
+    /**
+     * Wear out a shield that blocked a hit.
+     *
+     * <p>{@code LivingEntity.damageShield} is an empty stub — the real implementation lives on
+     * {@code PlayerEntity}, so a companion blocked damage exactly as a player does but its shield never
+     * lost a point of durability and could never break. That is a permanent advantage no player has,
+     * and an unbreakable shield is worth considerably more than the one you handed over.
+     *
+     * <p>Mirrors the vanilla player rule: hits under 3 damage cost nothing, anything above costs
+     * {@code 1 + floor(damage)}.
+     */
+    @Override
+    public void damageShield(float amount) {
+        if (!this.activeItemStack.isOf(Items.SHIELD) || amount < 3.0F) {
+            return;
+        }
+        Hand hand = this.getActiveHand();
+        this.activeItemStack.damage(1 + MathHelper.floor(amount), this,
+                companion -> companion.sendToolBreakStatus(hand));
+        if (this.activeItemStack.isEmpty()) {
+            this.equipStack(hand == Hand.MAIN_HAND ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND,
+                    ItemStack.EMPTY);
+            this.clearActiveItem();
+            this.playSound(SoundEvents.ITEM_SHIELD_BREAK, 0.8F,
+                    0.8F + this.getWorld().getRandom().nextFloat() * 0.4F);
+        }
     }
 
     @Override
