@@ -49,6 +49,8 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3i;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
 
@@ -185,6 +187,27 @@ public class CompanionEntity extends LivingEntity
         if (instance != null) {
             instance.setBaseValue(value);
         }
+    }
+
+    /**
+     * Actually gain food from eating.
+     *
+     * <p>{@code LivingEntity.eatFood} consumes the stack and applies the eat effects but never touches
+     * a food level — filling the bar is a {@code PlayerEntity} override, and a companion is not a
+     * player. Without this, every route to eating (the {@code eat} command, {@code FoodChain}'s
+     * auto-eat, a player right-clicking food into it) destroys the item for nothing.
+     *
+     * <p>It went unnoticed because hunger could never fall: regeneration ran without ever spending
+     * exhaustion, so the bar sat at 20/20 and every caller refused to eat at all. The moment food
+     * started draining, this became the difference between a companion that feeds itself and one that
+     * eats its entire supply one item at a time and stays hungry.
+     */
+    @Override
+    public ItemStack eatFood(World world, ItemStack stack) {
+        this.hungerManager.eat(stack.getItem(), stack);
+        world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ENTITY_PLAYER_BURP,
+                SoundCategory.PLAYERS, 0.5f, world.getRandom().nextFloat() * 0.1f + 0.9f);
+        return super.eatFood(world, stack);
     }
 
     /** This companion's display name, falling back to the default identity's if it somehow has none. */
@@ -342,8 +365,8 @@ public class CompanionEntity extends LivingEntity
         this.tickHandSwing();
         if (!this.getWorld().isClient) {
             // Every tick, not age-gated: the regen timer counts ticks. Outside the brain gate too,
-            // so a companion with no controller attached still heals.
-            this.hungerManager.regenerateOnly(this);
+            // so a companion with no controller attached still heals — and still gets hungry doing it.
+            this.hungerManager.tickCompanion(this);
             maybeSendRadar();
             maybeSendTokens();
             maybeWarnLowHealth();

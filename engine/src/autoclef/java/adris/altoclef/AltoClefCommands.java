@@ -21,6 +21,7 @@ import adris.altoclef.commands.MeatCommand;
 import adris.altoclef.commands.ReloadSettingsCommand;
 import adris.altoclef.commands.ResetMemoryCommand;
 import adris.altoclef.commands.SetAIBridgeEnabledCommand;
+import adris.altoclef.commands.StandGroundCommand;
 import adris.altoclef.commands.StopCommand;
 import adris.altoclef.commands.random.ScanCommand;
 import adris.altoclef.commands.BuildStructureCommand;
@@ -53,6 +54,7 @@ public class AltoClefCommands {
                   new AttackPlayerOrMobCommand(),
                   new SetAIBridgeEnabledCommand(),
                   new FarmCommand(),
-                  new FishCommand());
+                  new FishCommand(),
+                  new StandGroundCommand());
    }
 }

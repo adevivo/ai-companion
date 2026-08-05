@@ -3,8 +3,9 @@
 What ships in which version, and why it's split that way. Companion docs: [PLAN.md](../PLAN.md) is the
 long-term phase architecture; [BUGS.md](../BUGS.md) is the working defect list. This doc is scheduling.
 
-Written to be implementable in a fresh session with no prior context. Current version is `0.2.5`
-(`aicompanion/gradle.properties:4`), MC 1.20.1, Fabric, JDK 17.
+Written to be implementable in a fresh session with no prior context. MC 1.20.1, Fabric, JDK 17.
+**0.2.6 and the survival half of 0.2.7 have shipped** — current version is `0.2.7`
+(`aicompanion/gradle.properties:4`), engine `1.0.57`. What remains in 0.2.7 is the stance system.
 
 ```bash
 JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew build
@@ -45,7 +46,8 @@ The grouping rule used below:
 
 - **0.2.6** — everything that changes combat, plus one standalone safety fix that needs no new
   machinery. One subject, one playtest.
-- **0.2.7** — stances. New subsystem, changes what the companion will agree to do, needs its own
+- **0.2.7** — stances, plus the survival work (healing cost, health-aware retreat) that 0.2.6's combat
+  change made necessary. New subsystem, changes what the companion will agree to do, needs its own
   playtest.
 - **0.2.8** — protections and doors. Grouped because they share one unknown (where Baritone commits a
   block break and a door interaction). One spike serves both.
@@ -511,20 +513,32 @@ Dropping starvation is the deliberate part. A hungry companion should stop regen
 fed; it should not die of neglect in a corner while its owner is offline. Healing has a cost, running
 out of food has a consequence, and neither is lethal on its own.
 
-### Required: persist the hunger state
+### Hunger is deliberately not persisted
 
-**`CompanionEntity` does not save hunger.** `LivingEntityHungerManager` has `readNbt`/`writeNbt` and
-nothing calls them — food and saturation reset to 20/20 on every world load. Without this, a relog
-refills the bar and erases the cost, which reinstates most of the bug.
+**`CompanionEntity` does not save hunger** — `LivingEntityHungerManager` has `readNbt`/`writeNbt` and
+nothing calls them, so food and saturation reset to 20/20 on every world load.
 
-Add it to `readCustomDataFromNbt` (`:213`) / `writeCustomDataToNbt` (`:231`) alongside `Inventory` and
-`RosterName`. Absent tag ⇒ the existing 20/20 defaults, so old saves migrate cleanly.
+**Decided: leave it that way.** What matters is that healing has a cost *within a session*, which is
+where the fight actually happens. Persisting it would let a companion start a session already starving
+through no fault of the owner, which is a worse experience than the exploit it prevents.
 
-### Open question for implementation
+The exploit is real and accepted: quit and rejoin to refill your companions' food. It costs a world
+reload, it's obvious, and anyone doing it deliberately has decided they'd rather not play that part of
+the game. Not worth the failure mode on the other side.
 
-Does the companion reliably feed itself once food can actually drop? `FoodChain` exists and `eat`
-works, but neither has ever run against a non-full bar, so both are effectively untested. Verify before
-shipping — a companion that gets hungry and never eats is a worse bug than one that heals too fast.
+### Shipped — and it found a second bug
+
+`regenerateOnly` became `tickCompanion`, with the exhaustion/food drain restored and the starvation
+branch deliberately left out.
+
+Checking "does the companion reliably feed itself" turned up a real defect: **`CompanionEntity` never
+overrode `eatFood`.** Filling a food bar is a `PlayerEntity` override; `LivingEntity.eatFood` consumes
+the stack and applies the effects but touches no food level. So every route to eating — the `eat`
+command, `FoodChain`'s auto-eat, a player right-clicking food in — destroyed the item for nothing.
+
+It was invisible because hunger could never fall, so nothing ever tried to eat. Shipping the healing
+fix without this would have had companions eat their entire supply one item at a time and stay hungry
+— exactly the failure mode this section warned about. Overridden in `CompanionEntity.eatFood`.
 
 ## Retreat is health-aware
 

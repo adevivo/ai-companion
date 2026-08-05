@@ -28,21 +28,47 @@ public class LivingEntityHungerManager {
    }
 
    /**
-    * Natural health regeneration only — no exhaustion, no hunger drain.
+    * Vanilla hunger and regeneration for a companion — everything {@link #update} does except starving
+    * to death.
     *
-    * <p>{@link #update} is not called anywhere for a companion, so its regeneration has never run:
-    * an injured companion sits at whatever health it was left with forever, while its hunger reads a
-    * permanent 20/20 because nothing consumes it either. This restores the healing half without
-    * turning on the starvation half.
+    * <p>This used to skip {@link #addExhaustion} entirely, on the reasoning that exhaustion drains
+    * saturation and then food, and a companion with no working way to eat would starve. That reasoning
+    * was circular, and the omission was self-defeating: exhaustion is the <em>only</em> thing that
+    * drains saturation, and {@link #update} is never called for a companion. So saturation and food
+    * both sat pinned at 20 forever, the {@code saturation > 0 && foodLevel >= 20} branch was
+    * permanently true, and the companion healed a flat 1.0 HP every 10 ticks — 2 HP a second,
+    * near-death to full in ten seconds, indefinitely, at no cost. Vanilla reaches that rate only in
+    * short bursts, because each heal spends 6.0 exhaustion.
     *
-    * <p>The omission of {@link #addExhaustion} is deliberate and load-bearing. {@code update()} adds
-    * exhaustion on every heal, and exhaustion is precisely what the following tick converts into lost
-    * saturation and then lost food — so calling {@code update()} here would drain hunger as a side
-    * effect of healing, and eventually starve a companion that has no working way to eat.
+    * <p>It also froze the food system solid. Nothing could ever lower {@code foodLevel} below 20, so
+    * {@code EatCommand} refused every time as "already at full food", {@code FoodChain} never
+    * requested a fillup, and the {@code food} and {@code meat} commands reported a permanent 20/20.
+    * Four commands that could not do anything become real once food can actually fall.
+    *
+    * <p><b>Starvation damage is deliberately not included.</b> A hungry companion stops regenerating
+    * and waits to be fed; it does not die of neglect in a corner while its owner is offline. Healing
+    * has a cost and running out of food has a consequence, without either being lethal on its own.
+    *
+    * <p>Hunger is intentionally not persisted — see {@code CompanionEntity}'s NBT methods, which do
+    * not call {@link #readNbt}/{@link #writeNbt}. The cost that matters is the one inside a session.
     *
     * <p>Must be called every tick: the {@code foodTickTimer} thresholds below are tick counts.
     */
-   public void regenerateOnly(LivingEntity entity) {
+   public void tickCompanion(LivingEntity entity) {
+      Difficulty difficulty = entity.level().getDifficulty();
+      this.prevFoodLevel = this.foodLevel;
+      // Exhaustion accrued by healing (and by anything else that calls addExhaustion) is converted here,
+      // one step per tick, exactly as vanilla does it: 4.0 exhaustion costs a point of saturation, and
+      // once saturation is gone it costs a point of food.
+      if (this.exhaustion > 4.0F) {
+         this.exhaustion -= 4.0F;
+         if (this.foodSaturationLevel > 0.0F) {
+            this.foodSaturationLevel = Math.max(this.foodSaturationLevel - 1.0F, 0.0F);
+         } else if (difficulty != Difficulty.PEACEFUL) {
+            this.foodLevel = Math.max(this.foodLevel - 1, 0);
+         }
+      }
+
       if (!entity.level().getGameRules().getBoolean(GameRules.RULE_NATURAL_REGENERATION) || !this.canFoodHeal(entity)) {
          this.foodTickTimer = 0;
          return;
@@ -50,16 +76,21 @@ public class LivingEntityHungerManager {
       if (this.foodSaturationLevel > 0.0F && this.foodLevel >= 20) {
          this.foodTickTimer++;
          if (this.foodTickTimer >= 10) {
-            entity.heal(Math.min(this.foodSaturationLevel, 6.0F) / 6.0F);
+            float f = Math.min(this.foodSaturationLevel, 6.0F);
+            entity.heal(f / 6.0F);
+            this.addExhaustion(f);
             this.foodTickTimer = 0;
          }
       } else if (this.foodLevel >= 18) {
          this.foodTickTimer++;
          if (this.foodTickTimer >= 80) {
             entity.heal(1.0F);
+            this.addExhaustion(6.0F);
             this.foodTickTimer = 0;
          }
       } else {
+         // Below 18 food there is no natural regeneration, same as vanilla. The companion holds at
+         // whatever health it has until somebody feeds it. It does not take starvation damage.
          this.foodTickTimer = 0;
       }
    }

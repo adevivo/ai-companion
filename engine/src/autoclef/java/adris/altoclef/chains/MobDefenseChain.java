@@ -135,6 +135,200 @@ public class MobDefenseChain extends SingleTaskChain {
       mod.getInputControls().hold(Input.CLICK_RIGHT);
    }
 
+   /** Below this fraction of max health the companion runs regardless of what it is carrying. */
+   private static final float FLEE_HEALTH_FLOOR = 0.25F;
+
+   /**
+    * Once a flee/fight decision is made it holds for this many ticks.
+    *
+    * <p>Health is a continuous input, so without this the decision oscillates on the boundary: run,
+    * regenerate half a heart, turn and fight, take a hit, run again. One second of commitment is
+    * enough to break that up and short enough that a companion still reacts to a fight going bad.
+    */
+   private static final int DECISION_HOLD_TICKS = 20;
+
+   /**
+    * How long a flee can make no progress before the companion gives up and fights.
+    *
+    * <p>This is the cornered case: backed into a dead end, walled in, or fenced. Deliberately
+    * deterministic rather than a judgement call routed through the LLM — a round trip is seconds and a
+    * cornered companion is dead well before the reply lands. Two seconds of getting nowhere while
+    * something is hunting you is not ambiguous enough to need an opinion.
+    */
+   private static final int CORNERED_TICKS = 40;
+
+   /** Ticks remaining on the current flee/fight decision. See {@link #DECISION_HOLD_TICKS}. */
+   private int decisionHoldTicks;
+   /** Whether the held decision was "flee". Only meaningful while {@link #decisionHoldTicks} > 0. */
+   private boolean heldDecisionWasFlee;
+   /** Consecutive ticks spent fleeing without getting further from the nearest hostile. */
+   private int noFleeProgressTicks;
+   /** Distance to the nearest hostile last tick, for the cornered check. */
+   private double lastFleeDistance = -1.0;
+   /** Server tick at which a {@code stand_ground} override expires; 0 when none is active. */
+   private long standGroundUntilTick;
+   /** True while a flee was suppressed, so the reason can be reported once rather than every tick. */
+   private boolean reportedStandReason;
+   /** Whether this encounter's cornered fallback has already been reported. */
+   private boolean reportedCornered;
+
+   /**
+    * Suppress the flee branch for {@code seconds}, then let it resume on its own.
+    *
+    * <p>The LLM's seam into fight-or-flight. It cannot react inside a fight — a round trip is seconds
+    * — but it can decide beforehand that this particular fight is worth not running from: holding a
+    * doorway while its owner gets clear, defending something that matters, buying time. That is a
+    * decision about intent, which is what the model is actually good for.
+    *
+    * <p>Expiry is the important half. A permanent override is how a companion ends up dying for a
+    * fight nobody remembers starting, so this always runs out and the survival instinct comes back
+    * without anyone having to remember to switch it off.
+    */
+   public void standGroundFor(AltoClefController mod, double seconds) {
+      long ticks = (long)Math.max(1.0, Math.min(seconds, 300.0) * 20.0);
+      this.standGroundUntilTick = mod.getWorld().getGameTime() + ticks;
+      this.reportedStandReason = false;
+   }
+
+   /** Whether a {@code stand_ground} override is currently suppressing retreat. */
+   public boolean isStandingGround(AltoClefController mod) {
+      return this.standGroundUntilTick > 0L && mod.getWorld().getGameTime() < this.standGroundUntilTick;
+   }
+
+   /** Seconds left on the current {@code stand_ground} override, or 0 if none is active. */
+   public double standGroundSecondsLeft(AltoClefController mod) {
+      if (!this.isStandingGround(mod)) {
+         return 0.0;
+      }
+      return (this.standGroundUntilTick - mod.getWorld().getGameTime()) / 20.0;
+   }
+
+   /**
+    * Whether to run from {@code toDealWithList}, given what the companion is carrying <em>and how hurt
+    * it is</em>.
+    *
+    * <p>The health term is the point. This comparison used to weigh gear against crowd size and never
+    * look at health at all, which meant a companion at one heart with a diamond sword stood and fought
+    * a zombie while a healthy one with bare hands ran from the same zombie. That was survivable only
+    * because combat used to let it stunlock anything it engaged; once that went, nothing was left to
+    * make a hurt companion disengage.
+    *
+    * <p>There is deliberately no re-engagement machinery — no memory of what it fled from, no task to
+    * return to the fight. This runs every tick, the companion heals while it retreats, and if a mob
+    * follows it and it has recovered enough that its gear says it can win, it turns and fights exactly
+    * as it would have on first contact. Still hurt, it keeps running. The behaviour people expect
+    * falls out of one health-aware check rather than being built as a second system.
+    */
+   private boolean shouldFlee(AltoClefController mod, List<LivingEntity> toDealWithList) {
+      LivingEntity self = mod.getPlayer();
+      float max = self.getMaxHealth();
+      float frac = max <= 0.0F ? 1.0F : self.getHealth() / max;
+
+      if (frac < FLEE_HEALTH_FLOOR) {
+         return true;
+      }
+
+      int armor = self.getArmorValue();
+      TieredItem bestWeapon = getBestWeapon(mod);
+      float damage = bestWeapon == null ? 0.0F : bestWeapon.getTier().getAttackDamageBonus() + 1.0F;
+      int shield = hasShield(mod) && bestWeapon != null ? 3 : 0;
+      // Same capability number as before, scaled by how much of itself the companion has left. Full
+      // health behaves exactly as it always did; half health means half the fight it used to pick.
+      int canDealWith = (int)Math.ceil((armor * 3.6 / 20.0 + damage * 0.8 + shield) * frac);
+      return canDealWith < getDangerousnessScore(toDealWithList);
+   }
+
+   /**
+    * {@link #shouldFlee} with the oscillation damper and the cornered escape hatch applied.
+    *
+    * <p>Returns true only if the companion should be running <em>right now</em>. A flee that has made
+    * no headway for {@link #CORNERED_TICKS} converts to a fight, because standing still while
+    * something hits you is strictly worse than swinging back.
+    */
+   private boolean shouldFleeNow(AltoClefController mod, List<LivingEntity> toDealWithList) {
+      if (this.isStandingGround(mod)) {
+         if (!this.reportedStandReason) {
+            this.reportedStandReason = true;
+            mod.logAgentNotice("Standing ground instead of retreating ("
+                  + String.format("%.0f", this.standGroundSecondsLeft(mod)) + "s left).");
+         }
+         return false;
+      }
+
+      if (this.noFleeProgressTicks >= CORNERED_TICKS) {
+         // Once per encounter, not once per re-decision: a companion stuck in a dead end cycles
+         // flee -> cornered -> fight -> flee every few seconds, and each pass would report itself.
+         // Cleared in tickRetreatState when nothing is hunting it any more.
+         if (!this.reportedCornered) {
+            this.reportedCornered = true;
+            mod.logAgentNotice("Cornered — could not get away, so fighting instead.");
+         }
+         this.noFleeProgressTicks = 0;
+         this.decisionHoldTicks = DECISION_HOLD_TICKS;
+         this.heldDecisionWasFlee = false;
+         return false;
+      }
+
+      if (this.decisionHoldTicks > 0) {
+         return this.heldDecisionWasFlee;
+      }
+
+      boolean flee = this.shouldFlee(mod, toDealWithList);
+      // Report the transition, not the state. This re-decides every DECISION_HOLD_TICKS, so logging
+      // whenever `flee` is true would push a line into the model's context once a second for the whole
+      // retreat — enough to crowd out the conversation it is supposed to be having.
+      boolean startedFleeing = flee && !this.heldDecisionWasFlee;
+      this.decisionHoldTicks = DECISION_HOLD_TICKS;
+      this.heldDecisionWasFlee = flee;
+      if (startedFleeing) {
+         float pct = mod.getPlayer().getHealth() / Math.max(1.0F, mod.getPlayer().getMaxHealth()) * 100.0F;
+         mod.logAgentNotice("Retreating from " + toDealWithList.size() + " hostile(s) at "
+               + String.format("%.0f", pct) + "% health.");
+      }
+      return flee;
+   }
+
+   /**
+    * Per-tick bookkeeping for the retreat logic: decision hold, and whether a flee is getting anywhere.
+    *
+    * <p>"Getting anywhere" is measured against the nearest hostile rather than against a destination,
+    * because the destination is a Baritone goal that may legitimately be unreachable. Gaining ground on
+    * the thing chasing you is the only progress that matters.
+    */
+   private void tickRetreatState(AltoClefController mod) {
+      if (this.decisionHoldTicks > 0) {
+         this.decisionHoldTicks--;
+      }
+
+      if (this.runAwayTask == null) {
+         this.noFleeProgressTicks = 0;
+         this.lastFleeDistance = -1.0;
+         return;
+      }
+
+      double nearest = Double.MAX_VALUE;
+      for (LivingEntity hostile : mod.getEntityTracker().getHostiles()) {
+         if (hostile != mod.getEntity()) {
+            nearest = Math.min(nearest, hostile.distanceToSqr(mod.getPlayer()));
+         }
+      }
+      if (nearest == Double.MAX_VALUE) {
+         // Nothing is hunting it any more: the encounter is over, so the next one may report itself.
+         this.noFleeProgressTicks = 0;
+         this.lastFleeDistance = -1.0;
+         this.reportedCornered = false;
+         return;
+      }
+
+      // A quarter of a block squared of slack, so ordinary pathing jitter does not read as progress.
+      if (this.lastFleeDistance >= 0.0 && nearest <= this.lastFleeDistance + 0.25) {
+         this.noFleeProgressTicks++;
+      } else {
+         this.noFleeProgressTicks = 0;
+      }
+      this.lastFleeDistance = nearest;
+   }
+
    private static int getDangerousnessScore(List<LivingEntity> toDealWithList) {
       int numberOfProblematicEntities = toDealWithList.size();
 
@@ -151,6 +345,12 @@ public class MobDefenseChain extends SingleTaskChain {
 
    @Override
    public float getPriority() {
+      // Before the decision, not after: the cornered check and the decision hold both have to be
+      // current when getPriorityInner() asks whether to run.
+      if (this.controller != null && this.controller.getPlayer() != null) {
+         this.tickRetreatState(this.controller);
+      }
+
       this.cachedLastPriority = this.getPriorityInner();
       if (this.getCurrentTask() == null) {
          this.cachedLastPriority = 0.0F;
@@ -344,13 +544,8 @@ public class MobDefenseChain extends SingleTaskChain {
 
                         toDealWithList.sort(Comparator.comparingDouble(entity -> mod.getPlayer().distanceTo(entity)));
                         if (!toDealWithList.isEmpty()) {
-                           TieredItem bestWeapon = getBestWeapon(mod);
-                           int armor = mod.getPlayer().getArmorValue();
-                           float damage = bestWeapon == null ? 0.0F : bestWeapon.getTier().getAttackDamageBonus() + 1.0F;
-                           int shield = hasShield(mod) && bestWeapon != null ? 3 : 0;
-                           int canDealWith = (int)Math.ceil(armor * 3.6 / 20.0 + damage * 0.8 + shield);
                            if (BehaviorConfig.defenseFleeFromHostiles
-                              && canDealWith < getDangerousnessScore(toDealWithList)
+                              && this.shouldFleeNow(mod, toDealWithList)
                               && !this.needsChangeOnAttack) {
                               this.runAwayTask = new RunAwayFromHostilesTask(30.0, true);
                               this.runAwayTask.controller = this.controller;

@@ -5,6 +5,92 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.7 — Healing costs food, and it knows when to run
+
+Bundles PlayerEngine 1.0.57. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
+
+### It was healing faster than anything could hurt it
+
+A companion regenerated a full heart every half second, forever, for free. Near-death to full in ten
+seconds. That is vanilla's *fastest* healing — the burst you get at full food and full saturation — and
+for a companion it was the permanent baseline rather than a brief window.
+
+The cause was a shortcut with a sting in it. Healing was ticked, but the hunger cost of healing wasn't,
+on the reasoning that a companion with no reliable way to eat would starve. Except hunger draining is
+the *only* thing that makes food fall, so food sat at 20/20 forever, which is exactly the condition for
+the fastest regeneration — and, at the same time, the condition under which every attempt to eat is
+refused as unnecessary. The shortcut created the problem it was protecting against.
+
+Healing now costs food, the way it does for you. And with food able to fall, three things that had
+never once done anything start working:
+
+- **Eating.** Previously `eat` always answered "already at full food" — because it always was.
+- **Feeding itself.** It will now go and eat when it gets hungry, and collect food when it runs low.
+- **`/companion food` and the food readouts** report something other than a permanent 20/20.
+
+There was a second half to this we found on the way: a companion that ate gained nothing from it.
+Filling the hunger bar is something only players do, and a companion isn't one — so every meal was
+destroyed for no benefit. Nobody had noticed, because the bar was always full and nothing ever tried.
+Eating feeds it properly now.
+
+**A hungry companion stops healing and waits. It will not starve to death.** Running out of food has a
+real consequence without turning "you went to bed" into a corpse in the morning.
+
+Hunger resets when the world reloads, deliberately. The cost that matters is the one inside a session,
+and starting a session already starving through nobody's fault is worse than the exploit of quitting to
+top your companions up.
+
+### It runs when it's hurt, not when its gear looks weak
+
+The decision to retreat never once looked at how injured it was. It compared its equipment against how
+many things were attacking it — so a companion on its last heart with a diamond sword would stand and
+fight a zombie, while an uninjured one with empty hands would run from the same zombie.
+
+That was survivable while it could stunlock anything it touched. 0.2.6 took that away, and left nothing
+that made a hurt companion disengage.
+
+Injury now counts. The same equipment picks a smaller fight when the companion is half dead, and below
+a quarter health it runs regardless of what it's holding.
+
+There's no "return to battle" behaviour and deliberately so. It heals as it retreats, and the same
+judgement runs continuously — so if something chases it and it has recovered enough to win, it turns
+and fights, exactly as it would have to begin with. Still hurt, it keeps going. What you'd expect
+happens without a system built to make it happen.
+
+### Cornered means fight
+
+Backed into a dead end, walled in, or fenced, a retreat that gets nowhere for two seconds turns into a
+fight. Standing still while something hits you is strictly worse than swinging back.
+
+This is decided instantly and locally rather than by asking the model — a companion that has to think
+about whether to defend itself is dead before it finishes thinking.
+
+### `stand_ground` — telling it a fight is worth it
+
+New command, for the model rather than for you:
+
+```
+stand_ground        # 30 seconds
+stand_ground 60     # up to 300
+```
+
+It suppresses retreat for that long, then expires on its own. This is the part worth handing to the
+companion's judgement: it can't react inside a fight, but it can decide *beforehand* that this one
+matters — holding a doorway while you get clear, protecting something, buying time. Self-preservation
+returns by itself, so a companion can't be talked into dying for a fight everyone has forgotten about.
+
+It's told plainly that it doesn't need this for being cornered; that's already handled.
+
+You'll also see it mention when it retreats and why, so its decisions aren't silent.
+
+**Note:** all of the above only bites if `behavior.defenseFleeFromHostiles` is on, which it still isn't
+by default. Turn it on when you want a companion that runs.
+
+---
+
 ## 0.2.6 — It fights like a person now
 
 Bundles PlayerEngine 1.0.56. Self-contained jar as always — don't install a standalone engine

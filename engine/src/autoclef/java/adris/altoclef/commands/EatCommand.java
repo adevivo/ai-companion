@@ -43,9 +43,10 @@ public class EatCommand extends Command {
         String requested = parser.get(String.class);
         LivingEntityHungerManager hunger = mod.getBaritone().getEntityContext().hungerManager();
 
-        // Refuse rather than waste it. Hunger currently never depletes (only regeneration is ticked,
-        // see LivingEntityHungerManager.regenerateOnly), so eating at a full bar destroys the item
-        // for nothing. Health recovers on its own instead.
+        // Refuse rather than waste it: eating at a full bar destroys the item for nothing, exactly as
+        // it does for a player. Hunger does now deplete — healing spends it, see
+        // LivingEntityHungerManager.tickCompanion — so a full bar means genuinely well fed rather than
+        // the permanent 20/20 this guard used to be papering over.
         if (hunger.getFoodLevel() >= 20) {
             mod.logAgentNotice("Did not eat: already at full food (" + hunger.getFoodLevel()
                     + "/20), so eating would waste the item. Health recovers on its own while well fed.");
