@@ -134,13 +134,17 @@ public class FoodChain extends SingleTaskChain {
                   this.requestFillup = false;
                }
 
-               // Never eat while something is hunting it. Not a policy choice so much as an admission:
-               // the defence chain re-equips a weapon every tick during a fight, so the food never
-               // stays in hand long enough for a bite to finish, and trying anyway just thrashes the
-               // hotbar between sword and snack. Being topped up beforehand is what actually helps,
-               // which is what the new branch in needsToEat() is for.
+               // Under threat, eat only when it is actually needed — not to finish topping off.
+               //
+               // A bite is a 32-tick commitment and the combat paths now yield for it, so a hungry
+               // companion in a fight can snatch a mouthful the way a player does. What it must not do
+               // is chase `requestFillup` to 20/20 mid-fight: from a low bar that is several seconds
+               // of standing still being hit, which is how eating gets you killed rather than saving
+               // you. So during a fight only the urgent thresholds in needsToEat() count, and the
+               // leisurely top-up waits until nothing is hunting it.
                boolean threatened = !this.controller.getEntityTracker().getHostiles().isEmpty();
-               if (!threatened && hasFood && (this.needsToEat() || this.requestFillup) && this.cachedPerfectFood.isPresent()) {
+               boolean wantsToEat = threatened ? this.needsToEat() : (this.needsToEat() || this.requestFillup);
+               if (hasFood && wantsToEat && this.cachedPerfectFood.isPresent()) {
                   this.startEat(this.controller, this.cachedPerfectFood.get());
                } else {
                   this.stopEat(this.controller);
@@ -201,8 +205,12 @@ public class FoodChain extends SingleTaskChain {
             Item best = this.cachedPerfectFood.get();
             int fills = Optional.ofNullable(ItemVer.getFoodComponent(best)).map(FoodComponentWrapper::getHunger).orElse(-1);
             return fills > 0 && fills <= need;
-         } else if (this.cachedPerfectFood.isPresent()) {
+         } else if (this.cachedPerfectFood.isPresent() && this.controller.getEntityTracker().getHostiles().isEmpty()) {
             // Top up whenever it is worth doing, rather than only once things are already bad.
+            //
+            // Only while nothing is hunting it. The branches above are the urgent ones and they stay
+            // available in a fight; this is the leisurely "might as well" case, and stopping to snack
+            // over three points of hunger with a skeleton shooting at you is not that.
             //
             // Every branch above triggers on being hurt or nearly starving — and those are exactly the
             // moments a companion cannot eat, because combat re-equips its weapon every tick and

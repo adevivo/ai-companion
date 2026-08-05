@@ -59,7 +59,21 @@ public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
       }
    }
 
+   /**
+    * Put the best weapon in hand. Returns true when it is busy doing so, which the caller reads as
+    * "not ready to swing this tick".
+    *
+    * <p>Yields while a mouthful is in progress. Eating is a 32-tick commitment during which the food
+    * has to stay in hand, so a combat path re-equipping a sword every tick does not merely thrash the
+    * hotbar — it cancels the bite outright, every time, and the companion never actually eats. Same
+    * stand-down {@code PreEquipItemChain} already does. Returning true here also stops it swinging with
+    * a lamb chop, and the weapon comes back the moment the bite finishes.
+    */
    public static boolean equipWeapon(AltoClefController mod) {
+      if (mod.getFoodChain() != null && mod.getFoodChain().isTryingToEat()) {
+         return true;
+      }
+
       Item bestWeapon = bestWeapon(mod);
       Item equipedWeapon = StorageHelper.getItemStackInSlot(PlayerSlot.getEquipSlot(mod.getInventory())).getItem();
       if (bestWeapon != null && bestWeapon != equipedWeapon) {

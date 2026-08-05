@@ -214,6 +214,14 @@ public class KillAura {
    }
 
    private void attack(AltoClefController mod, Entity entity, boolean equipWeapon) {
+      // Stand down for the length of a mouthful. Eating holds the food in hand for 32 ticks, so
+      // swinging through it re-equips a weapon and cancels the bite before it ever completes — the
+      // reason a companion could sit on a full pack and still starve. A second of not attacking is the
+      // same trade a player makes when they eat mid-fight, and the aura picks straight back up after.
+      if (mod.getFoodChain() != null && mod.getFoodChain().isTryingToEat()) {
+         return;
+      }
+
       if (entity != null) {
          if (!(entity instanceof LargeFireball)) {
             double xAim = entity.getX();

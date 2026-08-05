@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.60. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.61. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -43,11 +43,16 @@ sound and the crumbs — and keeps going until it's full rather than taking one 
 does the same thing in one go instead of once per mouthful.
 
 **It tops up while it's safe, rather than waiting until it's desperate.** The old rules only counted a
-companion as hungry once it was badly hurt or nearly starving — which are precisely the moments it
-can't eat, because a fight pulls its weapon back into its hand and interrupts every mouthful. Watching
-it stand at full health with food to spare and a pack full of meat, then walk into a fight and die
-still holding it, made the problem plain: it could only ever try when it was already too late. Now it
-eats between fights, and it won't try during one.
+companion as hungry once it was badly hurt or nearly starving. Watching one stand at full health with
+food to spare and a pack full of meat for the best part of a minute, then walk into a fight and die
+still holding it, made the problem plain. It now tops up between fights instead.
+
+**And it can eat mid-fight when it needs to.** Eating means holding food for a second and a half, and
+until now anything else that wanted a weapon in hand would cancel the mouthful before it finished — so
+a companion in trouble could reach for food repeatedly and never actually swallow. Combat now pauses
+for the bite and picks straight back up, the way you'd swap, eat, and swap back yourself. It won't
+stand there topping off to full while something is shooting at it, though; in a fight it takes what it
+needs and gets back to work.
 
 **Rotten flesh is good food for a companion**, and it now knows that. It never made them ill in the
 first place — the nausea is something the game only applies to players — but the companion had
