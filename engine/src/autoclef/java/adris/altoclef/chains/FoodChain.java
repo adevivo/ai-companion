@@ -1,7 +1,6 @@
 package adris.altoclef.chains;
 
 import adris.altoclef.AltoClefController;
-import adris.altoclef.Debug;
 import adris.altoclef.Settings;
 import adris.altoclef.multiversion.FoodComponentWrapper;
 import adris.altoclef.multiversion.item.ItemVer;
@@ -22,6 +21,20 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 public class FoodChain extends SingleTaskChain {
+   /**
+    * Real logger, deliberately not {@code Debug.logInternal}.
+    *
+    * <p>{@code logInternal} sits at level 0 and {@code Debug.canLog} rejects level 0 under every
+    * setting, so it emits nothing — a diagnostic added here to answer "did it even try to eat?" was
+    * silently discarded and cost a whole playtest. {@code Debug} documents the same trap on
+    * {@code logMessage}; it is easy to walk straight into twice.
+    */
+   private static final org.apache.logging.log4j.Logger LOGGER =
+         org.apache.logging.log4j.LogManager.getLogger();
+
+   /** Throttle for {@link #logHungerState}, so a stuck companion reports once a second, not 20 times. */
+   private long lastHungerLogMs;
+
    private static FoodChain.FoodChainConfig config;
    private static boolean hasFood;
    private final DragonBreathTracker dragonBreathTracker = new DragonBreathTracker();
@@ -74,9 +87,36 @@ public class FoodChain extends SingleTaskChain {
          // Traceable on purpose: this chain was silent, so a playtest could show a companion starving
          // beside a full pack with no way to tell whether it had tried to eat and failed or never
          // tried at all. Internal log only — it must not reach chat or the model's context.
-         Debug.logInternal("FoodChain: started eating " + food + " (food "
-               + controller.getBaritone().getEntityContext().hungerManager().getFoodLevel() + "/20)");
+         LOGGER.info("FoodChain: started eating {} (food {}/20)", food,
+               controller.getBaritone().getEntityContext().hungerManager().getFoodLevel());
       }
+   }
+
+   /**
+    * Say why a hungry companion is not eating, at most once a second.
+    *
+    * <p>Three playtests could not tell "it did not want to eat" from "it wanted to and could not",
+    * because the only observable was food not moving. Each input to that decision is cheap to print and
+    * exactly one of them is always the answer.
+    */
+   private void logHungerState(boolean threatened, boolean wantsToEat) {
+      LivingEntity entity = this.controller.getEntity();
+      int food = this.controller.getBaritone().getEntityContext().hungerManager().getFoodLevel();
+      boolean hurt = entity != null && entity.getHealth() < entity.getMaxHealth();
+      if (food >= 20 && !hurt) {
+         return; // nothing to explain: full and unhurt
+      }
+      long now = System.currentTimeMillis();
+      if (now - this.lastHungerLogMs < 1000L) {
+         return;
+      }
+      this.lastHungerLogMs = now;
+      LOGGER.info("FoodChain: not eating — food {}/20, health {}, hasFood={}, needsToEat={}, "
+                  + "wantsToEat={}, threatened={}, bestFood={}",
+            food,
+            entity == null ? "?" : String.format("%.1f/%.1f", entity.getHealth(), entity.getMaxHealth()),
+            hasFood, this.needsToEat(), wantsToEat, threatened,
+            this.cachedPerfectFood.map(Object::toString).orElse("none"));
    }
 
    private void stopEat(AltoClefController controller) {
@@ -147,6 +187,7 @@ public class FoodChain extends SingleTaskChain {
                if (hasFood && wantsToEat && this.cachedPerfectFood.isPresent()) {
                   this.startEat(this.controller, this.cachedPerfectFood.get());
                } else {
+                  this.logHungerState(threatened, wantsToEat);
                   this.stopEat(this.controller);
                }
 
