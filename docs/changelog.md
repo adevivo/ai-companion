@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.57. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.58. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -24,17 +24,32 @@ the *only* thing that makes food fall, so food sat at 20/20 forever, which is ex
 the fastest regeneration — and, at the same time, the condition under which every attempt to eat is
 refused as unnecessary. The shortcut created the problem it was protecting against.
 
-Healing now costs food, the way it does for you. And with food able to fall, three things that had
-never once done anything start working:
+Healing now costs food, the way it does for you.
 
-- **Eating.** Previously `eat` always answered "already at full food" — because it always was.
-- **Feeding itself.** It will now go and eat when it gets hungry, and collect food when it runs low.
-- **`/companion food` and the food readouts** report something other than a permanent 20/20.
+### Eating, which turned out to have never worked at all
 
-There was a second half to this we found on the way: a companion that ate gained nothing from it.
-Filling the hunger bar is something only players do, and a companion isn't one — so every meal was
-destroyed for no benefit. Nobody had noticed, because the bar was always full and nothing ever tried.
-Eating feeds it properly now.
+Making food drain revealed that nothing about eating actually functioned. Three separate faults, each
+hidden by the one before it:
+
+- **A meal gave nothing back.** Filling a hunger bar is something only players do, and a companion
+  isn't one — so every item eaten was destroyed for no benefit.
+- **Feeding itself never happened.** Automatic eating worked by pretending to right-click, and that
+  route is broken for a companion in a way that fails silently. It had never fed itself once.
+- **`eat` always refused.** With food pinned at 20/20 there was never a reason to eat, so the command
+  answered "already full" every time it was asked.
+
+All three are fixed. A companion now eats by itself when it gets hungry — visibly, over the normal few
+seconds, with the sound and the crumbs — and keeps going until it's full rather than taking one bite.
+Asking it to `eat` does the same thing in one go instead of once per mouthful.
+
+**Rotten flesh is good food for a companion**, and it now knows that. It never made them ill in the
+first place — the nausea is something the game only applies to players — but the companion had
+inherited a person's instinct to avoid it and treated it as a last resort. Since it's what actually
+drops from the things a companion fights, that made it needlessly fussy. Spider eyes are still avoided,
+and correctly: poison does affect them.
+
+It still won't go foraging on its own — `food` remains something you ask for. That's deliberate for
+now; a companion that wanders off hunting on its own initiative is a bigger change than this one.
 
 **A hungry companion stops healing and waits. It will not starve to death.** Running out of food has a
 real consequence without turning "you went to bed" into a corpse in the morning.

@@ -5,7 +5,7 @@ long-term phase architecture; [BUGS.md](../BUGS.md) is the working defect list. 
 
 Written to be implementable in a fresh session with no prior context. MC 1.20.1, Fabric, JDK 17.
 **0.2.6 and the survival half of 0.2.7 have shipped** — current version is `0.2.7`
-(`aicompanion/gradle.properties:4`), engine `1.0.57`. What remains in 0.2.7 is the stance system.
+(`aicompanion/gradle.properties:4`), engine `1.0.58`. What remains in 0.2.7 is the stance system.
 
 ```bash
 JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew build
@@ -539,6 +539,34 @@ command, `FoodChain`'s auto-eat, a player right-clicking food in — destroyed t
 It was invisible because hunger could never fall, so nothing ever tried to eat. Shipping the healing
 fix without this would have had companions eat their entire supply one item at a time and stay hungry
 — exactly the failure mode this section warned about. Overridden in `CompanionEntity.eatFood`.
+
+### And a third, found in the first playtest
+
+The `eatFood` override was necessary but not sufficient. `FoodChain.startEat` fed itself by forcing
+`Input.CLICK_RIGHT`, which reaches `LivingEntityInteractionManager.interactItem` — and that calls
+`stack.use(world, null, hand)` with a **null player**. Vanilla's `Item.use` dereferences that argument
+on its first instruction for anything edible, so the call threw every time and the surrounding `try`
+swallowed it. **Automatic eating had never once worked.** `EatCommand`'s javadoc had documented this
+exact dead path as the reason it consumes directly; nobody connected it to `FoodChain`.
+
+Fixed by driving `entity.startUsingItem(MAIN_HAND)` directly — skipping the broken `Item.use` entry
+point and handing to the machinery beyond it, which does work and gives the eating animation, sound and
+particles for free, finishing into `finishUsingItem` → `eatFood`.
+
+Two more from the same playtest:
+
+- **`eat` took one bite per invocation**, so topping up cost an LLM round trip per mouthful and the
+  model would often ask again while already full. It now eats until full or out of food.
+- **Rotten flesh was scored `-100`** in `calculateFood`, i.e. never chosen unless nothing else exists.
+  That penalty is correct for a player and meaningless for a companion: vanilla's Hunger effect is
+  gated on `instanceof PlayerEntity` before it adds any exhaustion (verified by disassembling
+  `StatusEffect.applyUpdateEffect`), so it lands and does nothing. Rotten flesh is free food, and it is
+  the food a companion actually finds. Penalty removed; the `eat` help text now says so explicitly.
+  The spider-eye exclusion stays — Poison has no player check and does hurt them.
+
+**Still not automatic:** `CollectFoodTask` never runs, because `minimumFoodAllowed` and
+`foodUnitsToCollect` are both `0` in `Settings`. Left alone deliberately — a companion that wanders off
+foraging on its own initiative is a bigger behavioural change than this release should carry.
 
 ## Retreat is health-aware
 

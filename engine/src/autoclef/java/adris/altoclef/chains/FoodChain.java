@@ -10,11 +10,11 @@ import adris.altoclef.tasksystem.TaskRunner;
 import adris.altoclef.util.ItemTarget;
 import adris.altoclef.util.helpers.ConfigHelper;
 import adris.altoclef.util.helpers.WorldHelper;
-import baritone.api.utils.input.Input;
 import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Tuple;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -38,20 +38,52 @@ public class FoodChain extends SingleTaskChain {
    protected void onTaskFinish(AltoClefController controller) {
    }
 
+   /**
+    * Begin (or continue) a meal.
+    *
+    * <p>This used to force {@code Input.CLICK_RIGHT} and let the interaction manager handle it, and
+    * <b>it had never once fed a companion.</b> {@code LivingEntityInteractionManager.interactItem}
+    * calls {@code stack.use(world, null, hand)} with a null player, and vanilla's {@code Item.use}
+    * dereferences that argument immediately for anything edible — so the call threw on its first
+    * instruction every time and the exception was swallowed by the surrounding try. The same dead path
+    * is why {@code EatCommand} consumes directly against the inventory instead.
+    *
+    * <p>It went unnoticed for as long as it did because hunger could never fall (see
+    * {@code LivingEntityHungerManager.tickCompanion}), so {@code needsToEat} was essentially never
+    * true and nothing ever called this in anger.
+    *
+    * <p>Driving {@code startUsingItem} directly skips the broken {@code Item.use} entry point and
+    * hands over to the machinery on the far side of it, which does work: {@code LivingEntity.tick}
+    * runs the use timer, plays the eating sound and particles, and on completion calls
+    * {@code finishUsingItem} → {@code eatFood}, which {@code CompanionEntity} overrides to actually
+    * fill the bar. So the companion eats over the normal 32 ticks, visibly, rather than food vanishing
+    * out of its pack.
+    */
    private void startEat(AltoClefController controller, Item food) {
       controller.getSlotHandler().forceEquipItem(new ItemTarget(food), true);
-      controller.getBaritone().getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
       controller.getExtraBaritoneSettings().setInteractionPaused(true);
       this.isTryingToEat = true;
       this.requestFillup = true;
+
+      LivingEntity entity = controller.getEntity();
+      // Only kick off a new mouthful when it is not already mid-bite; calling this every tick would
+      // restart the use timer forever and it would chew without ever swallowing.
+      if (entity != null && !entity.isUsingItem() && entity.getMainHandItem().getItem() == food) {
+         entity.startUsingItem(InteractionHand.MAIN_HAND);
+      }
    }
 
    private void stopEat(AltoClefController controller) {
       if (this.isTryingToEat) {
-         controller.getBaritone().getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, false);
          controller.getExtraBaritoneSettings().setInteractionPaused(false);
          this.isTryingToEat = false;
          this.requestFillup = false;
+         LivingEntity entity = controller.getEntity();
+         // Drop a half-finished mouthful rather than leaving the use timer running into whatever the
+         // companion does next — a raised item blocks the swing animation and the shield swap below.
+         if (entity != null && entity.isUsingItem()) {
+            entity.stopUsingItem();
+         }
          if (controller.getItemStorage().hasItem(Items.SHIELD) && !controller.getItemStorage().hasItemInOffhand(controller, Items.SHIELD)) {
             controller.getSlotHandler().forceEquipItemToOffhand(Items.SHIELD);
          }
@@ -184,9 +216,15 @@ public class FoodChain extends SingleTaskChain {
                float gainedHunger = hungerIfEaten - hunger;
                float hungerWasted = food.getHunger() - gainedHunger;
                float score = gainedSaturation * 2.0F - hungerWasted;
-               if (stack.is(Items.ROTTEN_FLESH)) {
-                  score -= 100.0F;
-               }
+               // Rotten flesh used to be penalised by 100 — effectively "never, unless there is
+               // literally nothing else" — because for a player it means a near-certain dose of
+               // Hunger. A companion is a LivingEntity, and vanilla's Hunger effect is gated on
+               // `instanceof PlayerEntity` before it adds any exhaustion, so the effect lands and then
+               // does nothing at all. Rotten flesh is simply free food here, and it is the food a
+               // companion actually finds: skeletons and zombies drop it constantly.
+               //
+               // Spider eyes stay excluded above, and that exclusion is still right — Poison damages
+               // any LivingEntity, with no player check.
 
                if (score > bestFoodScore) {
                   bestFoodScore = score;

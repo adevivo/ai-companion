@@ -29,9 +29,12 @@ public class EatCommand extends Command {
     public EatCommand() throws CommandException {
         super(
             "eat",
-            "Eat one item of food from your inventory immediately, to restore hunger. The item is"
-                + " optional: bare `eat` picks the best food you are carrying, or name one, e.g."
-                + " `eat cooked_mutton`. This does NOT gather food — use `food` for that.",
+            "Eat from your inventory until you are full, to restore hunger. Keeps eating rather than"
+                + " taking one bite, so you do not have to be told again. The item is optional: bare"
+                + " `eat` uses the best food you are carrying, or name one, e.g. `eat cooked_mutton`."
+                + " Rotten flesh is perfectly safe for you — it does not make you ill the way it would"
+                + " a person, so eat it without hesitating. This does NOT gather food — use `food` for"
+                + " that.",
             // Optional, same reasoning as FarmCommand: a bare `eat` is the natural thing to emit, and
             // hard-failing on the missing argument burns a whole LLM round-trip recovering.
             new Arg<>(String.class, "item", null, 0)
@@ -54,8 +57,26 @@ public class EatCommand extends Command {
             return;
         }
 
-        ItemStack chosen = findFood(mod, requested);
-        if (chosen == null) {
+        // Eat until full rather than one bite at a time. One item rarely fills the bar, so a
+        // single-bite `eat` meant the owner (or the model) had to keep asking, burning an LLM round
+        // trip per mouthful — and the model would just as often ask again while already full and get
+        // refused. Topping up in one go is what "eat" plainly means anyway.
+        int eaten = 0;
+        Item lastItem = null;
+        // Bounded: every pass consumes an item, so this cannot spin, but a stack-count ceiling keeps a
+        // pathological inventory from doing thousands of iterations inside one tick.
+        while (hunger.getFoodLevel() < 20 && eaten < 64) {
+            ItemStack chosen = findFood(mod, requested);
+            if (chosen == null) {
+                break;
+            }
+            lastItem = chosen.getItem();
+            hunger.eat(lastItem, chosen);
+            chosen.shrink(1);
+            eaten++;
+        }
+
+        if (eaten == 0) {
             mod.logAgentNotice(requested == null
                     ? "Did not eat: no edible food in inventory. Use `food <n>` to go and collect some."
                     : "Did not eat: no edible '" + requested.strip()
@@ -64,11 +85,14 @@ public class EatCommand extends Command {
             return;
         }
 
-        Item item = chosen.getItem();
-        hunger.eat(item, chosen);
-        chosen.shrink(1);
         mod.getInventory().setChanged();
-        mod.log("Ate " + ItemHelper.stripItemName(item) + " (food now " + hunger.getFoodLevel() + "/20).");
+        String what = ItemHelper.stripItemName(lastItem);
+        String amount = eaten == 1 ? what : eaten + "x " + what;
+        // Say plainly when it stopped short, so the model does not conclude it is full and move on.
+        String outcome = hunger.getFoodLevel() >= 20
+                ? " — full now."
+                : " — still hungry, but that is everything edible I am carrying.";
+        mod.log("Ate " + amount + " (food " + hunger.getFoodLevel() + "/20)" + outcome);
         this.finish();
     }
 
