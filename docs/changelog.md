@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.63. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.64. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -62,6 +62,11 @@ first place — the nausea is something the game only applies to players — but
 inherited a person's instinct to avoid it and treated it as a last resort. Since it's what actually
 drops from the things a companion fights, that made it needlessly fussy. Spider eyes are still avoided,
 and correctly: poison does affect them.
+
+**It eats the moment hunger is what's stopping it healing.** Below 18 food nothing regenerates, so a
+companion sitting just under that line is not peckish — it's stuck at whatever health it has until it
+eats. It now treats that as urgent and eats regardless of how much of the meal goes to waste; three
+points of pork is worth less than four hearts.
 
 **And it understands why it isn't healing.** Below 18 food nothing regenerates at all, so a companion
 that's hurt and hungry sits at the same health indefinitely. It couldn't work out that eating was what

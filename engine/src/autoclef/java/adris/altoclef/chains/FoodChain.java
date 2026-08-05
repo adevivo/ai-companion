@@ -32,6 +32,15 @@ public class FoodChain extends SingleTaskChain {
    private static final org.apache.logging.log4j.Logger LOGGER =
          org.apache.logging.log4j.LogManager.getLogger();
 
+   /**
+    * Food level at or above which natural regeneration happens at all — vanilla's number.
+    *
+    * <p>Worth naming rather than inlining: below this, healing is not slow, it is off. That makes it
+    * the difference between "could do with a snack" and "cannot recover from anything until it eats",
+    * and those two deserve different answers from {@link #needsToEat}.
+    */
+   private static final int REGEN_FOOD_THRESHOLD = 18;
+
    /** Throttle for {@link #logHungerState}, so a stuck companion reports once a second, not 20 times. */
    private long lastHungerLogMs;
 
@@ -259,6 +268,16 @@ public class FoodChain extends SingleTaskChain {
          if (foodLevel >= 20) {
             return false;
          } else if (health <= 10.0F) {
+            return true;
+         } else if (health < player.getMaxHealth() && foodLevel < REGEN_FOOD_THRESHOLD) {
+            // Hurt, and below the level at which anything regenerates at all.
+            //
+            // This is the one case where waste does not matter in the slightest. Under 18 food vanilla
+            // heals nothing whatsoever, so a companion here is not "slightly peckish while recovering"
+            // — it is stuck at whatever health it has, permanently, until it eats. A playtest sat at
+            // 15.7/20 health and 17/20 food doing exactly that: healing had switched itself off, and
+            // the tidy-eating rule below refused a cooked porkchop because 8 restored against 3 needed
+            // looked wasteful. Three points of pork is worth less than four and a half hearts.
             return true;
          } else if (player.isOnFire() || player.hasEffect(MobEffects.WITHER) || health < config.alwaysEatWhenWitherOrFireAndHealthBelow) {
             return true;
