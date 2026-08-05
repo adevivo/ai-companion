@@ -198,6 +198,29 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_DEFENSEBRAVERY", "2.0"));
 
     /**
+     * Whether the companion walks over to pick up food lying on the ground near it.
+     *
+     * <p>On by default. A companion only collects what it physically stands on, and mob drops scatter
+     * several blocks, so without this it can kill a herd of pigs and starve later beside the pork. It
+     * only fetches food, only when nothing is hunting it, only with a free inventory slot, and never in
+     * preference to a job it has been given.
+     */
+    public static volatile boolean scavengeFood =
+            Boolean.parseBoolean(resolve("aicompanion.behavior.scavengeFood",
+                    "AICOMPANION_BEHAVIOR_SCAVENGEFOOD", "true"));
+
+    /**
+     * How far the companion will walk to collect a dropped piece of food, in blocks.
+     *
+     * <p>16 covers the spread of a fight it just had without turning it into a forager that wanders
+     * off after anything edible on the horizon. Raise it if you want a tidier world, lower it to keep
+     * the companion closer to where you left it.
+     */
+    public static volatile double scavengeRadius =
+            Double.parseDouble(resolve("aicompanion.behavior.scavengeRadius",
+                    "AICOMPANION_BEHAVIOR_SCAVENGERADIUS", "16.0"));
+
+    /**
      * Apply {@link #triggerPrefix} to an incoming chat line. Returns the message the model should see
      * (prefix stripped, trimmed), or {@code null} if this message is not addressed to the companion.
      */

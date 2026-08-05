@@ -1,6 +1,7 @@
 package adris.altoclef;
 
 import adris.altoclef.chains.FoodChain;
+import adris.altoclef.chains.ScavengeFoodChain;
 import adris.altoclef.chains.MLGBucketFallChain;
 import adris.altoclef.chains.MobDefenseChain;
 import adris.altoclef.chains.PlayerDefenseChain;
@@ -105,6 +106,9 @@ public class AltoClefController {
       new PreEquipItemChain(this.taskRunner);
       new WorldSurvivalChain(this.taskRunner);
       this.foodChain = new FoodChain(this.taskRunner);
+      // Below UserTaskChain, so picking up dropped food fills the gap after a job rather than
+      // interrupting one. See ScavengeFoodChain.
+      new ScavengeFoodChain(this.taskRunner);
       new PlayerDefenseChain(this.taskRunner);
       this.storageTracker = new ItemStorageTracker(this, this.trackerManager,
             container -> this.containerSubTracker = container);

@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.64. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.65. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -73,6 +73,14 @@ that's hurt and hungry sits at the same health indefinitely. It couldn't work ou
 unblocked it — health and hunger were both in front of it, but not the connection between them. It's
 now told plainly when it isn't healing and what to do about it, so a hurt companion reaches for its own
 food instead of standing there waiting to feel better.
+
+**It picks up food it walks past, and clears up after a kill.** A companion only ever collected what it
+was standing directly on, so anything that landed a step away stayed there — it could clear out a herd
+of pigs and go hungry later beside the pork it earned. It now walks over and collects dropped food
+within 16 blocks. Only food, only once nothing is hunting it, only with a free slot, and never in
+preference to a job you've given it, so the tidying happens when the work is done rather than instead
+of it. Spider eyes are left alone; poison affects them even though rotten flesh doesn't. Turn it off
+with `behavior.scavengeFood`, or change the range with `behavior.scavengeRadius`.
 
 It still won't go foraging on its own — `food` remains something you ask for. That's deliberate for
 now; a companion that wanders off hunting on its own initiative is a bigger change than this one.
