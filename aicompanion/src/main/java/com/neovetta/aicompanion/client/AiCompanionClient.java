@@ -40,7 +40,10 @@ public class AiCompanionClient implements ClientModInitializer {
                     Identifier world = buf.readIdentifier();
                     float health = buf.readFloat();
                     float maxHealth = buf.readFloat();
+                    int food = buf.readVarInt();
+                    float saturation = buf.readFloat();
                     CompanionRadarHud.update(entityId, name, x, y, z, world, health, maxHealth);
+                    CompanionStatusHud.update(entityId, name, world, health, maxHealth, food, saturation);
                 });
 
         // /companion radar → cycle the HUD mode and echo it. Hop to the client thread to touch the player.
@@ -57,16 +60,24 @@ public class AiCompanionClient implements ClientModInitializer {
                     CompanionTokenHud.update(promptTokens, completionTokens, totalTokens, requests);
                 });
 
+        // /companion hud → cycle the status panel and echo it. Client thread, same as the radar toggle.
+        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.STATUS_HUD_TOGGLE,
+                (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::cycleStatusHudAndEcho));
+
         // /companion tokens → flip the usage panel and echo it. Client thread, same as the radar toggle.
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.TOKEN_HUD_TOGGLE,
                 (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::toggleTokenHudAndEcho));
 
         HudRenderCallback.EVENT.register(CompanionRadarHud::render);
+        HudRenderCallback.EVENT.register(CompanionStatusHud::render);
         HudRenderCallback.EVENT.register(CompanionTokenHud::render);
 
         // Radar snapshots are static and keyed by entity id, so they have to go when the world does —
         // otherwise the next world's HUD briefly shows the last one's companions.
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> CompanionRadarHud.clear());
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            CompanionRadarHud.clear();
+            CompanionStatusHud.clear();
+        });
 
         // Client keybind that cycles the same mode. Default unbound to avoid conflicts — the user can
         // assign it in Controls, or just use /companion radar.
@@ -86,6 +97,20 @@ public class AiCompanionClient implements ClientModInitializer {
         var client = net.minecraft.client.MinecraftClient.getInstance();
         if (client.player != null) {
             client.player.sendMessage(Text.literal("Companion token HUD: " + (on ? "ON" : "OFF")), false);
+        }
+    }
+
+    /** Advance the status panel mode and print the new value to the local chat. */
+    private static void cycleStatusHudAndEcho() {
+        CompanionStatusHud.Mode next = CompanionStatusHud.cycleMode();
+        var client = net.minecraft.client.MinecraftClient.getInstance();
+        if (client.player != null) {
+            String hint = switch (next) {
+                case AUTO -> " (shown only when one is hurt or hungry)";
+                case ON -> " (always shown)";
+                case OFF -> " (hidden)";
+            };
+            client.player.sendMessage(Text.literal("Companion status HUD: " + next + hint), false);
         }
     }
 

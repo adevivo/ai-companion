@@ -73,6 +73,7 @@ public final class CompanionCommands {
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
                         .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
                         .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))
+                        .then(CommandManager.literal("hud").executes(ctx -> hud(ctx.getSource())))
                         .then(CommandManager.literal("tokens").executes(ctx -> tokens(ctx.getSource())))
                         .then(CommandManager.literal("skills").executes(ctx -> skills(ctx.getSource()))
                             .then(CommandManager.literal("reset")
@@ -349,6 +350,23 @@ public final class CompanionCommands {
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.RADAR_TOGGLE, PacketByteBufs.empty());
+        return 1;
+    }
+
+    /**
+     * Cycle the caller's companion status panel: AUTO → ON → OFF.
+     *
+     * <p>Same shape as {@link #radar} — the panel and its mode are client state, so this only sends the
+     * empty toggle packet and the client echoes the new value. AUTO is the default and keeps the panel
+     * hidden while every companion is healthy and fed; OFF is the way to be rid of it entirely.
+     */
+    private static int hud(ServerCommandSource source) {
+        ServerPlayerEntity player = source.getPlayer();
+        if (player == null) {
+            source.sendError(Text.literal("/companion hud must be run by a player (it toggles a HUD)."));
+            return 0;
+        }
+        ServerPlayNetworking.send(player, AiCompanion.STATUS_HUD_TOGGLE, PacketByteBufs.empty());
         return 1;
     }
 

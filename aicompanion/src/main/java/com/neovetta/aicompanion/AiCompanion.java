@@ -54,6 +54,13 @@ public class AiCompanion implements ModInitializer {
     public static final Identifier RADAR_TOGGLE = id("radar_toggle");
 
     /**
+     * S2C packet (empty payload): {@code /companion hud} cycles the companion status panel
+     * (AUTO → ON → OFF). Same shape as {@link #RADAR_TOGGLE} — the mode is client state, so the server
+     * only nudges and the client echoes the new value.
+     */
+    public static final Identifier STATUS_HUD_TOGGLE = id("status_hud_toggle");
+
+    /**
      * S2C packet: this session's cumulative LLM token spend, for the usage HUD. Sent every ~20 ticks
      * to the owner only (see {@code CompanionEntity#maybeSendTokens}). Payload: long promptTokens,
      * completionTokens, totalTokens; varint requests. The values are cumulative rather than per-turn

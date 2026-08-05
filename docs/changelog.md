@@ -70,6 +70,27 @@ Hunger resets when the world reloads, deliberately. The cost that matters is the
 and starting a session already starving through nobody's fault is worse than the exploit of quitting to
 top your companions up.
 
+### A readout for how they're doing
+
+New panel in the top-left corner, one line per companion:
+
+```
+  Ava    ██████████ 15   ██████████ 17
+  Rook   ██████████ 20   ████░░░░░░  9
+```
+
+Health on the left, hunger on the right, with the number beside each. The health bar goes green →
+amber → red as it drops. The hunger bar carries a thin lighter line across the top for saturation —
+that's the hidden buffer healing spends before hunger itself moves, so it's the first thing to watch if
+you want to see a fight costing them something.
+
+It stays out of the way by default, appearing only when somebody is hurt or getting hungry and fading
+again once they're fine. `/companion hud` cycles that to always-on, then off entirely, then back.
+
+Works at any distance — it rides the same signal as the locator bar, so a companion off working across
+the map still reports in. A row greys out and marks itself if it's gone quiet or is in another
+dimension, rather than silently showing you a stale reading.
+
 ### It runs when it's hurt, not when its gear looks weak
 
 The decision to retreat never once looked at how injured it was. It compared its equipment against how

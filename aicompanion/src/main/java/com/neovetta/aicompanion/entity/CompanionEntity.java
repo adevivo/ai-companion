@@ -403,6 +403,11 @@ public class CompanionEntity extends LivingEntity
         buf.writeIdentifier(this.getWorld().getRegistryKey().getValue());
         buf.writeFloat(this.getHealth());
         buf.writeFloat(this.getMaxHealth());
+        // Hunger rides the same snapshot rather than getting a channel of its own: it changes on the
+        // same timescale, it is wanted at the same moments, and one packet every 10 ticks is already
+        // being sent. See CompanionStatusHud.
+        buf.writeVarInt(this.hungerManager.getFoodLevel());
+        buf.writeFloat(this.hungerManager.getSaturationLevel());
         ServerPlayNetworking.send(owner, AiCompanion.RADAR_UPDATE, buf);
     }
 
