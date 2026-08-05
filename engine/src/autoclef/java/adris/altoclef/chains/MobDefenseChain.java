@@ -171,6 +171,8 @@ public class MobDefenseChain extends SingleTaskChain {
    private boolean reportedStandReason;
    /** Whether this encounter's cornered fallback has already been reported. */
    private boolean reportedCornered;
+   /** Whether this encounter's retreat has already been reported. */
+   private boolean reportedFleeing;
 
    /**
     * Suppress the flee branch for {@code seconds}, then let it resume on its own.
@@ -232,9 +234,13 @@ public class MobDefenseChain extends SingleTaskChain {
       TieredItem bestWeapon = getBestWeapon(mod);
       float damage = bestWeapon == null ? 0.0F : bestWeapon.getTier().getAttackDamageBonus() + 1.0F;
       int shield = hasShield(mod) && bestWeapon != null ? 3 : 0;
-      // Same capability number as before, scaled by how much of itself the companion has left. Full
-      // health behaves exactly as it always did; half health means half the fight it used to pick.
-      int canDealWith = (int)Math.ceil((armor * 3.6 / 20.0 + damage * 0.8 + shield) * frac);
+      // Gear score plus what the body itself is worth, the whole thing scaled by how much of that body
+      // is left. The bravery term matters: without it the inherited scoring rates an unarmoured
+      // companion with a wooden sword at one hostile, and a playtest had one flee at full health from a
+      // spider and a zombie that it then killed easily the moment being cornered forced it to try.
+      // See BehaviorConfig.defenseBravery.
+      int canDealWith = (int)Math.ceil((armor * 3.6 / 20.0 + damage * 0.8 + shield
+            + BehaviorConfig.defenseBravery) * frac);
       return canDealWith < getDangerousnessScore(toDealWithList);
    }
 
@@ -274,13 +280,16 @@ public class MobDefenseChain extends SingleTaskChain {
       }
 
       boolean flee = this.shouldFlee(mod, toDealWithList);
-      // Report the transition, not the state. This re-decides every DECISION_HOLD_TICKS, so logging
-      // whenever `flee` is true would push a line into the model's context once a second for the whole
-      // retreat — enough to crowd out the conversation it is supposed to be having.
-      boolean startedFleeing = flee && !this.heldDecisionWasFlee;
+      // Report once per encounter, not per decision. Transition-only was not enough on its own: the
+      // cornered fallback clears heldDecisionWasFlee, so a companion stuck in a dead end cycles
+      // flee -> cornered -> flee and announced the retreat again every few seconds. Observed in a
+      // playtest as three notices in as many seconds. Cleared in tickRetreatState once nothing is
+      // hunting it any more.
+      boolean startedFleeing = flee && !this.heldDecisionWasFlee && !this.reportedFleeing;
       this.decisionHoldTicks = DECISION_HOLD_TICKS;
       this.heldDecisionWasFlee = flee;
       if (startedFleeing) {
+         this.reportedFleeing = true;
          float pct = mod.getPlayer().getHealth() / Math.max(1.0F, mod.getPlayer().getMaxHealth()) * 100.0F;
          mod.logAgentNotice("Retreating from " + toDealWithList.size() + " hostile(s) at "
                + String.format("%.0f", pct) + "% health.");
@@ -317,6 +326,7 @@ public class MobDefenseChain extends SingleTaskChain {
          this.noFleeProgressTicks = 0;
          this.lastFleeDistance = -1.0;
          this.reportedCornered = false;
+         this.reportedFleeing = false;
          return;
       }
 

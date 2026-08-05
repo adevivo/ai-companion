@@ -176,6 +176,28 @@ public final class BehaviorConfig {
                     "AICOMPANION_BEHAVIOR_DEFENSEFLEEFROMHOSTILES", "false"));
 
     /**
+     * How many hostiles a healthy companion reckons it can handle before its gear is considered.
+     *
+     * <p>The retreat decision scores equipment — armour, weapon tier, shield — against how many things
+     * are attacking, and that scoring came from a speedrunning bot, whose best play is to avoid every
+     * avoidable fight. Taken literally it rates an unarmoured companion holding a wooden sword at
+     * <em>one</em> hostile, so a companion at full health ran from a spider and a zombie it then killed
+     * without difficulty the moment it was cornered into trying.
+     *
+     * <p>Since 0.2.6 a companion has a player's stat line, and a player at full health with a wooden
+     * sword handles two ordinary mobs comfortably. This constant is the missing term: what the body
+     * itself is worth, before anything it is carrying. It is scaled by current health along with the
+     * rest, so it makes a healthy companion brave without making a hurt one reckless.
+     *
+     * <p>Raise it for a companion that stands and fights, lower it toward 0 to restore the old
+     * bot-like caution. At the default of 2.0: bare-handed it runs from 3, with a wooden sword from 4,
+     * with a diamond sword from 7, and fully kitted with a shield from 12.
+     */
+    public static volatile double defenseBravery =
+            Double.parseDouble(resolve("aicompanion.behavior.defenseBravery",
+                    "AICOMPANION_BEHAVIOR_DEFENSEBRAVERY", "2.0"));
+
+    /**
      * Apply {@link #triggerPrefix} to an incoming chat line. Returns the message the model should see
      * (prefix stripped, trimmed), or {@code null} if this message is not addressed to the companion.
      */

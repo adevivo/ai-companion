@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.58. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.59. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -69,6 +69,15 @@ that made a hurt companion disengage.
 
 Injury now counts. The same equipment picks a smaller fight when the companion is half dead, and below
 a quarter health it runs regardless of what it's holding.
+
+It's also braver than it was. The sums behind that decision came from a speedrunning bot, whose best
+play is to dodge every fight it possibly can — taken at face value it reckoned an unarmoured companion
+with a wooden sword could handle exactly one hostile. In testing that meant fleeing, at full health,
+from a spider and a zombie it then killed without difficulty the moment being cornered forced it to
+try. Companions have a player's stat line now, and a player at full health handles two ordinary mobs
+comfortably, so the maths now credits the body itself and not just the kit. Tune it with
+`behavior.defenseBravery` — 2.0 by default, 0 for the old caution, higher for a companion that stands
+and fights.
 
 There's no "return to battle" behaviour and deliberately so. It heals as it retreats, and the same
 judgement runs continuously — so if something chases it and it has recovered enough to win, it turns
