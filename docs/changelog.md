@@ -10,7 +10,8 @@ CurseForge changelog field at upload — it renders Markdown there.
 Bundles PlayerEngine 1.0.69. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
-Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
+Nothing to do after updating — four new `behavior.*` settings are added to your existing config file
+automatically, at the defaults described below. **Your companions will need feeding now** — read on.
 
 ### It was healing faster than anything could hurt it
 
