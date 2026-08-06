@@ -5,136 +5,95 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
-## 0.2.9 — It remembers the house it didn't finish
+## 0.2.9 — Unfinished builds, part 2: it remembers where
 
 Bundles PlayerEngine 1.0.79. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating.
 
-### "Finish the house from yesterday" now means something
+### It can carry on with yesterday's house
 
-0.2.8 made a returning build stop paying twice for the wall it had already put up. What it could not
-do was find that wall again the next day.
+0.2.8 stopped a returning build paying twice for the wall it had already put up. It still could not
+*find* that wall again: what the companion knew about a half-built structure lived in memory for ten
+minutes, and the things that interrupt a big build — quitting the world, a long gathering trip —
+outlast that. Asked afterwards to carry on, it had only the conversation to go on, so it guessed. In
+one measured case the half-built house was at (180, 62, -40) and its "continuation" was planned at
+(191, 64, -39): a second house, eleven blocks away, priced as very nearly a whole new building.
 
-Everything the companion knew about a half-built structure lived in memory, for ten minutes. Both of
-the things that most often interrupt a big build outlast that: quitting the game, and a long trip to
-collect materials — one logged gathering run took twenty minutes on its own. Come back afterwards, ask
-it to carry on, and it had nothing to go on but the conversation. So it guessed. In a measured case the
-half-built house was at (180, 62, -40) and the companion's "continuation" was planned at
-(191, 64, -39): a second house, eleven blocks away, overlapping the first in 28 of its 550 blocks, and
-correctly priced as very nearly a whole new building. Nothing was miscounted. It had been asked to
-price something else.
-
-A build that stops short is now **written to disk**, with the plan, the position and how much of it is
-standing. There is no expiry, because a half-built house is still there tomorrow; the record is cleared
-when the build is finished rather than on a timer. Ask again and it picks the same plan back up:
+A build that stops short is now written to disk — the plan, the position, and how much of it is
+standing — **while it runs**, not only when it ends, since quitting and cancelling tear the task down
+without running any of its endings. There is no expiry; the record is cleared when the build finishes.
 
 ```
-Picking up where I left off — 287 of 550 blocks were already up.
+Picking up where I left off — 379 of 550 blocks were already up.
 ```
 
-### It knows it has one, without being reminded
+Its status carries that record too, so it knows the house exists without having to remember the
+conversation. Matching is by position rather than wording, so a rephrased request — or a typo — still
+finds it.
 
-The companion's own status now carries the unfinished build — the description, the position, and how
-far it got — so it does not have to remember the conversation to know the house exists. That is the
-part that was actually missing: it was not that it refused to continue, it was that it had no way to
-know what "continue" referred to, and inventing a position looked from the inside like a reasonable
-answer.
-
-It is told plainly to reuse the original description and position rather than reword them, since a
-reworded request builds a second structure beside the first and pays for it all over again.
-
-One unfinished build is remembered per companion — starting a second structure means the first has been
-given up on, and offering a choice it has no way to make would not help it. The record is ignored in
-another dimension, since a plan pins absolute coordinates that mean somewhere else entirely through a
-portal.
+One unfinished build is remembered per companion, and ignored in another dimension, since a plan pins
+absolute coordinates.
 
 ---
 
-## 0.2.8 — Voice switches itself on
+## 0.2.8 — Voice switches itself on · Unfinished builds, part 1
 
 Bundles PlayerEngine 1.0.74. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
-Nothing to do after updating, and nothing changes unless you want voice. If you already have `"tts":
-{"enabled": false}` in your config it stays off; set it to `true` once and it never needs touching
-again. Fresh installs get voice on by default — read on for why that is now safe.
+Nothing to do after updating. Voice is on by default now; an existing config saying `"tts":
+{"enabled": false}` stays off, so set it to `true` once if you want it.
 
 ### Starting the container is the whole setup
 
-Voice needed two steps: run the Kokoro container, then find the config file, set `tts.enabled` to
-`true`, and reload. The second step is the one people never got to, and on a dedicated server it meant
-shell access to the box, because the settings screen edits your own machine's copy and not the
-server's.
+Voice needed two steps: run the Kokoro container, then find the config file and enable it. The second
+is the one nobody got to — and on a dedicated server it meant shell access, since the settings screen
+edits your own machine's copy rather than the server's.
 
-The mod ships the container setup itself now — `config/aicompanion/tts/` appears on first launch with
-a `docker-compose.yml` and a full guide. So the entire procedure is:
+The setup now ships with the mod, unpacked to `config/aicompanion/tts/` on first launch. The whole
+procedure:
 
 ```
 cd config/aicompanion/tts
 docker compose up -d
 ```
 
-Companions start speaking as soon as it answers. No config edit, no restart.
-
-Until then it costs you nothing, which is the part that had to be fixed first.
+Companions speak as soon as it answers. No config edit, no restart.
 
 ### It was waiting out speech that never happened
 
-Voice was off by default for a good reason: leaving it on made every companion worse.
+Voice was off by default for a reason: leaving it on made every companion slower.
 
-Nothing ever told the server whether a line had actually been spoken. It couldn't know — the audio is
-fetched and played by *your* machine, and the server can't see whether anything there is listening on
-the Kokoro port. So it guessed: a companion was assumed to be mid-sentence for roughly one second per
-25 characters, and it won't start thinking about its next reply while it believes it's still talking.
+The server could not know whether a line had actually been spoken — your machine fetches and plays the
+audio, and the server cannot see whether anything there is listening on the Kokoro port. So it guessed:
+a companion was treated as mid-sentence for roughly one second per 25 characters, and it will not start
+its next reply while it believes it is still talking. With no container running that was pure loss —
+five to nine seconds of silence per line, waiting out audio that never played.
 
-With no container running, that estimate was pure loss. Every line bought five seconds of silence on a
-short reply and nine on a long one, waiting out audio that was never playing. Turning voice on to see
-if it worked made a companion visibly slower and gave no clue why.
+Your machine now reports back, either "that line has finished" or "I have nowhere to play this", and
+that is what releases the companion. It waits exactly as long as it is really speaking, and a machine
+with no Kokoro server costs nothing: one refused connection, then it is left alone for five minutes.
+`/companion reload` retries immediately.
 
-The guess is gone. Your machine now reports back — either "that line has finished" when the audio
-actually ends, or "I have nowhere to play this" straight away — and that reply is what releases the
-companion. Two things follow from it:
-
-- **A companion waits exactly as long as it is really speaking**, rather than a length-based
-  approximation that under-shot long sentences and over-shot short ones.
-- **A machine with no Kokoro server costs nothing.** The first line gets an instant refusal, and the
-  server then leaves that player alone for five minutes rather than asking again on every reply.
-  `/companion reload` retries immediately, for when you've just started the container.
-
-A companion can no longer be muted by a reply that goes missing either — a disconnection mid-sentence
-used to be able to silence one for the rest of the session.
+**The container belongs on the player's machine, not the server's** — `http://localhost:8880` has to
+mean something where you are sitting. On a dedicated server, either each player runs their own or you
+point `tts.endpoint` at one everybody can reach.
 
 ### A half-built house asked to be paid for twice
 
-Interrupt a big build and ask for it again, and the companion would refuse — insisting it needed
-hundreds of planks it had *already put into the walls*. One measured case: a 13×15 house stopped at
-287 of 550 blocks, then demanded 319 oak planks to carry on. Collecting them did not help, because the
-bill grew back to the full amount every time it was asked. The structure could never be finished.
+Interrupt a big build and ask for it again, and the companion refused — insisting on hundreds of planks
+it had already put into the walls. One case: a 13×15 house stopped at 287 of 550 blocks, then demanded
+319 oak planks. Collecting them did not help, because the bill grew back to the full amount every time.
 
-The design was there and only the sum was wrong. A returning build already knows how to recognise the
-cells that are standing, and neither placement path charges for a block that is already correct — but
-the affordability check ran before the companion had so much as looked at the site, so it priced all
-550 cells against an inventory that had spent a third of itself building the first 287.
+The affordability check ran before the companion had looked at the site, so it priced all 550 cells
+against an inventory that had spent a third of itself on the first 287. It now walks to the site and
+prices only what is genuinely left. A build holding enough for the remainder carries on; one that is
+really short says something true — *"I've got 287 of 550 blocks up — I need 40 oak planks to finish
+it"*.
 
-It now walks to the site first and prices only what is genuinely left. A build with the materials for
-the remainder simply carries on, and one that really is short says something true and useful — *"I've
-got 287 of 550 blocks up — I need 40 oak planks to finish it"* — instead of quoting a total that
-includes the wall in front of it.
-
-**This is not yet "carry on with that house from yesterday."** What the companion remembers about an
-unfinished build lives in memory for ten minutes, so a restart — or a long trip to gather — loses the
-position, and asking conversationally afterwards makes it design a *new* building near the old one
-rather than resume. Making an unfinished build outlast a restart is 0.2.9.
-
-### Worth knowing: the container goes on the player's machine
-
-The server only sends the text and the address to fetch the audio from; your client does the fetching
-and the playing. So `http://localhost:8880` has to mean something *where you are sitting*, not on the
-server. In single player that distinction doesn't exist. On a dedicated server, either each player
-runs their own container, or you point `tts.endpoint` at one machine everybody can reach — and either
-way the settings themselves are read from the server's config.
+Finding that house again after a restart is **0.2.9**.
 
 ---
 
