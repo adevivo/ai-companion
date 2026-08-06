@@ -152,13 +152,27 @@ public class ConversationManager {
     // ## Callbacks (need to register these externally)
 
     /**
-     * Deliver a chat line to exactly one companion: the one it is addressed to by name, or failing
-     * that the nearest one within {@link #messagePassingMaxDistance}.
+     * Words that address the whole roster at once, in place of a companion's name.
      *
-     * <p>It used to go to <em>every</em> companion in range. With one companion out that is the same
-     * thing; with two it doubles the cost of every instruction and gets two answers to a question
-     * asked once. Addressing by name is how you tell them apart — {@code "Ava, go and mine"} reaches
-     * Ava and nobody else, and the name is stripped before the model sees it.
+     * <p>Deliberately short. All four are ordinary English openers ("all good", "both of us made it"),
+     * so they only count when followed by a comma or colon — see {@code stripAddressedName}'s
+     * {@code requireSeparator}. A false positive here is the expensive direction: it fans one message
+     * out to every companion and pays for a reply from each.
+     */
+    private static final List<String> BROADCAST_NAMES = List.of("all", "everyone", "both", "team");
+
+    /**
+     * Deliver a chat line to exactly one companion: the one it is addressed to by name, or failing
+     * that the nearest one within {@link #messagePassingMaxDistance}. {@code "all:"} and its synonyms
+     * ({@link #BROADCAST_NAMES}) address every companion in range at once.
+     *
+     * <p>It used to go to <em>every</em> companion in range unconditionally. With one companion out
+     * that is the same thing; with two it doubles the cost of every instruction and gets two answers
+     * to a question asked once. Addressing by name is how you tell them apart — {@code "Ava, go and
+     * mine"} reaches Ava and nobody else, and the name is stripped before the model sees it. The
+     * broadcast form brings back the fan-out for the cases that want it, but as something you ask for
+     * rather than the default, and each recipient is told the line went to all of them so they can
+     * divide the work instead of both doing it.
      *
      * @return lines to show the speaker: that nobody was close enough to hear them, or that
      *         {@code llm.maxTokens} is set too low for the companion to answer properly. Both are
@@ -191,6 +205,15 @@ public class ConversationManager {
                 addressedData = data;
                 addressedBody = body;
                 addressedDistance = distance;
+            }
+        }
+
+        // A real name always wins, so a companion called "All" still answers to its own name and the
+        // keyword only applies when it addresses nobody in particular.
+        if (addressedData == null) {
+            List<Component> broadcast = deliverBroadcast(msg, diagnostics);
+            if (broadcast != null) {
+                return broadcast;
             }
         }
 
@@ -232,6 +255,56 @@ public class ConversationManager {
     }
 
     /**
+     * Hand a group-addressed line to every companion in earshot.
+     *
+     * @return the lines to show the speaker, or null if this was not a broadcast at all — in which
+     *         case the caller carries on with ordinary single-companion routing.
+     */
+    private static List<Component> deliverBroadcast(UserMessage msg, StringBuilder diagnostics) {
+        String body = null;
+        for (String keyword : BROADCAST_NAMES) {
+            body = stripAddressedName(msg.message(), keyword, true);
+            if (body != null) {
+                break;
+            }
+        }
+        if (body == null) {
+            return null;
+        }
+
+        // A bare "all" with nothing after it is stripAddressedName's "delivered whole" case, which for
+        // a keyword is just the word itself — an instruction to nobody. Not worth a turn from every
+        // companion on the roster.
+        if (BROADCAST_NAMES.contains(body.strip().toLowerCase(java.util.Locale.ROOT))) {
+            return List.of(Component.literal(
+                    "(nothing to pass on — say what you want them all to do, e.g. \"all: follow me\")")
+                    .withStyle(ChatFormatting.GRAY));
+        }
+
+        List<AgentConversationData> heard = queueData.values().stream()
+                .filter(data -> isCloseToPlayer(data, msg.userName()))
+                .toList();
+        if (heard.isEmpty()) {
+            LOGGER.warn("ConversationManager: broadcast from {} reached no companion ({} in queueData) — {}",
+                    msg.userName(), queueData.size(),
+                    diagnostics.length() == 0 ? "queueData is empty" : diagnostics.toString());
+            return List.of(Component.literal("(no companions close enough to hear you — /companion come)")
+                    .withStyle(ChatFormatting.GRAY));
+        }
+
+        for (AgentConversationData data : heard) {
+            data.onEvent(new UserMessage(body, msg.userName(), true));
+        }
+        LOGGER.info("ConversationManager: broadcast from {} delivered to {}", msg.userName(),
+                heard.stream().map(AgentConversationData::getName).collect(Collectors.joining(", ")));
+        // Worth saying out loud: this is the one form that costs a reply per companion, and from the
+        // speaker's seat a broadcast and a normal line look identical until several answers arrive.
+        return List.of(Component.literal(String.format("(passed to %s)",
+                heard.stream().map(AgentConversationData::getName).collect(Collectors.joining(", "))))
+                .withStyle(ChatFormatting.GRAY));
+    }
+
+    /**
      * If {@code message} opens by addressing {@code name}, return what is left after the name;
      * otherwise return null.
      *
@@ -244,6 +317,18 @@ public class ConversationManager {
      * complete thing to say, and handing the model an empty string is not.
      */
     private static String stripAddressedName(String message, String name) {
+        return stripAddressedName(message, name, false);
+    }
+
+    /**
+     * @param requireSeparator when true, only a comma or colon counts as the boundary — plain
+     *        whitespace does not. Names do not need this: "Ava" rarely opens a sentence that is not
+     *        aimed at Ava. The broadcast keywords very much do, because they are ordinary English
+     *        openers — "all good", "all done", "everyone dies eventually" would otherwise each fan out
+     *        to the whole roster and buy a reply from every companion. Requiring "all:" or "all," costs
+     *        one character and matches how people write it anyway.
+     */
+    private static String stripAddressedName(String message, String name, boolean requireSeparator) {
         if (message == null || name == null || name.isBlank()) {
             return null;
         }
@@ -257,8 +342,9 @@ public class ConversationManager {
             return trimmed;
         }
         char boundary = rest.charAt(0);
-        // java.lang.Character spelled out: this file imports adris.altoclef.player2api.Character.
-        if (boundary != ',' && boundary != ':' && !java.lang.Character.isWhitespace(boundary)) {
+        if (boundary != ',' && boundary != ':'
+                // java.lang.Character spelled out: this file imports adris.altoclef.player2api.Character.
+                && (requireSeparator || !java.lang.Character.isWhitespace(boundary))) {
             return null;
         }
         String body = rest.substring(1).strip();

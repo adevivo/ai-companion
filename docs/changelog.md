@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.68. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.69. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -192,6 +192,32 @@ There's no "return to battle" behaviour and deliberately so. It heals as it retr
 judgement runs continuously — so if something chases it and it has recovered enough to win, it turns
 and fights, exactly as it would have to begin with. Still hurt, it keeps going. What you'd expect
 happens without a system built to make it happen.
+
+### Talking to all of them at once
+
+Addressing one companion by name has worked for a while — `Ava: follow me` reaches Ava and nobody
+else. There was no way to say something to the whole group short of saying it twice.
+
+Open with **`all:`** and every companion in earshot gets it:
+
+```
+all: team up and fight together
+everyone: back to base
+both: stop what you're doing
+team: spread out and look for the cave
+```
+
+`all`, `everyone`, `both` and `team` all work, and each companion is told the line went to the group
+rather than to them alone — so they divide the work instead of both doing the same thing, and don't
+answer on each other's behalf.
+
+The colon (or a comma) is required, and that's deliberate: those four are ordinary ways to start a
+sentence, and without it "all good" or "both of us made it" would fan out to the whole roster and buy
+a reply from every one of them. A name doesn't need the colon — `Ava follow me` still works — because
+a name rarely opens a sentence that isn't aimed at that companion.
+
+Worth knowing this is the one form that costs a reply per companion, so the game tells you who it went
+to when you use it.
 
 ### Cornered means fight
 
