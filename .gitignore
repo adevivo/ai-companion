@@ -26,7 +26,7 @@ aicompanion/libs/*.jar
 test-skills/
 
 # Internal planning/design notes — kept locally, not published in the public repo
-PLAN.md
+TODO.md
 readme_ai_mod.md
 REFERENCES.md
 discord-todo-readme.md
@@ -35,4 +35,3 @@ docs/brain-contract.md
 docs/spike-playerengine.md
 docs/spike-fakeplayer.md
 docs/plan-realistic-player-behaviors.md
-plan-realistic-player-behaviors-claudes-last-response.txt
