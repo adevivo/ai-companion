@@ -5,6 +5,53 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.9 — It remembers the house it didn't finish
+
+Bundles PlayerEngine 1.0.79. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating.
+
+### "Finish the house from yesterday" now means something
+
+0.2.8 made a returning build stop paying twice for the wall it had already put up. What it could not
+do was find that wall again the next day.
+
+Everything the companion knew about a half-built structure lived in memory, for ten minutes. Both of
+the things that most often interrupt a big build outlast that: quitting the game, and a long trip to
+collect materials — one logged gathering run took twenty minutes on its own. Come back afterwards, ask
+it to carry on, and it had nothing to go on but the conversation. So it guessed. In a measured case the
+half-built house was at (180, 62, -40) and the companion's "continuation" was planned at
+(191, 64, -39): a second house, eleven blocks away, overlapping the first in 28 of its 550 blocks, and
+correctly priced as very nearly a whole new building. Nothing was miscounted. It had been asked to
+price something else.
+
+A build that stops short is now **written to disk**, with the plan, the position and how much of it is
+standing. There is no expiry, because a half-built house is still there tomorrow; the record is cleared
+when the build is finished rather than on a timer. Ask again and it picks the same plan back up:
+
+```
+Picking up where I left off — 287 of 550 blocks were already up.
+```
+
+### It knows it has one, without being reminded
+
+The companion's own status now carries the unfinished build — the description, the position, and how
+far it got — so it does not have to remember the conversation to know the house exists. That is the
+part that was actually missing: it was not that it refused to continue, it was that it had no way to
+know what "continue" referred to, and inventing a position looked from the inside like a reasonable
+answer.
+
+It is told plainly to reuse the original description and position rather than reword them, since a
+reworded request builds a second structure beside the first and pays for it all over again.
+
+One unfinished build is remembered per companion — starting a second structure means the first has been
+given up on, and offering a choice it has no way to make would not help it. The record is ignored in
+another dimension, since a plan pins absolute coordinates that mean somewhere else entirely through a
+portal.
+
+---
+
 ## 0.2.8 — Voice switches itself on
 
 Bundles PlayerEngine 1.0.74. Self-contained jar as always — don't install a standalone engine

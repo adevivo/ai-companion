@@ -660,6 +660,9 @@ public class BuildStructureTask extends Task {
                 if (!affordsWhatIsLeft()) {
                     return null; // abortReason is set, with the real remaining figure
                 }
+                // Record it before the first block goes down, so even a build abandoned in its first
+                // ten seconds — before the periodic save in logProgress comes round — is resumable.
+                UnfinishedBuild.save(mod, description, plan, placedCount());
                 stage = Stage.CARVE;
             }
 
@@ -1155,6 +1158,12 @@ public class BuildStructureTask extends Task {
                 LOGGER.info("Build ({}): stage={} placed={}/{} cursor={} station={} remote={} failures={}",
                         description, stage, handled.cardinality(), plan.size(), cursor,
                         station == null ? "none" : station.toShortString(), remotePlaced, stationFailures);
+                // Write the resume record as we go, not only when the build concludes. The ways a big
+                // build actually ends early — quitting the world, `come`, a new order, a crash — all
+                // tear the task down without running any of its endings, so a record written only at
+                // the end is a record that is never there when it is wanted. Measured: quit at 57 of
+                // 550 blocks, came back, and the companion had no idea the house existed.
+                UnfinishedBuild.save(mod, description, plan, placedCount());
             }
             if (++progressTicks >= PROGRESS_TICKS) {
                 progressTicks = 0;
@@ -1205,6 +1214,17 @@ public class BuildStructureTask extends Task {
                     shortDescription(), changed, plan.size());
             playerReason = String.format("That build was taking too long — I stopped at %d of %d blocks.",
                     changed, plan.size());
+        }
+
+        /**
+         * How many of the plan's cells are standing, as counted at the site.
+         *
+         * <p>{@link #handled} rather than {@link #changed}: changed counts what this run wrote, and a
+         * resume that places the last twenty blocks of a house would otherwise record it as "20 of
+         * 550" and tell the owner almost none of it exists.
+         */
+        int placedCount() {
+            return physical() ? handled.cardinality() : next;
         }
 
         /** Why the build stopped early, or null if it ran to completion. */
@@ -1321,6 +1341,18 @@ public class BuildStructureTask extends Task {
             // Ground-checked when it was first designed. Re-checking now would measure the part of it
             // that already exists — see the PlaceBlocks(List, boolean) contract.
             actuallyRunningTask = new PlaceBlocks(remembered.get(), true);
+            return;
+        }
+        // Nothing in memory, but the companion may have left something half-built before the last
+        // restart — which is most of why this is asked at all. The disk record has no expiry.
+        Optional<UnfinishedBuild.Record> unfinished = UnfinishedBuild.recallFor(mod, description);
+        if (unfinished.isPresent()) {
+            UnfinishedBuild.Record record = unfinished.get();
+            LOGGER.info("Build ({}) resuming the unfinished structure at {}: {} of {} blocks were up",
+                    description, record.anchor(), record.placed(), record.total());
+            mod.tellOwner(String.format("Picking up where I left off — %d of %d blocks were already up.",
+                    record.placed(), record.total()));
+            actuallyRunningTask = new PlaceBlocks(record.plan(), true);
             return;
         }
         // Ordinary rectangular shapes are generated in-process. Only what the generators decline
@@ -1471,10 +1503,16 @@ public class BuildStructureTask extends Task {
             }
             if (placeTask.planWorthKeeping()) {
                 BuildPlanCache.remember(mod, description, placeTask.plan());
+                // Same plan, written to disk without an expiry. The in-memory copy above is gone in
+                // ten minutes or at the next restart, and a large build routinely outlasts both — a
+                // gathering trip alone ran twenty minutes. Without this the owner comes back to a
+                // half-built house the companion has no memory of.
+                UnfinishedBuild.save(mod, description, placeTask.plan(), placeTask.placedCount());
             } else {
                 // Built, or not worth rebuilding as drawn. Either way the next request for this
                 // description should start fresh rather than replay a plan that is now done.
                 BuildPlanCache.forget(mod, description);
+                UnfinishedBuild.clear(mod);
             }
             isDone = true;
             actuallyRunningTask = null;

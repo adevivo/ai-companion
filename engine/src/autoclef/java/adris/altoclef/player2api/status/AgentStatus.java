@@ -1,6 +1,7 @@
 package adris.altoclef.player2api.status;
 
 import adris.altoclef.AltoClefController;
+import adris.altoclef.tasks.construction.build_structure.UnfinishedBuild;
 import net.minecraft.world.entity.LivingEntity;
 
 public class AgentStatus extends ObjectStatus {
@@ -20,8 +21,34 @@ public class AgentStatus extends ObjectStatus {
             .add("taskStatus", StatusUtils.getTaskStatusString(mod))
             .add("oxygenLevel", StatusUtils.getOxygenString(mod))
             .add("armor", StatusUtils.getEquippedArmorStatusString(mod))
+            .add("unfinishedBuild", unfinishedBuildStatus(mod))
             .add("gamemode", StatusUtils.getGamemodeString(mod));
       // .add("taskTree", StatusUtils.getTaskTree(mod));
+   }
+
+   /**
+    * The structure this companion started and did not finish, if there is one.
+    *
+    * <p>Carried in the status because the model has no other way to know. Asked to "finish the build
+    * from earlier" it has only the conversation to go on, and a conversation that has been summarised
+    * or restarted does not contain the coordinates — so it makes some up. A measured case put the
+    * half-built house at (180, 62, -40) and its own "continuation" at (191, 64, -39), which overlapped
+    * in 28 of 550 cells and was correctly priced as very nearly a whole new house.
+    *
+    * <p>Phrased as an instruction with the description quoted verbatim, for the same reason
+    * {@link #healingStatus} is a sentence: what changes the model's next move is being told exactly
+    * what to pass, not being handed a fact to reason from.
+    */
+   private static String unfinishedBuildStatus(AltoClefController mod) {
+      try {
+         return UnfinishedBuild.recall(mod)
+               .map(UnfinishedBuild.Record::describeForAgent)
+               .orElse("none — you have no half-built structures");
+      } catch (Exception e) {
+         // The status feed runs on every single turn. A bad record must not stop the companion
+         // thinking; it just means this one line is missing.
+         return "none — you have no half-built structures";
+      }
    }
 
    /** Food level at or above which natural regeneration happens at all. Vanilla's number. */
