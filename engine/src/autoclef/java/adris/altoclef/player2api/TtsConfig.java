@@ -21,12 +21,17 @@ public final class TtsConfig {
     private TtsConfig() {}
 
     /**
-     * Master switch. Default {@code false} because voice needs the Kokoro stack running — enabling it
-     * by default would make every companion line attempt a doomed HTTP call on a machine that never
-     * started the container.
+     * Master switch. Default {@code true}: voice needs the Kokoro stack running, but a machine without
+     * it now costs one refused connection and is then left alone for a while (see
+     * {@code TTSManager.onSpeechAck}), so starting the container is all it takes to be heard — no
+     * config edit, which on a dedicated server meant shell access and a reload.
+     *
+     * <p>It was {@code false} while a companion's speech lock ran on an estimated duration rather than
+     * the client's answer. Leaving voice on then cost every companion 5-10 seconds of silence per line
+     * waiting out audio that was never playing.
      */
     public static volatile boolean enabled =
-            Boolean.parseBoolean(resolve("aicompanion.tts.enabled", "AICOMPANION_TTS_ENABLED", "false"));
+            Boolean.parseBoolean(resolve("aicompanion.tts.enabled", "AICOMPANION_TTS_ENABLED", "true"));
 
     /** Base URL of the Kokoro server. {@code /v1/audio/speech} is appended. Must be reachable from the CLIENT. */
     public static volatile String endpoint =

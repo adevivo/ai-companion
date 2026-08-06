@@ -30,55 +30,133 @@ import adris.altoclef.player2api.Player2APIService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 
 public class TTSManager {
     private static final Logger LOGGER = LogManager.getLogger();
-    private static final int TTScharactersPerSecond = 25; // approx how fast (characters/sec) does the TTS talk
+
+    /** Server → client: speak this line. */
+    public static final ResourceLocation SPEAK_CHANNEL = new ResourceLocation("playerengine", "stream_tts");
+
+    /** Client → server: that line finished, or could not be played at all. */
+    public static final ResourceLocation ACK_CHANNEL = new ResourceLocation("playerengine", "tts_done");
+
     /**
      * When each speaker is expected to stop talking, keyed by companion entity UUID.
      *
      * <p>Per companion rather than one global flag. The flag used to gate the whole conversation
      * system, so one companion speaking froze every other companion's thinking for the estimated
-     * duration of the sentence — with several out, whoever was busiest starved the rest. Speech
-     * itself is still serialized by the single {@link #ttsThread}, so voices do not overlap; what is
-     * no longer serialized is everyone else's reasoning.
+     * duration of the sentence — with several out, whoever was busiest starved the rest.
+     *
+     * <p>Entries are released by the client's ack rather than by a timer. What is stored is only the
+     * {@link #ACK_GUARD_SECONDS} backstop for an ack that never arrives.
      */
     private static final Map<UUID, Long> speakingUntil = new ConcurrentHashMap<>();
 
+    /**
+     * Players whose client has told us it cannot play audio, and when to try them again.
+     *
+     * <p>Without this, a machine with no Kokoro container pays the round trip on every single line.
+     * That is cheap when the endpoint refuses the connection outright, and 5 seconds of connect
+     * timeout when it is a LAN address pointing at nothing.
+     */
+    private static final Map<UUID, Long> ttsUnavailableUntil = new ConcurrentHashMap<>();
+
+    /**
+     * How long to stop trying after a client reports it cannot speak. Long enough that a missing
+     * container costs nothing, short enough that starting one is noticed without a reload.
+     */
+    private static final long UNAVAILABLE_RETRY_SECONDS = 300;
+
+    /**
+     * Backstop for a lost ack, so a client that disconnects mid-sentence cannot mute a companion for
+     * the rest of the session — which is exactly what the old unbounded {@code MAX_VALUE} lock did
+     * whenever the dispatch failed.
+     *
+     * <p>Generous on purpose: it is a safety net, not the mechanism. The client's own timeouts cap a
+     * real round trip at roughly 35 seconds (5s connect + 30s read).
+     */
+    private static final long ACK_GUARD_SECONDS = 60;
+
     private static final ExecutorService ttsThread = Executors.newSingleThreadExecutor();
-
-    private static void setEstimatedEndTime(UUID speaker, String message) {
-        int waitTimeSec = (int) Math.ceil(message.length() / (double) TTScharactersPerSecond) + 1;
-
-        LOGGER.info("TTSManager/ waiting time={} (sec) for message={}", waitTimeSec, message);
-
-        long waitNanos = TimeUnit.SECONDS.toNanos(waitTimeSec);
-        speakingUntil.put(speaker, System.nanoTime() + waitNanos);
-    }
 
     public static void TTS(String message, Character character, Player2APIService player2apiService,
             UUID speaker) {
-        // Voice is opt-in and needs the local Kokoro stack up (see tts/README.md). Off => stay silent
-        // and, importantly, never take the lock below.
+        // Voice is opt-in on the endpoint being reachable from the CLIENT, which is the one thing
+        // this side cannot check. Off => stay silent and, importantly, never take the lock below.
         if (!adris.altoclef.player2api.TtsConfig.enabled) {
             return;
         }
-        LOGGER.info("Locking TTS for speaker={} based on msg={}", speaker, message);
-        // Held open until the dispatch below works out the real duration, so a turn cannot be taken
-        // in the gap between claiming the voice and knowing how long the sentence runs.
-        speakingUntil.put(speaker, Long.MAX_VALUE);
+        // Arm the backstop before dispatching: the ack can land before this method returns, so
+        // setting it afterwards would overwrite a release with a lock.
+        speakingUntil.put(speaker, System.nanoTime() + TimeUnit.SECONDS.toNanos(ACK_GUARD_SECONDS));
 
         ttsThread.submit(() -> {
+            boolean dispatched = false;
             try {
-                player2apiService.textToSpeech(message, character, (_unusedMap) -> {});
+                dispatched = player2apiService.textToSpeech(message, character, speaker);
             } finally {
-                // Always arm the release timer. The entry is MAX_VALUE until this runs, so if the
-                // dispatch throws, skipping it would keep this companion silent for the rest of the
-                // session.
-                setEstimatedEndTime(speaker, message);
+                if (!dispatched) {
+                    // Nothing is going to speak and nothing is going to ack, so holding the lock for
+                    // the full guard would stall this companion's next turn for a minute.
+                    speakingUntil.remove(speaker);
+                }
             }
         });
+    }
+
+    /**
+     * Listen for clients reporting on the lines we asked them to speak. Call once, at mod init.
+     */
+    public static void registerAckReceiver() {
+        ServerPlayNetworking.registerGlobalReceiver(
+                ACK_CHANNEL, (server, player, handler, buf, responseSender) -> {
+                    UUID speaker = buf.readUUID();
+                    boolean spoken = buf.readBoolean();
+                    server.execute(() -> onSpeechAck(player.getUUID(), speaker, spoken));
+                });
+    }
+
+    /**
+     * The owner's client reporting on a line we asked it to speak.
+     *
+     * <p>{@code spoken} false means the audio never played — no Kokoro server on that machine, or the
+     * synthesis failed. Either way the companion is not talking, so it is released immediately and we
+     * stop sending to that player for a while.
+     *
+     * @param listener the player whose client answered
+     * @param speaker  the companion entity that was speaking
+     */
+    public static void onSpeechAck(UUID listener, UUID speaker, boolean spoken) {
+        speakingUntil.remove(speaker);
+        if (spoken) {
+            ttsUnavailableUntil.remove(listener);
+            return;
+        }
+        long retryAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(UNAVAILABLE_RETRY_SECONDS);
+        if (ttsUnavailableUntil.put(listener, retryAt) == null) {
+            LOGGER.warn("TTS is enabled but player {} could not play it (no Kokoro server reachable "
+                    + "from that machine?). Not sending speech to them for {}s. See "
+                    + "config/aicompanion/tts/README.md", listener, UNAVAILABLE_RETRY_SECONDS);
+        }
+    }
+
+    /** Whether this player's client has recently failed to play audio and is still in the back-off. */
+    public static boolean isTtsUnavailable(UUID listener) {
+        Long retryAt = ttsUnavailableUntil.get(listener);
+        return retryAt != null && System.nanoTime() < retryAt;
+    }
+
+    /**
+     * Forget which clients could not play audio, so a config reload retries them at once.
+     *
+     * <p>The whole point of the back-off is that the player is off starting a container; making them
+     * wait out the retry window after telling the mod they are ready would undo it.
+     */
+    public static void clearUnavailable() {
+        ttsUnavailableUntil.clear();
     }
 
     /**
@@ -88,6 +166,7 @@ public class TTSManager {
      */
     public static void reset() {
         speakingUntil.clear();
+        ttsUnavailableUntil.clear();
     }
 
     /** Whether this companion is still expected to be mid-sentence. */
@@ -102,7 +181,11 @@ public class TTSManager {
     }
 
     public static void injectOnTick(MinecraftServer server) {
-        // Drop finished speakers so the map does not grow with every despawned companion.
-        server.execute(() -> speakingUntil.entrySet().removeIf(e -> System.nanoTime() > e.getValue()));
+        // Drop expired entries so neither map grows with every despawned companion or departed player.
+        server.execute(() -> {
+            long now = System.nanoTime();
+            speakingUntil.entrySet().removeIf(e -> now > e.getValue());
+            ttsUnavailableUntil.entrySet().removeIf(e -> now > e.getValue());
+        });
     }
 }

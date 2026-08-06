@@ -4,6 +4,7 @@ import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.auth.AuthKey;
 import adris.altoclef.player2api.auth.AuthenticationManager;
 import adris.altoclef.player2api.manager.HeartbeatManager;
+import adris.altoclef.player2api.manager.TTSManager;
 import adris.altoclef.player2api.utils.CharacterUtils;
 import adris.altoclef.player2api.utils.HTTPUtils;
 import adris.altoclef.player2api.utils.HttpApiException;
@@ -22,7 +23,6 @@ import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import org.apache.logging.log4j.Logger;
@@ -457,13 +457,25 @@ public class Player2APIService {
     *
     * <p>Local-TTS path: we send the Kokoro endpoint/voice/speed rather than Player2 credentials, so no
     * cloud auth token is needed (the old {@code awaitToken} call threw in local mode). The client does
-    * the synthesis request and playback — see {@code AudioUtils.streamAudio}.
+    * the synthesis request and playback — see {@code AudioUtils.streamAudio} — and answers on
+    * {@link TTSManager#ACK_CHANNEL} when the line is finished or could not be played.
     *
-    * <p>{@code onFinish} runs even if the send fails: the caller arms its lock release from it, and a
-    * silent failure here used to pin that lock forever.
+    * @param speaker the companion entity speaking, echoed back in the ack so the right speech lock is
+    *                released
+    * @return whether the request actually went out. False means nothing will speak and no ack is
+    *         coming, so the caller must not wait on one.
     */
-   public void textToSpeech(String message, Character character, Consumer<Map<String, JsonElement>> onFinish) {
+   public boolean textToSpeech(String message, Character character, UUID speaker) {
       try {
+         if (!(controller.getOwner() instanceof ServerPlayer owner)) {
+            return false;
+         }
+         // This client has already told us it has nowhere to play audio. Skipping the send is what
+         // makes voice safe to leave on by default: an unequipped machine pays nothing per line.
+         if (TTSManager.isTtsUnavailable(owner.getUUID())) {
+            return false;
+         }
+
          // A persona-supplied voice wins over the configured default.
          String voice = TtsConfig.voice;
          String[] ids = character.voiceIds();
@@ -472,18 +484,18 @@ public class Player2APIService {
          }
 
          FriendlyByteBuf buf = PacketByteBufs.create();
+         buf.writeUUID(speaker);
          buf.writeUtf(TtsConfig.normalizedEndpoint());
          buf.writeUtf(TtsConfig.model);
          buf.writeUtf(voice);
          buf.writeUtf(message);
          buf.writeDouble(TtsConfig.speed);
 
-         ServerPlayNetworking.send((ServerPlayer) controller.getOwner(),
-               new ResourceLocation("playerengine", "stream_tts"), buf);
+         ServerPlayNetworking.send(owner, TTSManager.SPEAK_CHANNEL, buf);
+         return true;
       } catch (Exception e) {
          System.err.println("[Player2APIService/textToSpeech]: Error" + e.getMessage());
-      } finally {
-         onFinish.accept(null);
+         return false;
       }
    }
 

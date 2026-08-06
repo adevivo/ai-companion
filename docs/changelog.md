@@ -5,6 +5,70 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.2.8 — Voice switches itself on
+
+Bundles PlayerEngine 1.0.72. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+Nothing to do after updating, and nothing changes unless you want voice. If you already have `"tts":
+{"enabled": false}` in your config it stays off; set it to `true` once and it never needs touching
+again. Fresh installs get voice on by default — read on for why that is now safe.
+
+### Starting the container is the whole setup
+
+Voice needed two steps: run the Kokoro container, then find the config file, set `tts.enabled` to
+`true`, and reload. The second step is the one people never got to, and on a dedicated server it meant
+shell access to the box, because the settings screen edits your own machine's copy and not the
+server's.
+
+The mod ships the container setup itself now — `config/aicompanion/tts/` appears on first launch with
+a `docker-compose.yml` and a full guide. So the entire procedure is:
+
+```
+cd config/aicompanion/tts
+docker compose up -d
+```
+
+Companions start speaking as soon as it answers. No config edit, no restart.
+
+Until then it costs you nothing, which is the part that had to be fixed first.
+
+### It was waiting out speech that never happened
+
+Voice was off by default for a good reason: leaving it on made every companion worse.
+
+Nothing ever told the server whether a line had actually been spoken. It couldn't know — the audio is
+fetched and played by *your* machine, and the server can't see whether anything there is listening on
+the Kokoro port. So it guessed: a companion was assumed to be mid-sentence for roughly one second per
+25 characters, and it won't start thinking about its next reply while it believes it's still talking.
+
+With no container running, that estimate was pure loss. Every line bought five seconds of silence on a
+short reply and nine on a long one, waiting out audio that was never playing. Turning voice on to see
+if it worked made a companion visibly slower and gave no clue why.
+
+The guess is gone. Your machine now reports back — either "that line has finished" when the audio
+actually ends, or "I have nowhere to play this" straight away — and that reply is what releases the
+companion. Two things follow from it:
+
+- **A companion waits exactly as long as it is really speaking**, rather than a length-based
+  approximation that under-shot long sentences and over-shot short ones.
+- **A machine with no Kokoro server costs nothing.** The first line gets an instant refusal, and the
+  server then leaves that player alone for five minutes rather than asking again on every reply.
+  `/companion reload` retries immediately, for when you've just started the container.
+
+A companion can no longer be muted by a reply that goes missing either — a disconnection mid-sentence
+used to be able to silence one for the rest of the session.
+
+### Worth knowing: the container goes on the player's machine
+
+The server only sends the text and the address to fetch the audio from; your client does the fetching
+and the playing. So `http://localhost:8880` has to mean something *where you are sitting*, not on the
+server. In single player that distinction doesn't exist. On a dedicated server, either each player
+runs their own container, or you point `tts.endpoint` at one machine everybody can reach — and either
+way the settings themselves are read from the server's config.
+
+---
+
 ## 0.2.7 — Healing costs food, and it knows when to run
 
 Bundles PlayerEngine 1.0.69. Self-contained jar as always — don't install a standalone engine

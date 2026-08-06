@@ -42,9 +42,14 @@ public class AudioUtils {
     /**
      * Fetch speech for {@code text} from a Kokoro (OpenAI-compatible) endpoint and play it.
      *
+     * <p>Blocks until playback has finished, so the return is the server's cue that the companion has
+     * stopped talking — see {@code TTSManager.onSpeechAck}. The server cannot work this out for
+     * itself: the endpoint is reachable from here and not necessarily from there.
+     *
      * @param endpoint base URL, no trailing slash; {@code /v1/audio/speech} is appended
+     * @return true if the line was actually spoken; false if synthesis or playback failed
      */
-    public static void streamAudio(String endpoint, String model, String voice, String text, double speed) {
+    public static boolean streamAudio(String endpoint, String model, String voice, String text, double speed) {
         HttpURLConnection connection = null;
         try {
             JsonObject requestBody = new JsonObject();
@@ -91,10 +96,12 @@ public class AudioUtils {
                     sourceDataLine.stop();
                 }
             }
+            return true;
         } catch (Exception e) {
             // Never let a TTS failure disturb the game: the line is already in chat either way.
             System.err.println("[AudioUtils] TTS playback failed (" + endpoint
-                    + "): " + e + " — is the Kokoro stack running? See tts/README.md");
+                    + "): " + e + " — is the Kokoro stack running? See config/aicompanion/tts/README.md");
+            return false;
         } finally {
             if (connection != null) {
                 connection.disconnect();

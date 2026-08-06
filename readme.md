@@ -256,22 +256,34 @@ off by default:
 
 ## Voice output (optional)
 
-The companion can **speak its chat lines** aloud. This is **optional and not bundled** in the mod — it's a
-small local [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) text-to-speech service you run yourself with
-Docker. Voice is **off by default**; everything else works without it.
+The companion can **speak its chat lines** aloud, through a small local
+[Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) text-to-speech service you run yourself with Docker.
+Everything else works without it.
 
-> **Where is `tts/`?** It ships in the **source repo**, *not* in the mod jar you install. If you got the
-> mod from CurseForge, grab the [`tts/` folder from GitHub](https://github.com/adevivo/ai-companion/tree/main/tts)
-> (you only need its `docker-compose.yml`) to run voice.
+> **Where is `tts/`?** In the mod's own config directory. The jar carries the setup files and unpacks them
+> to `config/aicompanion/tts/` (`docker-compose.yml` + `README.md`) on first launch, so a CurseForge install
+> needs nothing from this repo. The copy here is the source of truth that gets bundled.
 
 1. **Install Docker Desktop** (Windows 11 and macOS): <https://www.docker.com/products/docker-desktop/>
    — new to Docker? See the [getting-started guide](https://docs.docker.com/get-started/).
-2. **Start the TTS server** from the `tts/` directory — same command on every OS:
+2. **Start the TTS server** — same command on every OS:
    ```bash
-   cd tts
+   cd config/aicompanion/tts
    docker compose up -d      # first run pulls ~2GB + model weights
    ```
-3. **Enable it** in `config/aicompanion.json` (`"tts": { "enabled": true, … }`) and restart the game.
+
+That's it — `tts.enabled` is **on by default** and companions start speaking as soon as the container
+answers. No config edit and no restart, which matters on a dedicated server where the settings screen
+can't reach the server's config file.
+
+Until a container is running, voice costs nothing: the client reports back that it has nowhere to play
+audio, and the server stops sending it speech for five minutes (`/companion reload` retries immediately).
+Set `tts.enabled` to `false` to switch it off for good.
+
+> **The container belongs on the player's machine, not the server's.** The server only sends the text and
+> the endpoint; the client fetches and plays the audio, so `http://localhost:8880` has to resolve *there*.
+> On a dedicated server, either each player runs their own container, or you point `tts.endpoint` at one
+> box everybody can reach. The settings themselves are read from the **server's** config either way.
 
 Full setup, the 68-voice list, remote-server notes, and troubleshooting live in **[tts/README.md](tts/README.md)**.
 

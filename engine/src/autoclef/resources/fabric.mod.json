@@ -19,7 +19,8 @@
   "environment": "*",
   "entrypoints": {
     "main": [
-      "baritone.PlayerEngine"
+      "baritone.PlayerEngine",
+      "adris.altoclef.PlayerEngineServer"
     ],
     "client": [
       "adris.altoclef.PlayerEngineClient"

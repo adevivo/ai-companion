@@ -28,8 +28,8 @@
     "usageReportEveryTokens": 100000
   },
   "tts": {
-    "_help": "Local voice output via Kokoro (see tts/README.md). Start the stack — 'cd tts && docker compose up -d' — then set enabled=true. The MINECRAFT CLIENT fetches the audio from this endpoint (the server only sends it the text), so it must be reachable from the client machine, not just the server. List voices: curl http://localhost:8880/v1/audio/voices. Only the companion's spoken 'message' is voiced — never commands or reasoning. A persona's Character.voiceIds()[0] overrides 'voice'.",
-    "enabled": false,
+    "_help": "Local voice output via Kokoro (see config/aicompanion/tts/README.md, unpacked from the jar on first launch). On by default: start the stack — 'cd config/aicompanion/tts && docker compose up -d' — and companions speak, no config edit needed. Until then it costs nothing; the client reports it has nowhere to play audio and the server stops asking it for five minutes ('/companion reload' retries at once). The MINECRAFT CLIENT fetches the audio from this endpoint (the server only sends it the text), so it must be reachable from the CLIENT machine, not just the server. List voices: curl http://localhost:8880/v1/audio/voices. Only the companion's spoken 'message' is voiced — never commands or reasoning. A persona's Character.voiceIds()[0] overrides 'voice'.",
+    "enabled": true,
     "endpoint": "http://localhost:8880",
     "model": "kokoro",
     "voice": "af_heart",

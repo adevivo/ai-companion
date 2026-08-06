@@ -6,6 +6,7 @@ import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.TtsConfig;
 import adris.altoclef.player2api.manager.ConversationManager;
+import adris.altoclef.player2api.manager.TTSManager;
 import adris.altoclef.AltoClefController;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -223,6 +224,9 @@ public final class CompanionConfig {
     public static int reloadAndApply(MinecraftServer server) {
         CompanionSkills.reload(); // pick up edited/added .md files before apply() re-advertises them
         load();
+        // A player who just started their Kokoro container is in the TTS back-off until it expires.
+        // Reload is the obvious "I have fixed it, try again" signal, so honour it as one.
+        TTSManager.clearUnavailable();
         int updated = 0;
         for (ServerWorld world : server.getWorlds()) {
             for (Entity entity : world.iterateEntities()) {
@@ -598,12 +602,12 @@ public final class CompanionConfig {
                 "_openai": "If endpoint is https://api.openai.com, prefer a non-reasoning model such as gpt-4.1-nano, gpt-4o-mini, or gpt-4.1. The gpt-5.x and o-series models are REASONING models: their hidden thinking counts against maxTokens, so on a small budget they can spend the whole thing thinking and return an EMPTY reply with no error — the companion just goes quiet. Give them 2000 or more. (They also ignore temperature; the mod omits it for them automatically.)"
               },
               "tts": {
-                "enabled": false,
+                "enabled": true,
                 "endpoint": "http://localhost:8880",
                 "model": "kokoro",
                 "voice": "af_heart",
                 "speed": 1.0,
-                "_help": "Local voice output via Kokoro. Start the stack first: 'cd tts && docker compose up -d', then set enabled=true. The MINECRAFT CLIENT calls this endpoint (the server only sends it the text), so it must be reachable from the client machine. Voices: curl http://localhost:8880/v1/audio/voices. 'voice' here is only the FALLBACK — set a voice per companion under 'companions' so they can be told apart by ear. Only the companion's spoken 'message' is voiced — never commands or reasoning."
+                "_help": "Local voice output via Kokoro. On by default and self-arming: start the stack — 'cd config/aicompanion/tts && docker compose up -d' — and companions start speaking, no config edit needed. Until then it costs nothing, because the client reports back that it has nowhere to play audio and the server stops asking it for a few minutes. The MINECRAFT CLIENT calls this endpoint (the server only sends it the text), so it must be reachable from the CLIENT machine, not the server — with the default localhost that means each player runs their own container. Voices: curl http://localhost:8880/v1/audio/voices. 'voice' here is only the FALLBACK — set a voice per companion under 'companions' so they can be told apart by ear. Only the companion's spoken 'message' is voiced — never commands or reasoning."
               },
               "behavior": {
                 "triggerPrefix": "",
