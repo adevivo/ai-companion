@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.7 — Healing costs food, and it knows when to run
 
-Bundles PlayerEngine 1.0.67. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.68. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating. No config changes. **Your companions will need feeding now** — read on.
@@ -157,6 +157,12 @@ stays — the shield waits.
 **Shields wear out now, too.** Blocking worked out to be free: damage was stopped exactly as it is for
 you, but the shield never lost durability and could never break. That's a permanent advantage no player
 has. A companion's shield now takes the same wear yours does, and breaks the same way.
+
+**And eating beats blocking.** Raising a shield and eating are the same kind of action underneath, and
+only one can be happening at a time — so the first thing working shields did was stop a companion mid-
+fight from ever getting a mouthful in. It would set out to eat, be quietly refused, and stand there
+hungry with the shield up. Food wins that tie now: the shield drops for the second and a half the meal
+takes and is back up straight after.
 
 `behavior.defenseUseShield` turns the whole thing off, and correctly makes it fight more cautiously,
 since it knows it's going in without one.

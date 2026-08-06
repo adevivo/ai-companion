@@ -89,6 +89,15 @@ public class FoodChain extends SingleTaskChain {
       this.requestFillup = true;
 
       LivingEntity entity = controller.getEntity();
+      // A raised shield is also "using an item", and an entity can only use one at a time — so once
+      // shields started working, a companion that raised one could never start a meal. It would set
+      // out to eat, be refused by the check below every tick, and sit there until the stuck-eating
+      // watchdog gave up. Eating wins the tie: the shield is back up within a tick of the meal
+      // finishing, whereas going hungry compounds.
+      if (entity != null && entity.isUsingItem() && entity.getUsedItemHand() == InteractionHand.OFF_HAND) {
+         entity.stopUsingItem();
+      }
+
       // Only kick off a new mouthful when it is not already mid-bite; calling this every tick would
       // restart the use timer forever and it would chew without ever swallowing.
       if (entity != null && !entity.isUsingItem() && entity.getMainHandItem().getItem() == food) {
