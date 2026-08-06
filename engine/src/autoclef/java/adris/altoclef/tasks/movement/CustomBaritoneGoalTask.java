@@ -195,6 +195,16 @@ public abstract class CustomBaritoneGoalTask extends Task implements ITaskRequir
 
    @Override
    public boolean isFinished() {
+      // A task that has never run cannot have arrived. controller is only assigned in Task.tick, and
+      // a caller holding a task in a field can easily be holding one the task system never ticked:
+      // Task.tick keeps its own `sub`, and when the sub it is handed isEqual to the one it already
+      // has — or canBeInterrupted refuses the swap — it ticks the old object and the new one never
+      // gets a controller. BuildStructureTask does exactly that with travelTask, and asking an
+      // unticked one whether it had finished walking threw five times in a row and disabled the whole
+      // brain mid-build, which is a bad way to learn that "not started" and "arrived" are different.
+      if (this.controller == null) {
+         return false;
+      }
       if (this.cachedGoal == null) {
          this.cachedGoal = this.newGoal(this.controller);
       }
@@ -204,6 +214,11 @@ public abstract class CustomBaritoneGoalTask extends Task implements ITaskRequir
 
    @Override
    protected void onStop(Task interruptTask) {
+      // Same reasoning: nothing to cancel if this never started, and the pathing behaviour is reached
+      // through the controller that a never-ticked task does not have.
+      if (this.controller == null) {
+         return;
+      }
       this.controller.getBaritone().getPathingBehavior().forceCancel();
    }
 
