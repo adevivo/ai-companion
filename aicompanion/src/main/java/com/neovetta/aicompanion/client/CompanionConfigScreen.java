@@ -258,9 +258,20 @@ public final class CompanionConfigScreen {
                             Text.literal("config/aicompanion/skins/ and reopen this screen."))
                     .setSaveConsumer(v -> skin.addProperty("file", DEFAULT_SKIN.equals(v) ? "" : String.valueOf(v)))
                     .build());
+            sub.add(eb.startStrField(Text.literal("Skin Username"), str(skin, "username", ""))
+                    .setDefaultValue("")
+                    .setTooltip(
+                            Text.literal("Borrow any Minecraft player's skin — type a Mojang username."),
+                            Text.literal("Nothing to install, and every client sees it, so this is the"),
+                            Text.literal("option that works on a LAN. The Skin file above wins if both"),
+                            Text.literal("are set. Needs the server to be online-mode with internet."))
+                    .setSaveConsumer(v -> skin.addProperty("username", v == null ? "" : v.strip()))
+                    .build());
             sub.add(eb.startBooleanToggle(Text.literal("Slim Arms"), bool(skin, "slim", false))
                     .setDefaultValue(false)
-                    .setTooltip(Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."))
+                    .setTooltip(
+                            Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."),
+                            Text.literal("Ignored when Skin Username is set — the account says which model it uses."))
                     .setSaveConsumer(v -> skin.addProperty("slim", v))
                     .build());
 
@@ -737,13 +748,14 @@ public final class CompanionConfigScreen {
 
     /**
      * Get or create {@code companion.skin} as an object. The file format also allows a plain string
-     * filename; normalize that to {@code { file, slim }} so the toggle has somewhere to live.
+     * filename; normalize that to {@code { file, username, slim }} so the fields have somewhere to live.
      */
     private static JsonObject skinSection(JsonObject companion) {
         if (companion.has("skin") && companion.get("skin").isJsonPrimitive()) {
             String file = companion.get("skin").getAsString();
             JsonObject obj = new JsonObject();
             obj.addProperty("file", file);
+            obj.addProperty("username", "");
             obj.addProperty("slim", false);
             companion.add("skin", obj);
         }

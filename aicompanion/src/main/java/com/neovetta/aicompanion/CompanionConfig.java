@@ -58,8 +58,15 @@ public final class CompanionConfig {
      *              Carried into {@code Character.voiceIds()[0]}, which the engine prefers over the
      *              global setting — see {@link #character(RosterEntry)}.
      */
+    /**
+     * @param skinFile     PNG in {@code config/aicompanion/skins/}, or blank. Takes precedence over
+     *                     {@code skinUsername}: an explicit local file is an intentional override.
+     * @param skinUsername Mojang username to borrow a skin from, or blank. Resolved server-side by
+     *                     {@link SkinProfileResolver} and pushed to clients, so unlike a file it needs
+     *                     nothing installed on each machine.
+     */
     public record RosterEntry(String name, String description, String persona,
-                              String skinFile, boolean skinSlim, String voice) {}
+                              String skinFile, String skinUsername, boolean skinSlim, String voice) {}
 
     /**
      * The identity used when the config supplies none, and the fallback for any field a roster entry
@@ -68,7 +75,7 @@ public final class CompanionConfig {
      */
     private static final RosterEntry BUILT_IN_DEFAULT = new RosterEntry("Vetta",
             "A loyal, level-headed Minecraft companion who speaks plainly and watches your back.",
-            "", "", false, "");
+            "", "", "", false, "");
 
     /**
      * Every identity a companion can be spawned as, in file order; never empty.
@@ -101,15 +108,24 @@ public final class CompanionConfig {
     public static String name() { return defaultEntry().name(); }
     public static String description() { return defaultEntry().description(); }
     public static String skinFile() { return defaultEntry().skinFile(); }
+    public static String skinUsername() { return defaultEntry().skinUsername(); }
     public static boolean skinSlim() { return defaultEntry().skinSlim(); }
 
-    /** One-line roster summary for the load log: {@code Ava(ava.png), Rook(default)}. */
+    /** One-line roster summary for the load log: {@code Ava(ava.png), Rook(@Notch), Vetta(default)}. */
     private static String describeRoster() {
         List<String> parts = new ArrayList<>();
         for (RosterEntry e : roster) {
-            parts.add(e.name() + "(" + (e.skinFile().isBlank() ? "default" : e.skinFile()) + ")");
+            parts.add(e.name() + "(" + describeSkin(e) + ")");
         }
         return String.join(", ", parts);
+    }
+
+    /** How a roster entry's skin will be sourced, in the same precedence order the renderer uses. */
+    private static String describeSkin(RosterEntry e) {
+        if (!e.skinFile().isBlank()) {
+            return e.skinFile();
+        }
+        return e.skinUsername().isBlank() ? "default" : "@" + e.skinUsername();
     }
 
     /** Directory to drop skin PNGs into: {@code config/aicompanion/skins/}. Created on load. */
@@ -227,6 +243,9 @@ public final class CompanionConfig {
         // A player who just started their Kokoro container is in the TTS back-off until it expires.
         // Reload is the obvious "I have fixed it, try again" signal, so honour it as one.
         TTSManager.clearUnavailable();
+        // Same reasoning for skins: a mistyped username caches as "no skin" and would otherwise never
+        // be retried, so correcting the config would appear to do nothing until a restart.
+        SkinProfileResolver.clearCache();
         int updated = 0;
         for (ServerWorld world : server.getWorlds()) {
             for (Entity entity : world.iterateEntities()) {
@@ -489,8 +508,9 @@ public final class CompanionConfig {
             persona = persona + "\n\n" + advert;
         }
 
-        // skin: either a plain filename string, or { "file": "...", "slim": bool }.
+        // skin: either a plain filename string, or { "file": "...", "username": "...", "slim": bool }.
         String file = fallback.skinFile();
+        String username = fallback.skinUsername();
         boolean slim = fallback.skinSlim();
         if (o.has("skin") && !o.get("skin").isJsonNull()) {
             JsonElement skinEl = o.get("skin");
@@ -499,6 +519,7 @@ public final class CompanionConfig {
             } else if (skinEl.isJsonObject()) {
                 JsonObject skin = skinEl.getAsJsonObject();
                 file = str(skin, "file", "");
+                username = str(skin, "username", "").strip();
                 slim = bool(skin, "slim", false);
             }
         }
@@ -506,7 +527,8 @@ public final class CompanionConfig {
         // voiceIds[0] and lets it fall back to the global tts.voice.
         String voice = str(o, "voice", fallback.voice()).strip();
 
-        return new RosterEntry(entryName.strip(), entryDescription, persona, file, slim, voice);
+        return new RosterEntry(entryName.strip(), entryDescription, persona, file, username, slim,
+                voice);
     }
 
     /** Whether the LLM API key came from the launch environment (mirrors {@code LlmConfig.resolve}). */
@@ -571,13 +593,13 @@ public final class CompanionConfig {
     /** Default config written when {@code config/aicompanion.json} does not exist. */
     private static final String DEFAULT_JSON = """
             {
-              "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt (personality/style, injected into the engine's hardened prompt rather than replacing it), skin { file, slim }, and voice (a Kokoro voice id such as af_heart or bm_george; blank = use tts.voice, so give each companion its own or they all sound alike). Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name; blank = default Steve, slim = 3px (Alex) arms. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
+              "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt (personality/style, injected into the engine's hardened prompt rather than replacing it), skin { file, username, slim }, and voice (a Kokoro voice id such as af_heart or bm_george; blank = use tts.voice, so give each companion its own or they all sound alike). Two ways to give a companion a face. 'username' borrows any Minecraft player's skin — set it to a Mojang name and every client draws it, with nothing to install and the arm width taken from the account, which is the easy option and the only one that works properly on a LAN. 'file' is a 64x64 PNG you drop into config/aicompanion/skins/, named here; it wins over 'username' if you set both, and needs a copy on every machine that will see the companion. Blank for both = default Steve. slim = 3px (Alex) arms, and is ignored when 'username' is set because the account already says which model it uses. A username that cannot be looked up (offline-mode server, no internet, a typo) just falls back quietly - fix it and run /companion reload. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
               "companions": [
                 {
                   "name": "Vetta",
                   "description": "A loyal, level-headed companion who watches your back and speaks plainly.",
                   "systemPrompt": "You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.",
-                  "skin": { "file": "", "slim": false },
+                  "skin": { "file": "", "username": "", "slim": false },
                   "voice": ""
                 }
               ],

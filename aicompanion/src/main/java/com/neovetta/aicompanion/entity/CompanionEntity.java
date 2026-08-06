@@ -8,6 +8,7 @@ import adris.altoclef.util.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CombatConfig;
 import com.neovetta.aicompanion.CompanionConfig;
+import com.neovetta.aicompanion.SkinProfileResolver;
 import com.neovetta.aicompanion.screen.CompanionScreenHandlerFactory;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalBlock;
@@ -110,6 +111,17 @@ public class CompanionEntity extends LivingEntity
     private static final TrackedData<Boolean> SKIN_SLIM =
             DataTracker.registerData(CompanionEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
+    /**
+     * Mojang {@code textures} blob when this companion borrows a player's skin, else blank.
+     *
+     * <p>Resolved once on the server (see {@link SkinProfileResolver}) and pushed from here, so no
+     * client ever contacts Mojang and — unlike {@link #SKIN_FILE} — nothing has to be installed on
+     * each machine. Arriving late is fine: tracked data syncs on change, so the companion is drawn
+     * with its fallback for the moment the lookup takes and then becomes itself.
+     */
+    private static final TrackedData<String> SKIN_TEXTURE =
+            DataTracker.registerData(CompanionEntity.class, TrackedDataHandlerRegistry.STRING);
+
 
     public CompanionEntity(EntityType<? extends CompanionEntity> type, World world) {
         super(type, world);
@@ -129,6 +141,7 @@ public class CompanionEntity extends LivingEntity
         super.initDataTracker();
         this.dataTracker.startTracking(SKIN_FILE, "");
         this.dataTracker.startTracking(SKIN_SLIM, false);
+        this.dataTracker.startTracking(SKIN_TEXTURE, "");
     }
 
     /** Which roster entry this companion is, or blank if it predates the roster. */
@@ -146,6 +159,11 @@ public class CompanionEntity extends LivingEntity
         return this.dataTracker.get(SKIN_SLIM);
     }
 
+    /** Mojang textures blob for a username-sourced skin; blank = there is no such skin to draw. */
+    public String getSkinTexture() {
+        return this.dataTracker.get(SKIN_TEXTURE);
+    }
+
     /**
      * Bind this companion to a roster entry: its name above its head, its skin, and the identity its
      * brain will be rebuilt from. A null entry (a name that has been deleted from the config since
@@ -161,6 +179,37 @@ public class CompanionEntity extends LivingEntity
         this.setCustomNameVisible(true);
         this.dataTracker.set(SKIN_FILE, entry.skinFile() == null ? "" : entry.skinFile());
         this.dataTracker.set(SKIN_SLIM, entry.skinSlim());
+        applyUsernameSkin(entry);
+    }
+
+    /**
+     * Kick off the Mojang lookup for a username-sourced skin, if this entry asks for one.
+     *
+     * <p>A local PNG wins outright: it is an explicit override, and resolving anyway would spend a
+     * lookup on a result the renderer would never draw. Clearing the blob first matters for
+     * {@code /companion reload} — an entry edited from a username to a file must stop drawing the old
+     * player's face rather than keeping it until the next restart.
+     *
+     * <p>The lookup is asynchronous and may simply never call back (offline-mode server, no internet,
+     * a typo'd name). That is the designed outcome, not a failure to handle: the blob stays blank and
+     * the renderer falls through to the file, then to the default.
+     */
+    private void applyUsernameSkin(CompanionConfig.RosterEntry entry) {
+        this.dataTracker.set(SKIN_TEXTURE, "");
+        String username = entry.skinUsername();
+        if (username == null || username.isBlank() || !entry.skinFile().isBlank()) {
+            return;
+        }
+        SkinProfileResolver.resolve(this.getWorld().getServer(), username, blob -> {
+            // The callback is scheduled onto the server thread, but a companion can be despawned
+            // while a lookup is in flight.
+            if (!this.isRemoved()) {
+                this.dataTracker.set(SKIN_TEXTURE, blob);
+                // The profile's own metadata is authoritative for arm width once a username is in
+                // play — a config `slim` alongside a username would otherwise fight it.
+                this.dataTracker.set(SKIN_SLIM, SkinProfileResolver.isSlim(blob));
+            }
+        });
     }
 
     /**

@@ -1,7 +1,7 @@
 {
   "_notes": "companions[].systemPrompt is a PERSONA block injected into the engine's hardened prompt (it does NOT replace the RULES/JSON-schema/valid-commands scaffolding). llm.* is applied to the engine at mod init. temperature<0 or maxTokens<=0 => omitted (server default). Do not set maxTokens below 1000: it is a cap, not a budget (you pay for what is generated), and a low value cuts skill commands off mid-reply so nothing runs. NOTE: identity used to live in a single 'companion' object; that block was retired in favour of the 'companions' list below and is migrated automatically on first launch (your old file is kept as aicompanion.json.bak).",
   "_frontierTesting": "To test a hosted OpenAI-compatible model (xAI/Grok, OpenAI, etc.): set llm.endpoint (e.g. https://api.x.ai), llm.model (e.g. a NON-reasoning grok id), and supply the bearer key via env AICOMPANION_LLM_APIKEY (preferred, keeps it off disk) or llm.apiKey below. Keep localMode on. Set llm.maxRequests (e.g. 50) as a hard per-session spend cap. Do not commit a real apiKey.",
-  "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt (personality/style, injected into the engine's hardened prompt rather than replacing it), skin { file, slim }, and voice (a Kokoro voice id such as af_heart or bm_george; blank = use tts.voice, so give each companion its own or they all sound alike). Drop a 64x64 player-skin PNG into config/aicompanion/skins/ and set 'file' to its name; blank = default Steve, slim = 3px (Alex) arms. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
+  "_helpCompanions": "Who your companions are. Every entry is a name you can spawn — /companion spawn Rook — and you can have several out at once. Fields: name, description, systemPrompt (personality/style, injected into the engine's hardened prompt rather than replacing it), skin { file, username, slim }, and voice (a Kokoro voice id such as af_heart or bm_george; blank = use tts.voice, so give each companion its own or they all sound alike). Two ways to give a companion a face. 'username' borrows any Minecraft player's skin — set it to a Mojang name and every client draws it, with nothing to install and the arm width taken from the account, which is the easy option and the only one that works properly on a LAN. 'file' is a 64x64 PNG you drop into config/aicompanion/skins/, named here; it wins over 'username' if you set both, and needs a copy on every machine that will see the companion. Blank for both = default Steve. slim = 3px (Alex) arms, and is ignored when 'username' is set because the account already says which model it uses. A username that cannot be looked up (offline-mode server, no internet, a typo) just falls back quietly - fix it and run /companion reload. Anything you leave out uses the built-in default. A bare /companion spawn takes the first entry that is not already out, so with two listed you can spawn both without naming either. Names matter beyond the label: 'Rook, go and scout north' reaches only Rook and the name is stripped before the model sees it, /companion stats Rook targets that one, and each companion's speech is labelled with its name in chat. Easiest way to edit this is in-game: /companion config, Companions tab.",
   "companions": [
     {
       "name": "Vetta",
@@ -9,6 +9,7 @@
       "systemPrompt": "You keep your replies short and spoken, like real dialogue. You are dry, practical, and a little wry, but always on your owner's side.",
       "skin": {
         "file": "",
+        "username": "",
         "slim": false
       },
       "voice": ""
@@ -19,6 +20,7 @@
       "systemPrompt": "You are eager and a little impatient. You would rather be out past the treeline than standing around camp.",
       "skin": {
         "file": "",
+        "username": "",
         "slim": true
       },
       "voice": ""

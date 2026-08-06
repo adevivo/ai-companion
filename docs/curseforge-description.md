@@ -98,7 +98,7 @@ Beyond commands, just **talk to them in chat** — that's the primary way you di
 
 On first launch the mod writes `config/aicompanion.json` with documented defaults. You can edit it two ways: the **in-game screen** (`/companion config`, or the Mod Menu gear button) which applies changes live, or the JSON file by hand followed by `/companion reload`. Key settings:
 
-- **Companions:** a `companions` list — each entry has `name`, `description`, `systemPrompt` (persona), `skin` (`file` + `slim`) and `voice`. Drop a 64×64 player-skin PNG into `config/aicompanion/skins/` and name it in `skin.file`.
+- **Companions:** a `companions` list — each entry has `name`, `description`, `systemPrompt` (persona), `skin` (`file` + `username` + `slim`) and `voice`. Two ways to give one a face: set `skin.username` to any Minecraft player's name and every client draws that skin with nothing to install, or drop a 64×64 PNG into `config/aicompanion/skins/` and name it in `skin.file` (which wins if you set both, and needs a copy on each machine).
 - **LLM:** `endpoint` (default `http://localhost:3030`), `model`, `temperature`, `maxTokens` (default `1000`), `timeoutMs`, `useGrammar`.
 - **Cloud/frontier:** set `endpoint` to a hosted API and supply the key via the **`AICOMPANION_LLM_APIKEY` environment variable** (preferred) or the `apiKey` field. Worked example for xAI/Grok:
 
