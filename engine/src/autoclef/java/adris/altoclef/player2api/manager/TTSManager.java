@@ -98,10 +98,18 @@ public class TTSManager {
             try {
                 dispatched = player2apiService.textToSpeech(message, character, speaker);
             } finally {
-                if (!dispatched) {
+                if (dispatched) {
+                    // Logged because success is otherwise entirely silent: with no line here and none
+                    // on the ack, "spoke perfectly" and "never tried" leave identical logs, and the
+                    // only way to tell them apart is to be wearing headphones at the time.
+                    LOGGER.info("TTS: asked the owner's client to speak {} chars, speaker={}",
+                            message.length(), speaker);
+                } else {
                     // Nothing is going to speak and nothing is going to ack, so holding the lock for
                     // the full guard would stall this companion's next turn for a minute.
                     speakingUntil.remove(speaker);
+                    LOGGER.info("TTS: not sent for speaker={} — owner offline, or their client is in "
+                            + "the no-audio back-off", speaker);
                 }
             }
         });
@@ -132,6 +140,7 @@ public class TTSManager {
     public static void onSpeechAck(UUID listener, UUID speaker, boolean spoken) {
         speakingUntil.remove(speaker);
         if (spoken) {
+            LOGGER.info("TTS: speaker={} finished speaking; released", speaker);
             ttsUnavailableUntil.remove(listener);
             return;
         }
