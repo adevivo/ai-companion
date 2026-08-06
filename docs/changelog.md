@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.2.8 — Voice switches itself on
 
-Bundles PlayerEngine 1.0.72. Self-contained jar as always — don't install a standalone engine
+Bundles PlayerEngine 1.0.74. Self-contained jar as always — don't install a standalone engine
 alongside it.
 
 Nothing to do after updating, and nothing changes unless you want voice. If you already have `"tts":
@@ -58,6 +58,28 @@ companion. Two things follow from it:
 
 A companion can no longer be muted by a reply that goes missing either — a disconnection mid-sentence
 used to be able to silence one for the rest of the session.
+
+### A half-built house asked to be paid for twice
+
+Interrupt a big build and ask for it again, and the companion would refuse — insisting it needed
+hundreds of planks it had *already put into the walls*. One measured case: a 13×15 house stopped at
+287 of 550 blocks, then demanded 319 oak planks to carry on. Collecting them did not help, because the
+bill grew back to the full amount every time it was asked. The structure could never be finished.
+
+The design was there and only the sum was wrong. A returning build already knows how to recognise the
+cells that are standing, and neither placement path charges for a block that is already correct — but
+the affordability check ran before the companion had so much as looked at the site, so it priced all
+550 cells against an inventory that had spent a third of itself building the first 287.
+
+It now walks to the site first and prices only what is genuinely left. A build with the materials for
+the remainder simply carries on, and one that really is short says something true and useful — *"I've
+got 287 of 550 blocks up — I need 40 oak planks to finish it"* — instead of quoting a total that
+includes the wall in front of it.
+
+**This is not yet "carry on with that house from yesterday."** What the companion remembers about an
+unfinished build lives in memory for ten minutes, so a restart — or a long trip to gather — loses the
+position, and asking conversationally afterwards makes it design a *new* building near the old one
+rather than resume. Making an unfinished build outlast a restart is 0.2.9.
 
 ### Worth knowing: the container goes on the player's machine
 

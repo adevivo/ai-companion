@@ -419,6 +419,18 @@ public class BuildStructureTask extends Task {
             bill = BuildMaterials.tally(plan);
             shortfall = BuildMaterials.shortfall(mod, bill);
             if (!shortfall.isEmpty()) {
+                // A resumed plan is priced as if none of it exists yet, because the world cannot be
+                // read here (see retireAlreadyCorrect: block reads force-load chunks). So on a resume
+                // this figure double-bills every cell already standing — a 550-block house that got
+                // half built once refused to continue, asking for 319 planks it had already spent.
+                // Walk to the site and let the post-approach check price what is genuinely left.
+                if (alreadyGroundChecked) {
+                    LOGGER.info("Build ({}) looks short by {} on paper, but this plan has been placed "
+                            + "before — going to the site to price what is actually left",
+                            description, BuildMaterials.describe(shortfall));
+                    beginPhysical();
+                    return;
+                }
                 LOGGER.info("Not enough materials to build ({}), missing {}", description,
                         BuildMaterials.describe(shortfall));
                 // First time short: go and collect, rather than bouncing it back to the model to
@@ -645,6 +657,9 @@ public class BuildStructureTask extends Task {
                 }
                 travelTask = null;
                 retireAlreadyCorrect();
+                if (!affordsWhatIsLeft()) {
+                    return null; // abortReason is set, with the real remaining figure
+                }
                 stage = Stage.CARVE;
             }
 
@@ -757,6 +772,56 @@ public class BuildStructureTask extends Task {
                 LOGGER.info("Build ({}): {} of {} cells are already correct; {} to place",
                         description, alreadyThere, plan.size(), plan.size() - alreadyThere);
             }
+        }
+
+        /**
+         * Price only the cells still to be placed, now that the site is loaded and
+         * {@link #retireAlreadyCorrect()} has marked what is already standing.
+         *
+         * <p>This is the authoritative affordability check. The one in {@link #plan()} runs before the
+         * companion has looked at the site, so on a resume it bills for the whole structure while a
+         * good part of it is already in the ground and its materials already spent. That is what
+         * stopped a half-built house from ever being finished: the retry asked for 319 planks it had
+         * itself put into the walls, and no amount of collecting could satisfy a bill that grew back
+         * every time.
+         *
+         * <p>Charging is already world-aware per block — both placement paths skip a cell that is
+         * right and do not spend for it — so this only brings the bill into line with what actually
+         * gets taken.
+         *
+         * @return true to carry on building; false with {@link #abortReason} set
+         */
+        private boolean affordsWhatIsLeft() {
+            if (!BehaviorConfig.buildCostsMaterials) {
+                return true;
+            }
+            List<SetBlockCommand> remaining = new ArrayList<>();
+            for (int i = 0; i < plan.size(); i++) {
+                if (!handled.get(i)) {
+                    remaining.add(plan.get(i));
+                }
+            }
+            if (remaining.isEmpty()) {
+                return true;
+            }
+            Map<Item, Integer> missing = BuildMaterials.shortfall(mod, BuildMaterials.tally(remaining));
+            if (missing.isEmpty()) {
+                return true;
+            }
+            LOGGER.info("Build ({}): {} of {} cells still to place, short {}", description,
+                    remaining.size(), plan.size(), BuildMaterials.describe(missing));
+            // Worth keeping: the design is fine and part of it is already standing, so the next run
+            // must resume this same plan rather than draw a new one somewhere else.
+            planWorthKeeping = true;
+            abortReason = String.format(
+                    "Stopped building (%s): %d of %d blocks are already placed, but finishing needs %s more. Use `get` to collect exactly that, then run the SAME build_structure description again — it will carry on from where it stopped rather than starting over.",
+                    shortDescription(), plan.size() - remaining.size(), plan.size(),
+                    BuildMaterials.describe(missing));
+            playerReason = String.format("I've got %d of %d blocks up — I need %s to finish it.",
+                    plan.size() - remaining.size(), plan.size(),
+                    BuildMaterials.describeForPlayer(missing));
+            stage = Stage.DONE;
+            return false;
         }
 
         /** Whether an index belongs to the phase currently running. */
