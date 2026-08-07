@@ -77,6 +77,14 @@ public class BuildStructureTask extends Task {
     private static final int LEGACY_BLOCKS_PER_TICK = 256;
     /** Ticks to wait for a walk to one standing position. Matches {@code FarmProcess}'s per-tile budget. */
     private static final int MAX_STATION_TICKS = 300;
+    /**
+     * Ticks of zero placement progress before the build gives up on where it is standing.
+     *
+     * <p>Deliberately double {@link #MAX_STATION_TICKS}: a healthy build may legitimately spend a
+     * whole walk budget placing nothing while it travels to the next station, and tripping on that
+     * would blacklist good positions. Thirty seconds of nothing is not a slow walk, it is a stall.
+     */
+    private static final int STALL_TICKS = 600;
     /** Failed standing positions tolerated before the rest of the build is placed from where we are. */
     private static final int MAX_STATION_FAILURES = 4;
     /** Times a cell may drift out of sight before it is written out of reach instead. */
@@ -314,6 +322,10 @@ public class BuildStructureTask extends Task {
         private int stationFailures;
         private int workLogTicks;
         private int progressTicks;
+        /** {@code handled.cardinality()} when progress was last seen, for {@link #checkStalled}. */
+        private int lastProgressCount = -1;
+        /** Ticks since the last block was handled. Reset by progress, not by arriving somewhere. */
+        private int noProgressTicks;
         /** Blocks written from out of reach after the companion gave up on getting to them. */
         private int remotePlaced;
         /** True once reaching the rest has been abandoned; the remainder is written from where we stand. */
@@ -646,6 +658,9 @@ public class BuildStructureTask extends Task {
                 return null;
             }
             logProgress();
+            if (checkStalled()) {
+                return null;
+            }
 
             if (stage == Stage.APPROACH) {
                 if (!siteReady()) {
@@ -1148,6 +1163,83 @@ public class BuildStructureTask extends Task {
                 if (!placeOne(index, true)) {
                     return;
                 }
+            }
+        }
+
+        /**
+         * Break a build that has stopped getting anywhere, whatever the reason.
+         *
+         * <p>Observed 2026-08-06: a build sat at {@code placed=70/174 cursor=3} on one station for
+         * three minutes with {@code remote=0 failures=0}. Nothing was placed, nothing timed out,
+         * nothing fell back to remote placement, and no exception was thrown. It recovered only when
+         * a mob attacked — mob defence outranks the build chain, and being interrupted resets this
+         * task's state, which is also what re-issuing the build by hand does. Left alone it would have
+         * sat there until the whole-build timeout.
+         *
+         * <p>This is a separate watchdog rather than a fix to {@link #stationTicks} because that
+         * counter is zeroed every tick the companion is standing at its station, so it measures time
+         * spent <em>walking</em> and nothing else. Any loop that keeps arriving somewhere resets it
+         * forever. Progress is the thing worth measuring, and {@code handled} is the only honest
+         * measure of it.
+         *
+         * <p>Recovers rather than aborts, down the same path a walk timeout already takes: blacklist
+         * the station and count a failure. Four of those and {@link #selectStation} enters remote mode
+         * and finishes from where it stands, so the worst case is bounded instead of open-ended.
+         *
+         * @return true when the caller should return null for this tick
+         */
+        private boolean checkStalled() {
+            // Only meaningful once placing has started. APPROACH is a walk and legitimately places
+            // nothing; DONE has nothing left to place.
+            if (stage != Stage.WORK && stage != Stage.CARVE) {
+                noProgressTicks = 0;
+                return false;
+            }
+            int done = handled.cardinality();
+            if (done != lastProgressCount) {
+                lastProgressCount = done;
+                noProgressTicks = 0;
+                return false;
+            }
+            if (++noProgressTicks <= STALL_TICKS) {
+                return false;
+            }
+            // Logged in full: which branch this gets stuck in has never been pinned down, and this is
+            // the line that will say. Keep it if the stall stops reproducing — it costs one line per
+            // recovery, and recoveries are supposed to be rare.
+            LOGGER.warn("Build ({}) made no progress for {} ticks at {}/{}: stage={} cursor={}"
+                            + " station={} travel={} work={} remote={} failures={} — dropping the station",
+                    description, noProgressTicks, done, plan.size(), stage, cursor,
+                    station == null ? "none" : station.toShortString(), describeTravel(),
+                    stationWork.size(), remotePlaced, stationFailures);
+
+            if (station != null) {
+                badStations.add(station);
+            }
+            station = null;
+            travelTask = null;
+            stationWork.clear();
+            stationTicks = 0;
+            noProgressTicks = 0;
+            stationFailures++;
+            return true;
+        }
+
+        /**
+         * The travel task's state for the stall log, without trusting it not to throw.
+         *
+         * <p>{@code isFinished()} on a subtask that was never ticked has thrown here before — a
+         * never-ticked {@code CustomBaritoneGoalTask} has no controller — and a diagnostic that can
+         * kill the thing it is diagnosing is worse than no diagnostic.
+         */
+        private String describeTravel() {
+            if (travelTask == null) {
+                return "none";
+            }
+            try {
+                return travelTask.isFinished() ? "finished" : "running";
+            } catch (Exception e) {
+                return "threw:" + e.getClass().getSimpleName();
             }
         }
 
