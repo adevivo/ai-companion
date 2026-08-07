@@ -1005,7 +1005,22 @@ public class BuildStructureTask extends Task {
             // Never brick ourselves in: a solid block written into a cell our own body occupies is
             // suffocation damage and a stuck companion. Defer it until we have moved on.
             if (!cell.isAir() && bodyOccupies(pos)) {
-                deferrals.merge(index, 1, Integer::sum);
+                int misses = deferrals.merge(index, 1, Integer::sum);
+                // "Until we have moved on" assumed we would. We do not: the station chooser scores
+                // this spot on the cell it is next to, so it keeps sending the body back to the same
+                // place, and the cell under it is deferred forever. Measured 2026-08-06 building
+                // storeys onto each other — where standing on the last one's footprint is the normal
+                // case — as three separate builds livelocked at travel=finished with work queued and
+                // nothing placeable. Blacklisting is what actually moves the body off the cell.
+                // Placing it remotely is not an alternative here: the whole point is that we are
+                // standing in it.
+                if (misses >= MAX_DEFERRALS && station != null) {
+                    badStations.add(station);
+                    station = null;
+                    travelTask = null;
+                    // Safe to clear mid-drain: the caller re-tests isEmpty() every iteration.
+                    stationWork.clear();
+                }
                 return true;
             }
 
