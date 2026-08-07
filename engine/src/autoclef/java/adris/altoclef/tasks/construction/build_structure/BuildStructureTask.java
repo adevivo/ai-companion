@@ -1359,7 +1359,10 @@ public class BuildStructureTask extends Task {
         // reaches the model, which is where the codegen prompt's token cost is actually warranted.
         Optional<TemplateLibrary.Match> templated = TemplateLibrary.plan(description, mod);
         if (templated.isPresent()) {
-            actuallyRunningTask = new PlaceBlocks(templated.get().plan());
+            // Freshly designed, so the species is still up for grabs — see WoodChoice. The two
+            // resume paths above deliberately skip this: they must keep the wood they started with.
+            actuallyRunningTask = new PlaceBlocks(
+                    WoodChoice.resolve(templated.get().plan(), mod, description));
             return;
         }
         ensureCodegenReady();
@@ -1443,7 +1446,11 @@ public class BuildStructureTask extends Task {
                         history.addUserMessage(tryAgainMessage, service);
                         actuallyRunningTask = new RequestLLMCode();
                     }, () -> {
-                        actuallyRunningTask = new PlaceBlocks(planTask.plan);
+                        // The model writes oak for the same reason the templates do, so the same
+                        // retyping applies. Done here rather than in GenerateBlockPlan because that
+                        // runs on a worker thread and this reads the inventory.
+                        actuallyRunningTask = new PlaceBlocks(
+                                WoodChoice.resolve(planTask.plan, mod, description));
                     });
             return actuallyRunningTask;
         }
