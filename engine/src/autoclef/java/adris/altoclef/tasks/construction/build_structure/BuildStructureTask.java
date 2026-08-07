@@ -831,6 +831,23 @@ public class BuildStructureTask extends Task {
             // Worth keeping: the design is fine and part of it is already standing, so the next run
             // must resume this same plan rather than draw a new one somewhere else.
             planWorthKeeping = true;
+
+            // Short of something is not the same as short of everything. Refusing the whole build
+            // over the last few blocks is what made a big house impossible to start: the bill for one
+            // was 486 planks, 180 stairs and 34 panes, which does not fit in an inventory at all, so
+            // every attempt was refused and the owner was left telling it to build what it could.
+            // It can already stop gracefully when materials run out mid-build — placeOne sets a
+            // partway reason and the unfinished record survives — and resuming that record is proven.
+            // So place what is affordable and let that path do the stopping.
+            int affordable = affordableRunLength(remaining);
+            if (affordable > 0) {
+                LOGGER.info("Build ({}): starting anyway — about {} of {} remaining cells are paid for",
+                        description, affordable, remaining.size());
+                mod.tellOwner(String.format(
+                        "I can get about %d of the %d blocks left up with what I'm carrying — starting now, then I'll need %s.",
+                        affordable, remaining.size(), BuildMaterials.describeForPlayer(missing)));
+                return true;
+            }
             abortReason = String.format(
                     "Stopped building (%s): %d of %d blocks are already placed, but finishing needs %s more. Use `get` to collect exactly that, then run the SAME build_structure description again — it will carry on from where it stopped rather than starting over.",
                     shortDescription(), plan.size() - remaining.size(), plan.size(),
@@ -840,6 +857,39 @@ public class BuildStructureTask extends Task {
                     BuildMaterials.describeForPlayer(missing));
             stage = Stage.DONE;
             return false;
+        }
+
+        /**
+         * Roughly how many of {@code remaining} can be paid for before the inventory runs dry.
+         *
+         * <p>Walks the cells in plan order — {@code plan} is already {@link BuildOrder#normalise}d, so
+         * that is build order — spending a copy of the inventory as it goes, and stops at the first
+         * cell it cannot pay for. That mirrors what actually happens: {@code placeOne} does not skip an
+         * unaffordable cell, it stops the build there.
+         *
+         * <p><b>An estimate, and told to the owner as one.</b> Placement is driven by what is reachable
+         * from each standing position rather than strictly by plan order, and the carve phase runs
+         * ahead of the work phase, so the real stopping point drifts either side of this. It only has
+         * to be good enough to answer "is it worth starting at all", and for that the distinction that
+         * matters is zero versus not-zero.
+         */
+        private int affordableRunLength(List<SetBlockCommand> remaining) {
+            Map<Item, Integer> budget = new HashMap<>();
+            int count = 0;
+            for (SetBlockCommand command : remaining) {
+                Item cost = BuildMaterials.consumedItemFor(BuildMaterials.resolveBlock(command.blockName));
+                if (cost == null) {
+                    count++; // carved air, or a block that costs nothing to place
+                    continue;
+                }
+                int have = budget.computeIfAbsent(cost, item -> mod.getItemStorage().getItemCount(item));
+                if (have <= 0) {
+                    break;
+                }
+                budget.put(cost, have - 1);
+                count++;
+            }
+            return count;
         }
 
         /** Whether an index belongs to the phase currently running. */
@@ -1030,15 +1080,18 @@ public class BuildStructureTask extends Task {
                 // has no refund path and must not get one — a give-back would let a build net items — so
                 // the re-placement is simply not charged again.
                 if (cost != null && !paidFor.remove(pos) && !BuildMaterials.consume(mod, cost, 1)) {
-                    // Pre-flight said we could afford this, so something else emptied the
-                    // inventory mid-build. Stop rather than carry on placing for free.
-                    LOGGER.warn("Ran out of {} partway through building ({})", BuildMaterials.name(cost),
-                            description);
+                    // No longer an anomaly. The pre-flight now deliberately starts builds it cannot
+                    // finish, so this is the ordinary ending for anything whose bill does not fit in an
+                    // inventory, and the wording has to send the model down the resume path instead of
+                    // reading as a failure worth abandoning.
+                    LOGGER.info("Ran out of {} partway through building ({}) — {} of {} up, saved for resume",
+                            BuildMaterials.name(cost), description, placedCount(), plan.size());
                     abortReason = String.format(
-                            "Stopped building (%s) partway: ran out of %s. The structure is incomplete. Use `get` to collect more, then build again.",
-                            shortDescription(), BuildMaterials.name(cost));
-                    playerReason = String.format("I ran out of %s partway through — the build is unfinished.",
-                            BuildMaterials.name(cost).replace('_', ' '));
+                            "Ran out of %s partway through building (%s). This is normal for a big build, not a failure: %d of %d blocks are up and the rest is saved. `get` more %s, then run the SAME build_structure description again — it carries on from exactly where it stopped rather than starting over.",
+                            BuildMaterials.name(cost), shortDescription(), placedCount(), plan.size(),
+                            BuildMaterials.name(cost));
+                    playerReason = String.format("I've got %d of %d blocks up — ran out of %s, so I'll fetch more.",
+                            placedCount(), plan.size(), BuildMaterials.name(cost).replace('_', ' '));
                     return false;
                 }
             }
