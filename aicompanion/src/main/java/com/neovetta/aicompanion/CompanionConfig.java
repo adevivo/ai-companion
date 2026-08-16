@@ -2,6 +2,7 @@ package com.neovetta.aicompanion;
 
 import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.player2api.Character;
+import adris.altoclef.player2api.EmbeddingsConfig;
 import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.TtsConfig;
@@ -439,6 +440,27 @@ public final class CompanionConfig {
             }
         }
 
+        // Separate endpoint from the brain's, deliberately — a chat llama.cpp answers 501 to
+        // /v1/embeddings, and even with --embeddings it would serve the wrong model at the wrong
+        // width. See EmbeddingsConfig for the measurement behind that.
+        JsonObject embeddings = obj(root, "embeddings");
+        if (embeddings != null) {
+            EmbeddingsConfig.enabled = bool(embeddings, "enabled", EmbeddingsConfig.enabled);
+            EmbeddingsConfig.baseUrl = str(embeddings, "endpoint", EmbeddingsConfig.baseUrl);
+            EmbeddingsConfig.model = str(embeddings, "model", EmbeddingsConfig.model);
+            EmbeddingsConfig.expectedDimension =
+                    intVal(embeddings, "expectedDimension", EmbeddingsConfig.expectedDimension);
+            EmbeddingsConfig.timeoutMs = intVal(embeddings, "timeoutMs", EmbeddingsConfig.timeoutMs);
+            EmbeddingsConfig.connectTimeoutMs =
+                    intVal(embeddings, "connectTimeoutMs", EmbeddingsConfig.connectTimeoutMs);
+            EmbeddingsConfig.maxConcurrentRequests =
+                    intVal(embeddings, "maxConcurrentRequests", EmbeddingsConfig.maxConcurrentRequests);
+            // Same env-wins rule as the brain's key, for the same reason.
+            if (!EmbeddingsConfig.apiKeySuppliedByEnv()) {
+                EmbeddingsConfig.apiKey = str(embeddings, "apiKey", "");
+            }
+        }
+
         JsonObject behavior = obj(root, "behavior");
         if (behavior != null) {
             BehaviorConfig.triggerPrefix = str(behavior, "triggerPrefix", BehaviorConfig.triggerPrefix);
@@ -622,6 +644,19 @@ public final class CompanionConfig {
                 "_frontier": "To use a hosted OpenAI-compatible model instead of a local one, e.g. xAI/Grok: { \\"endpoint\\": \\"https://api.x.ai\\", \\"model\\": \\"grok-4-1-fast-non-reasoning\\", \\"apiKey\\": \\"xai-...\\" }. NOTE: endpoint is the base URL with NO trailing slash and NO /v1 — the mod appends /v1/chat/completions itself. Pick a non-reasoning model: reasoning models are slower and burn tokens on thinking the companion never uses.",
                 "_maxTokens": "Caps the length of ONE reply. Do not set it below 1000. It is a cap, not a budget — you are billed for the tokens actually generated, so a high value costs nothing on short answers, while a low one silently breaks things: skills hand the model a command to repeat verbatim (the farming one is ~700 characters), and if the reply is cut off mid-JSON no command runs at all and the companion just stands there. Use maxRequests / behavior.maxAutonomousTurns to control spend instead. 0 or less = omit it entirely and use the server's own default.",
                 "_openai": "If endpoint is https://api.openai.com, prefer a non-reasoning model such as gpt-4.1-nano, gpt-4o-mini, or gpt-4.1. The gpt-5.x and o-series models are REASONING models: their hidden thinking counts against maxTokens, so on a small budget they can spend the whole thing thinking and return an EMPTY reply with no error — the companion just goes quiet. Give them 2000 or more. (They also ignore temperature; the mod omits it for them automatically.)"
+              },
+              "embeddings": {
+                "enabled": false,
+                "endpoint": "http://localhost:11434",
+                "model": "nomic-embed-text",
+                "expectedDimension": 768,
+                "timeoutMs": 15000,
+                "connectTimeoutMs": 5000,
+                "maxConcurrentRequests": 1,
+                "apiKey": "",
+                "_help": "Turns text into vectors, for the companion's long-term memory. Off by default and INERT — nothing reads memory yet, so leaving this off costs nothing and turning it on only makes the mod able to embed. This is a SEPARATE server from 'llm' above and must stay one: a normal llama.cpp answers /v1/embeddings with 501 'This server does not support embeddings', and starting it with --embeddings does not fix it either, because it would then embed with your CHAT model — llama.cpp serves one model per process. Run an embedding model of its own: 'ollama pull nomic-embed-text' then point endpoint at Ollama (:11434, the default here).",
+                "_expectedDimension": "The vector width this build expects, and a guard rather than a setting. All of the memory tuning — how much int8 compression costs the ranking, how many candidates to rescore, how many memories to recall — was measured at 768 dimensions with nomic-embed-text. A different embedding model produces a different width, and the mod refuses it rather than silently ranking in a space nothing was tuned for. Set to 0 only if you know you are re-tuning. Note that CHANGING the embedding model invalidates memories already stored: vectors from two models are not comparable, so recall gets quietly worse rather than erroring.",
+                "_maxConcurrentRequests": "How many embedding requests may be in flight at once (clamped 1-8). Leave at 1. A local embedding server handles one batch at a time regardless, and if your embedding server and your LLM server share a GPU, concurrent work across the two is the thing most likely to run you out of VRAM mid-conversation."
               },
               "tts": {
                 "enabled": true,
