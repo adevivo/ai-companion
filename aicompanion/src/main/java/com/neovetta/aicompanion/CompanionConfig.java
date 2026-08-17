@@ -242,6 +242,11 @@ public final class CompanionConfig {
     public static int reloadAndApply(MinecraftServer server) {
         CompanionSkills.reload(); // pick up edited/added .md files before apply() re-advertises them
         load();
+        // Build (or retry) the memory index. /companion reload updates the config statics but never
+        // constructs a new AltoClefController, so without this, turning memory on and reloading
+        // would appear to do nothing at all. Idempotent once it has succeeded, and a no-op when
+        // memory is off.
+        adris.altoclef.player2api.CompanionMemory.warm(server);
         // A player who just started their Kokoro container is in the TTS back-off until it expires.
         // Reload is the obvious "I have fixed it, try again" signal, so honour it as one.
         TTSManager.clearUnavailable();
@@ -470,11 +475,6 @@ public final class CompanionConfig {
             MemoryConfig.minCosine = dbl(memory, "minCosine", MemoryConfig.minCosine);
             MemoryConfig.relativeMargin = dbl(memory, "relativeMargin", MemoryConfig.relativeMargin);
             MemoryConfig.gateEnabled = bool(memory, "gateEnabled", MemoryConfig.gateEnabled);
-            // Build (or retry) the index here as well as at companion spawn. /companion reload
-            // updates these statics but never constructs a new AltoClefController, so without this
-            // turning memory on and reloading would appear to do nothing at all. Idempotent once it
-            // has succeeded.
-            adris.altoclef.player2api.CompanionMemory.warm();
         }
 
         JsonObject behavior = obj(root, "behavior");

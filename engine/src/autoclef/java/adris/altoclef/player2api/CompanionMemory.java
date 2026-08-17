@@ -61,15 +61,25 @@ public final class CompanionMemory {
      * discriminate, and several facts that no plausible chat turn will match, so a turn about
      * nothing should return nothing once {@link MemoryConfig#minCosine} is applied.
      */
-    private static final String[] SEED_FACTS = {
-        "The player is building a bridge across the ravine east of the base.",
+    private static final String[] PERSON_FACTS = {
         "The player prefers cobblestone over wood for anything left out in the weather.",
         "The player thinks dirt huts look lazy and tears them down on sight.",
-        "The player's base is in a taiga, close to a village with a library.",
         "The player is afraid of caves and would rather strip-mine than explore one.",
+        "The player always plants saplings back after chopping a tree down.",
+    };
+
+    /**
+     * Facts that are true in one save and false in the rest — pets, goals, what has been built.
+     *
+     * <p>Scoped to the world they are loaded in, so loading a different save reaches none of them.
+     * That is the property worth testing in game: the same companion, asked the same question in
+     * two worlds, should know these in one and not the other.
+     */
+    private static final String[] WORLD_FACTS = {
+        "The player is building a bridge across the ravine east of the base.",
+        "The player's base is in a taiga, close to a village with a library.",
         "The player keeps a wolf named Biscuit and will not let it near creepers.",
         "The player lost a full set of diamond gear to lava under the desert temple.",
-        "The player always plants saplings back after chopping a tree down.",
     };
 
     /** Fixed, so the same fact keeps the same identity across restarts even without storage. */
@@ -78,6 +88,15 @@ public final class CompanionMemory {
     private static final AtomicBoolean started = new AtomicBoolean();
     private static volatile MemoryRetriever retriever;
     private static volatile String unavailableReason;
+
+    /**
+     * The save the current index was built for.
+     *
+     * <p>Load a world, quit to the menu, load another: same JVM, same statics, different world. An
+     * index built for the first would hand the second world's companion the first world's memories,
+     * and nothing about that would look wrong. Rebuilt whenever this changes.
+     */
+    private static volatile String indexedWorldId;
 
     // Latency accounting, so "what did retrieval cost the turn" is answerable from the log.
     private static final AtomicLong recalls = new AtomicLong();
@@ -102,9 +121,36 @@ public final class CompanionMemory {
      * <p>Called when a companion's brain comes up rather than at mod init, so a player who never
      * spawns a companion never touches the embedder.
      */
-    public static void warm() {
+    public static void warm(net.minecraft.server.MinecraftServer server) {
+        warm(server == null ? null : server.overworld());
+    }
+
+    /**
+     * Builds the index in the background for one save, once.
+     *
+     * <p>Rebuilds if the save changed. That matters in singleplayer: quitting to the menu and
+     * loading a different world keeps the same JVM and the same statics, and an index left over
+     * from the previous world would answer with its memories in this one.
+     */
+    public static void warm(net.minecraft.server.level.ServerLevel level) {
         if (!MemoryConfig.enabled) {
             return;
+        }
+        if (level == null) {
+            return;
+        }
+        // Resolved on the SERVER THREAD, both of them. WorldIdentity reads and writes SavedData
+        // through DimensionDataStorage, which is not safe to touch from the index-building thread
+        // below — so the id and the label are captured here and only the strings cross over.
+        WorldIdentity identity = WorldIdentity.of(level);
+        String worldId = identity.id();
+        String worldLabel = identity.label();
+        if (!worldId.equals(indexedWorldId)) {
+            // A different save. Drop the old index rather than answering from it.
+            retriever = null;
+            pending.clear();
+            indexedWorldId = worldId;
+            started.set(false);
         }
         if (!EmbeddingsConfig.enabled) {
             // Deliberately a warning: memory on with embeddings off is a config mistake that would
@@ -121,24 +167,33 @@ public final class CompanionMemory {
         CompletableFuture.runAsync(() -> {
             long startedAt = System.nanoTime();
             try {
-                List<MemoryRecord> records = new ArrayList<>(SEED_FACTS.length);
-                List<float[]> vectors = new ArrayList<>(SEED_FACTS.length);
+                int total = PERSON_FACTS.length + WORLD_FACTS.length;
+                List<MemoryRecord> records = new ArrayList<>(total);
+                List<float[]> vectors = new ArrayList<>(total);
 
-                for (int i = 0; i < SEED_FACTS.length; i++) {
-                    String fact = SEED_FACTS[i];
+                for (int i = 0; i < PERSON_FACTS.length; i++) {
+                    String fact = PERSON_FACTS[i];
                     // Sequential on purpose. These are the only embeddings in flight, and on a
                     // single-GPU host overlapping them with the brain is what crashes the machine.
                     vectors.add(EmbeddingsService.embed(fact));
-                    records.add(seedRecord(i, fact, vectors.size() - 1));
+                    records.add(seedRecord(i, fact, vectors.size() - 1, null));
+                }
+                for (int i = 0; i < WORLD_FACTS.length; i++) {
+                    String fact = WORLD_FACTS[i];
+                    vectors.add(EmbeddingsService.embed(fact));
+                    records.add(seedRecord(PERSON_FACTS.length + i, fact, vectors.size() - 1,
+                            worldId));
                 }
 
                 MemoryRetriever built = new MemoryRetriever(
                         records, VectorIndex.of(vectors), MemoryScorer.measured());
                 retriever = built;
                 unavailableReason = null;
-                LOGGER.info("Memory: indexed {} seed facts at {} dimensions in {} ms.",
-                        records.size(), built.vectors().dim(),
-                        (System.nanoTime() - startedAt) / 1_000_000L);
+                LOGGER.info("Memory: indexed {} seed facts ({} world-scoped) at {} dimensions in "
+                                + "{} ms. World \"{}\" = {}",
+                        records.size(), WORLD_FACTS.length, built.vectors().dim(),
+                        (System.nanoTime() - startedAt) / 1_000_000L,
+                        worldLabel, worldId);
             } catch (Exception e) {
                 unavailableReason = e.getMessage();
                 // Release the latch so a later warm() can try again. Without this a single failure
@@ -210,9 +265,12 @@ public final class CompanionMemory {
             }
             float[] query = future.get(MemoryConfig.embedBudgetMs, TimeUnit.MILLISECONDS);
 
+            // Bound to the save. A world-scoped memory from another world is unreachable here,
+            // not merely ranked low — see RetrievalScope.admits().
+            String world = indexedWorldId;
             RetrievalScope scope = companionId == null || companionId.isBlank()
-                    ? RetrievalScope.everything()
-                    : RetrievalScope.forCompanion(companionId);
+                    ? RetrievalScope.everything().inWorld(world)
+                    : RetrievalScope.forCompanionInWorld(companionId, world);
 
             List<ScoredMemory> hits = r.retrieve(query, Instant.now(), MemoryConfig.topK, scope);
 
@@ -273,7 +331,7 @@ public final class CompanionMemory {
      * every companion should recall them. An {@code IN_WORLD} memory would be gated to one companion
      * and is the wrong shape for this.
      */
-    private static MemoryRecord seedRecord(int i, String fact, int vectorRow) {
+    private static MemoryRecord seedRecord(int i, String fact, int vectorRow, String worldId) {
         return MemoryRecord.builder()
                 .id("seed-" + i)
                 .serial(i)
@@ -293,13 +351,12 @@ public final class CompanionMemory {
                 .context(MemoryContext.CHAT)
                 .partition(Partition.OWNER)
                 .frame(MemoryFrame.REAL)
-                // ⚠️ Provisional. Several of these are plainly world facts — the base in a taiga,
-                // the bridge over the ravine, the wolf — and marking them PERSON makes them visible
-                // in every save, which is the leak MemoryScope exists to stop. They are PERSON here
-                // only because the mod has no world identity yet: nothing mints or persists one.
-                // Fixed in the next step, when a world UUID is stored in the save; until then this
-                // is a probe with fictional data and the wrong scope costs nothing real.
-                .aboutPerson()
+                // Person facts carry no world; world facts are bound to the save they were
+                // loaded in. This is the split MemoryScope exists for: a preference follows the
+                // player everywhere, a pet does not.
+                .scope(worldId == null ? com.neovetta.aicompanion.memory.MemoryScope.PERSON
+                        : com.neovetta.aicompanion.memory.MemoryScope.WORLD)
+                .worldId(worldId)
                 .provenance(new Provenance("seed", "slice", "turn-" + i, SEEDED_AT.toEpochMilli()))
                 .vectorRow(vectorRow)
                 .build();

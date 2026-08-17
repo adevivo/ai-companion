@@ -153,7 +153,7 @@ public class AltoClefController {
       // Build the memory index in the background, once per server. Done here rather than at mod
       // init so a player who never spawns a companion never touches the embedder at all. The call
       // is idempotent and returns immediately, so running it per companion costs nothing.
-      adris.altoclef.player2api.CompanionMemory.warm();
+      adris.altoclef.player2api.CompanionMemory.warm(this.getWorld());
    }
 
    public void serverTick() {
