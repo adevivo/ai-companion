@@ -83,6 +83,18 @@ public final class CompanionMemory {
     private static final AtomicLong recalls = new AtomicLong();
     private static final AtomicLong recallMillis = new AtomicLong();
     private static final AtomicLong misses = new AtomicLong();
+    private static final AtomicLong gated = new AtomicLong();
+
+    /**
+     * Query embeddings started at queue time, keyed by the exact turn text.
+     *
+     * <p>Keyed by text rather than by conversation on purpose: two companions hearing the same
+     * broadcast line share one embedding instead of making the same call twice.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<float[]>>
+            pending = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final int PENDING_CAP = 64;
 
     /**
      * Builds the index in the background, once. Safe to call repeatedly; only the first starts work.
@@ -141,10 +153,36 @@ public final class CompanionMemory {
     }
 
     /**
+     * Start embedding a turn now, so the vector is ready when the turn is dispatched.
+     *
+     * <p>Called when a player message is <b>queued</b>, which happens at least one tick before the
+     * conversation manager picks it up. That is the whole point: {@link #recall} runs on the server
+     * thread, and an embedding is a network call, so the only way to keep the tick loop clean is to
+     * have the answer already.
+     *
+     * <p>Cheap to call and safe to call often — gated, deduplicated, and a no-op when memory is off.
+     * A turn the gate rejects is never embedded at all, so the common case costs nothing.
+     */
+    public static void prefetch(String turnText) {
+        if (!MemoryConfig.enabled || retriever == null || turnText == null || turnText.isBlank()) {
+            return;
+        }
+        if (!MemoryGate.admits(turnText)) {
+            return;
+        }
+        pending.computeIfAbsent(turnText, EmbeddingsService::embedAsync);
+        if (pending.size() > PENDING_CAP) {
+            // These are ephemeral and each is a few KB. Clearing wholesale beats tracking an
+            // eviction order for something that never grows in normal play.
+            pending.clear();
+        }
+    }
+
+    /**
      * The memories worth showing this turn, best first, or an empty list.
      *
-     * <p>Never throws. Every failure — index not ready, embedder down, nothing relevant enough —
-     * degrades to "no memories", which is exactly how the companion behaves today.
+     * <p>Never throws. Every failure — index not ready, embedder down, gate refused, nothing
+     * relevant enough — degrades to "no memories", which is exactly how the companion behaves today.
      *
      * @param turnText what the player actually said
      * @param companionId the speaking companion, for scoping; may be null
@@ -155,11 +193,22 @@ public final class CompanionMemory {
             return List.of();
         }
 
+        // The gate runs first and costs nothing: no embedding, no scan. Most turns end here.
+        if (!MemoryGate.admits(turnText)) {
+            gated.incrementAndGet();
+            LOGGER.debug("Memory: gate skipped this turn — {}", MemoryGate.explain(turnText));
+            return List.of();
+        }
+
         long startedAt = System.nanoTime();
         try {
-            // Bounded wait: a slow or absent embedder must cost the turn a few ms, never seconds.
-            float[] query = EmbeddingsService.embedAsync(turnText)
-                    .get(MemoryConfig.embedBudgetMs, TimeUnit.MILLISECONDS);
+            // Normally already complete, because prefetch() started it when the message was queued.
+            // The bounded wait is the fallback for a turn that reached here another way.
+            CompletableFuture<float[]> future = pending.remove(turnText);
+            if (future == null) {
+                future = EmbeddingsService.embedAsync(turnText);
+            }
+            float[] query = future.get(MemoryConfig.embedBudgetMs, TimeUnit.MILLISECONDS);
 
             RetrievalScope scope = companionId == null || companionId.isBlank()
                     ? RetrievalScope.everything()
@@ -167,13 +216,22 @@ public final class CompanionMemory {
 
             List<ScoredMemory> hits = r.retrieve(query, Instant.now(), MemoryConfig.topK, scope);
 
+            // Two filters, answering two different questions. The floor asks "is this memory
+            // relevant at all"; the margin asks "is it as good as the best one, or just next in a
+            // list that had to return something". Ranking is already correct — the top hit was
+            // right in 7 of 8 measured turns — so the work here is deciding how much of the tail
+            // to carry, and every item carried is tokens on every turn.
+            double best = hits.isEmpty() ? 0 : hits.get(0).cosine();
             List<String> out = new ArrayList<>(hits.size());
             for (ScoredMemory hit : hits) {
-                // Relevance floor. Top-k alone always returns k, so without this every "hello"
-                // drags in the least-irrelevant fact and the companion free-associates.
-                if (hit.cosine() >= MemoryConfig.minCosine) {
-                    out.add(hit.memory().text());
+                if (hit.cosine() < MemoryConfig.minCosine) {
+                    continue;
                 }
+                if (MemoryConfig.relativeMargin > 0
+                        && hit.cosine() < best - MemoryConfig.relativeMargin) {
+                    continue;
+                }
+                out.add(hit.memory().text());
             }
 
             long ms = (System.nanoTime() - startedAt) / 1_000_000L;
@@ -203,8 +261,8 @@ public final class CompanionMemory {
         long n = recalls.get();
         String timing = n == 0 ? "no recalls yet"
                 : String.format("%d recalls, mean %d ms", n, recallMillis.get() / n);
-        return String.format("memory: %d facts, k=%d, %s, %d missed",
-                r.records().size(), MemoryConfig.topK, timing, misses.get());
+        return String.format("memory: %d facts, k=%d, %s, %d gated, %d missed",
+                r.records().size(), MemoryConfig.topK, timing, gated.get(), misses.get());
     }
 
     /**

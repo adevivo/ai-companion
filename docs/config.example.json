@@ -62,10 +62,14 @@
   "memory": {
     "enabled": false,
     "topK": 3,
-    "minCosine": 0.5,
+    "minCosine": 0.45,
+    "relativeMargin": 0.05,
+    "gateEnabled": true,
     "embedBudgetMs": 120,
     "_help": "EXPERIMENTAL, off by default, and not yet a real feature. Long-term memory: before each turn the companion looks up what it knows about you that is relevant to what you just said, and those facts are put into its context automatically - it never has to ask for them, so it works even on small local models. Requires 'embeddings' above to be enabled and working. RIGHT NOW THE FACTS ARE HARD-CODED TEST DATA about a fictional player (a bridge over a ravine, a wolf named Biscuit, and so on) and are the same for everyone: nothing is stored, nothing is learned, and nothing you say is remembered. It exists so the retrieval can be judged in a real conversation before a storage layer is built for it. Expect the companion to occasionally mention a fact that is not true of you - that is the test data talking.",
     "_topK": "How many remembered facts may reach the prompt (measured sweet spot is 5-10). Every one costs tokens on every turn, so on a paid endpoint this is money; retrieval quality is flat past 5.",
+    "_gateEnabled": "Decide whether a line is about you at all BEFORE looking anything up. This is what stops 'attack that zombie' dredging up a fact about your dog, and it costs nothing when it skips - no lookup happens. Leave it on: measured, there is no relevance threshold that separates a real question from small talk, because a meaningless line can match a fact more strongly than a genuine question does. If you turn this off, raise minCosine to 0.5.",
+    "_relativeMargin": "Drop any fact this far behind the best match, even if it passed minCosine. The scores sit in a narrow band whether or not a fact is relevant, so 'is it close to the best one' sorts the tail better than 'is it above a line' does. Effect is flat anywhere from 0.03 to 0.08. Set to 0 to keep everything that clears minCosine.",
     "_minCosine": "How closely a memory must match what was just said before it is included, from 0 to 1. Without a floor the companion always gets topK facts even when you said 'hi', and weaves in whichever fact was least irrelevant. IMPORTANT: this cannot be tuned to be correct, only to pick which mistake you prefer. Measured, a meaningless line like 'attack that zombie' matches a fact about as strongly (0.51) as a real question like 'where is my dog?' does (0.46), so any setting that catches the second also catches the first. 0.5 errs toward saying nothing: a missed memory just leaves the companion as it was, while an unwanted one makes it bring up something you never asked about. Lower it to about 0.45 if it fails to recall things it obviously should, and expect more random asides in exchange.",
     "_embedBudgetMs": "Milliseconds a turn may wait for the lookup before giving up and answering without memories. This wait happens on the server thread, so it is capped deliberately: a healthy local embedder answers in about 15ms, and anything slower should not be allowed to stutter the game."
   },

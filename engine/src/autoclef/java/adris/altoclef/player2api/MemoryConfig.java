@@ -81,13 +81,46 @@ public final class MemoryConfig {
      * nobody asked about, which is worse than today. Precision is the side to err on until there is
      * something better.
      *
-     * <p>The real fix is not a better constant. It is deciding <em>whether this turn is about the
-     * player at all</em> before ranking anything — "attack that zombie" should never have reached
-     * the scorer. That is a gate, not a threshold, and it is unbuilt.
+     * <p>⚠️ <b>This default assumes {@link #gateEnabled} is on.</b> {@link MemoryGate} removes the
+     * meaningless turns before anything is scored, so this no longer has to do that job and can sit
+     * at 0.45 — which recovers the two legitimate recalls a 0.50 floor was costing. Turning the gate
+     * off without raising this back to 0.50 puts the noise straight back in.
      */
     public static volatile double minCosine =
             Double.parseDouble(resolve("aicompanion.memory.minCosine",
-                    "AICOMPANION_MEMORY_MINCOSINE", "0.50"));
+                    "AICOMPANION_MEMORY_MINCOSINE", "0.45"));
+
+    /**
+     * Drop any memory more than this far behind the best one, even if it clears {@link #minCosine}.
+     *
+     * <p>This exists because the absolute scale is compressed: against {@code nomic-embed-text} the
+     * seed facts score between roughly 0.43 and 0.68 whether or not they are relevant, so a floor
+     * cannot separate "second best" from "filler". A relative test can, and it expresses the right
+     * idea — <em>when one memory is clearly ahead, take only it; when several are tied, the embedder
+     * is not discriminating between them, so take the tied group.</em>
+     *
+     * <p>Calibrated 2026-08-16 on the eight measured turns. The result is flat from 0.03 to 0.08
+     * (mean 1.38 memories per turn, versus about 2.1 with no margin), so 0.05 sits mid-plateau
+     * rather than on a knife-edge. Five of the eight turns come back with exactly the one correct
+     * fact; the three that keep a second are the ones where the top two are within 0.02 of each
+     * other, which is precisely the tie case this is meant to preserve.
+     *
+     * <p>Set to 0 or less to disable and fall back to {@link #topK} plus {@link #minCosine} alone.
+     */
+    public static volatile double relativeMargin =
+            Double.parseDouble(resolve("aicompanion.memory.relativeMargin",
+                    "AICOMPANION_MEMORY_RELATIVEMARGIN", "0.05"));
+
+    /**
+     * Whether to decide "is this turn about the player at all" before ranking anything.
+     *
+     * <p>On by default, and it is the mechanism that makes {@link #minCosine} tractable — see
+     * {@link MemoryGate} for why a threshold alone provably cannot do this job. Turn it off to see
+     * raw retrieval behaviour, and raise {@code minCosine} to 0.50 if you do.
+     */
+    public static volatile boolean gateEnabled =
+            Boolean.parseBoolean(resolve("aicompanion.memory.gateEnabled",
+                    "AICOMPANION_MEMORY_GATEENABLED", "true"));
 
     private static String resolve(String property, String env, String fallback) {
         String v = System.getProperty(property);

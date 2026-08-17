@@ -295,6 +295,13 @@ public class AgentConversationData {
         }
         LOGGER.info("queue for UUID={} name={} adding event={} ", getUUID(), getName(), event);
         eventQueue.add(event);
+
+        // Start embedding now rather than when the turn dispatches. The event waits here for at
+        // least a tick, and recall() runs on the SERVER THREAD — so this is what keeps a network
+        // call off the tick loop. No-op unless memory is on and the gate accepts the turn.
+        if (event instanceof Event.UserMessage msg) {
+            CompanionMemory.prefetch(msg.message());
+        }
     }
 
     private Optional<String> getReminderStringFromLastEvent(Event lastEvent) {

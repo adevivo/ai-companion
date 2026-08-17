@@ -160,10 +160,11 @@ public final class CompanionConfigScreen {
         ConfigCategory llm = builder.getOrCreateCategory(Text.literal("LLM"));
         ConfigCategory tts = builder.getOrCreateCategory(Text.literal("Voice (TTS)"));
         ConfigCategory behavior = builder.getOrCreateCategory(Text.literal("Behavior"));
+        ConfigCategory memory = builder.getOrCreateCategory(Text.literal("Memory"));
         ConfigCategory skills = builder.getOrCreateCategory(Text.literal("Skills"));
 
         // On every tab, because the warning form of this matters no matter where you land.
-        for (ConfigCategory cat : List.of(companions, llm, tts, behavior, skills)) {
+        for (ConfigCategory cat : List.of(companions, llm, tts, behavior, memory, skills)) {
             addScopeNotice(cat, eb);
         }
 
@@ -171,6 +172,7 @@ public final class CompanionConfigScreen {
         buildLlm(llm, eb, config);
         buildTts(tts, eb, config);
         buildBehavior(behavior, eb, config);
+        buildMemory(memory, eb, config);
         buildSkills(skills, eb, config);
 
         return builder.build();
@@ -507,6 +509,102 @@ public final class CompanionConfigScreen {
                         Text.literal("Print a running token-usage total to chat"),
                         Text.literal("every N tokens. Purely informational. 0 = never."))
                 .setSaveConsumer(v -> llm.addProperty("usageReportEveryTokens", v))
+                .build());
+    }
+
+    /**
+     * Long-term memory, and the loud version of what it currently is.
+     *
+     * <p>The warning is not boilerplate. The facts are hard-coded fiction about a player who does
+     * not exist, so a companion with this on will confidently refer to a bridge nobody built. Anyone
+     * turning it on without knowing that will read it as the mod being broken, and the tooltip is
+     * the only place they will find out.
+     */
+    private static void buildMemory(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
+        JsonObject memory = section(config, "memory");
+        JsonObject embeddings = section(config, "embeddings");
+
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                        "EXPERIMENTAL — not finished, and off by default.\n\n"
+                                + "The companion looks up what it knows about you that fits what you "
+                                + "just said, and those facts go into its context automatically. It "
+                                + "never has to ask for them, so this works even on small local models.\n\n"
+                                + "RIGHT NOW THE FACTS ARE TEST DATA about a fictional player — a "
+                                + "bridge over a ravine, a wolf named Biscuit. Nothing is stored, "
+                                + "nothing is learned, and nothing you say is remembered. Expect the "
+                                + "companion to mention things that were never true of you.")
+                .formatted(Formatting.YELLOW)).build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Enabled"), bool(memory, "enabled", false))
+                .setDefaultValue(false)
+                .setTooltip(
+                        Text.literal("Turn on memory recall. Needs Embeddings below."),
+                        Text.literal("Off by default — this is a work in progress."))
+                .setSaveConsumer(v -> memory.addProperty("enabled", v))
+                .build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Skip Irrelevant Turns"),
+                        bool(memory, "gateEnabled", true))
+                .setDefaultValue(true)
+                .setTooltip(
+                        Text.literal("Decide whether a line is about you at all BEFORE looking"),
+                        Text.literal("anything up. Stops \"attack that zombie\" from dredging up"),
+                        Text.literal("a fact about your dog, and costs nothing when it skips."),
+                        Text.literal("Leave this on: without it there is no reliable way to tell"),
+                        Text.literal("a real question from small talk."))
+                .setSaveConsumer(v -> memory.addProperty("gateEnabled", v))
+                .build());
+
+        cat.addEntry(eb.startIntSlider(Text.literal("Max Memories Per Reply"),
+                        intVal(memory, "topK", 3), 1, 10)
+                .setDefaultValue(3)
+                .setTooltip(
+                        Text.literal("Upper limit on how many facts can reach one reply."),
+                        Text.literal("Usually only one or two actually clear the filters."),
+                        Text.literal("Every one costs tokens on every turn."))
+                .setSaveConsumer(v -> memory.addProperty("topK", v))
+                .build());
+
+        cat.addEntry(eb.startDoubleField(Text.literal("Minimum Relevance"),
+                        dbl(memory, "minCosine", 0.45))
+                .setDefaultValue(0.45)
+                .setTooltip(
+                        Text.literal("0 to 1. How closely a fact must match before it is used."),
+                        Text.literal("Raise it if the companion brings up unrelated things;"),
+                        Text.literal("lower it if it forgets things it obviously should know."),
+                        Text.literal("Raise to 0.50 if you turn off Skip Irrelevant Turns."))
+                .setSaveConsumer(v -> memory.addProperty("minCosine", v))
+                .build());
+
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                        "Embeddings — the lookup service memory needs. A SEPARATE server from the "
+                                + "one in the LLM tab: a normal llama.cpp cannot do this job, and "
+                                + "pointing this at it will not work. Run an embedding model of its "
+                                + "own: \"ollama pull nomic-embed-text\", then leave the endpoint below.")
+                .formatted(Formatting.GRAY)).build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Embeddings Enabled"),
+                        bool(embeddings, "enabled", false))
+                .setDefaultValue(false)
+                .setTooltip(Text.literal("Required for memory. Harmless on its own."))
+                .setSaveConsumer(v -> embeddings.addProperty("enabled", v))
+                .build());
+
+        cat.addEntry(eb.startStrField(Text.literal("Embeddings Endpoint"),
+                        str(embeddings, "endpoint", "http://localhost:11434"))
+                .setDefaultValue("http://localhost:11434")
+                .setTooltip(Text.literal("Ollama's default port. No trailing slash, no /v1."))
+                .setSaveConsumer(v -> embeddings.addProperty("endpoint", v))
+                .build());
+
+        cat.addEntry(eb.startStrField(Text.literal("Embeddings Model"),
+                        str(embeddings, "model", "nomic-embed-text"))
+                .setDefaultValue("nomic-embed-text")
+                .setTooltip(
+                        Text.literal("Changing this is not a preference — every setting on this"),
+                        Text.literal("tab was tuned for nomic-embed-text at 768 dimensions, and a"),
+                        Text.literal("model of a different width is refused rather than used."))
+                .setSaveConsumer(v -> embeddings.addProperty("model", v))
                 .build());
     }
 
