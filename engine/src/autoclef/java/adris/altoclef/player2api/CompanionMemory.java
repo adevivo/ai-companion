@@ -293,6 +293,13 @@ public final class CompanionMemory {
                 .context(MemoryContext.CHAT)
                 .partition(Partition.OWNER)
                 .frame(MemoryFrame.REAL)
+                // ⚠️ Provisional. Several of these are plainly world facts — the base in a taiga,
+                // the bridge over the ravine, the wolf — and marking them PERSON makes them visible
+                // in every save, which is the leak MemoryScope exists to stop. They are PERSON here
+                // only because the mod has no world identity yet: nothing mints or persists one.
+                // Fixed in the next step, when a world UUID is stored in the save; until then this
+                // is a probe with fictional data and the wrong scope costs nothing real.
+                .aboutPerson()
                 .provenance(new Provenance("seed", "slice", "turn-" + i, SEEDED_AT.toEpochMilli()))
                 .vectorRow(vectorRow)
                 .build();
