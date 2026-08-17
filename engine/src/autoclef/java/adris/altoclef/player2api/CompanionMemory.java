@@ -177,6 +177,20 @@ public final class CompanionMemory {
      */
     public static MemoryRecord remember(UUID player, String text, MemoryScope scope, String worldId)
             throws Exception {
+        return remember(player, text, scope, worldId, null);
+    }
+
+    /**
+     * As above, recording where it happened.
+     *
+     * <p>A memory about a place needs the place in it. Without one the model has a sentence and no
+     * coordinates, and when asked "where is home?" it fills the gap from whatever else is in the
+     * packet — observed live, it answered with the world's spawn point taken from {@code
+     * worldStatus} and presented it as something it remembered. That is worse than inventing a
+     * number, because the number is real and merely belongs to something else.
+     */
+    public static MemoryRecord remember(UUID player, String text, MemoryScope scope, String worldId,
+            com.neovetta.aicompanion.memory.Place place) throws Exception {
         if (!MemoryConfig.enabled) {
             throw new IllegalStateException("Memory is disabled.");
         }
@@ -186,7 +200,7 @@ public final class CompanionMemory {
         if (!stores.containsKey(player)) {
             stores.put(player, MemoryStore.load(player));
         }
-        MemoryRecord stored = writeFact(player, text, scope, worldId);
+        MemoryRecord stored = writeFact(player, text, scope, worldId, place);
         rebuild(player);
         return stored;
     }
@@ -194,6 +208,11 @@ public final class CompanionMemory {
     /** Embeds one fact and folds it into a player's store. */
     private static MemoryRecord writeFact(UUID player, String text, MemoryScope scope,
             String worldId) {
+        return writeFact(player, text, scope, worldId, null);
+    }
+
+    private static MemoryRecord writeFact(UUID player, String text, MemoryScope scope,
+            String worldId, com.neovetta.aicompanion.memory.Place place) {
         try {
             MemoryStore store = stores.get(player);
             Instant now = Instant.now();
@@ -221,6 +240,9 @@ public final class CompanionMemory {
                             now.toEpochMilli()));
             if (scope == MemoryScope.WORLD) {
                 b.inWorld(worldId);
+                if (place != null) {
+                    b.place(place);
+                }
             } else {
                 b.aboutPerson();
             }
@@ -317,7 +339,13 @@ public final class CompanionMemory {
                         && hit.cosine() < best - MemoryConfig.relativeMargin) {
                     continue;
                 }
-                out.add(hit.memory().text());
+                // Carry the coordinates into the prompt. A located memory whose text alone
+                // reaches the model is precisely how it ends up borrowing a number from elsewhere
+                // in the packet and calling it a memory.
+                MemoryRecord mem = hit.memory();
+                out.add(mem.place() == null
+                        ? mem.text()
+                        : mem.text() + " (" + mem.place() + ")");
             }
 
             long ms = (System.nanoTime() - startedAt) / 1_000_000L;

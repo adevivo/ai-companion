@@ -279,18 +279,34 @@ public final class CompanionCommands {
                 : null;
         final MinecraftServer server = source.getServer();
 
+        // Where the player is standing, for a world memory. "rememberhere" means here, and a
+        // memory about a place that carries no place is what makes the companion borrow a
+        // coordinate from elsewhere in the prompt and present it as something it recalled.
+        // Captured on the server thread, before the async write.
+        final com.neovetta.aicompanion.memory.Place place = thisWorldOnly
+                ? new com.neovetta.aicompanion.memory.Place(
+                        source.getWorld().getRegistryKey().getValue().toString(),
+                        player.getBlockPos().getX(),
+                        player.getBlockPos().getY(),
+                        player.getBlockPos().getZ())
+                : null;
+
         CompletableFuture.runAsync(() -> {
             try {
                 adris.altoclef.player2api.CompanionMemory.remember(owner, fact.strip(),
                         thisWorldOnly
                                 ? com.neovetta.aicompanion.memory.MemoryScope.WORLD
                                 : com.neovetta.aicompanion.memory.MemoryScope.PERSON,
-                        worldId);
+                        worldId, place);
                 int held = adris.altoclef.player2api.CompanionMemory.countFor(owner);
                 // Back to the server thread to talk: sendFeedback is not safe off it.
                 server.execute(() -> source.sendFeedback(() -> Text.literal(
-                        (thisWorldOnly ? "Remembered, for this world: " : "Remembered: ")
-                                + fact.strip())
+                        (thisWorldOnly
+                                ? "Remembered, here in this world: "
+                                : "Remembered: ")
+                                + fact.strip()
+                                + (place == null ? "" : "  @ " + place.x() + ", " + place.y()
+                                        + ", " + place.z()))
                         .formatted(Formatting.GREEN)
                         .append(Text.literal("  (" + held + " stored)")
                                 .formatted(Formatting.DARK_GRAY)), false));

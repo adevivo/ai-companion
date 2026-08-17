@@ -157,6 +157,13 @@ public final class MemoryStore {
         vectors.add(vector);
         index = VectorIndex.of(vectors);
         persist();
+        // Additions were the one path that logged nothing, which made "did that write land?" a
+        // question only answerable by going and reading the files.
+        LOGGER.info("Memory: learned \"{}\" [{}{}{}] — {} now stored",
+                stored.value(), stored.scope(),
+                stored.worldId() == null ? "" : " " + stored.worldId(),
+                stored.place() == null ? "" : " @ " + stored.place(),
+                records.size());
         return stored;
     }
 
