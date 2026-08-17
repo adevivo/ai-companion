@@ -4,6 +4,7 @@ import adris.altoclef.player2api.BehaviorConfig;
 import adris.altoclef.player2api.Character;
 import adris.altoclef.player2api.EmbeddingsConfig;
 import adris.altoclef.player2api.LlmConfig;
+import adris.altoclef.player2api.MemoryConfig;
 import adris.altoclef.player2api.Prompts;
 import adris.altoclef.player2api.TtsConfig;
 import adris.altoclef.player2api.manager.ConversationManager;
@@ -461,6 +462,19 @@ public final class CompanionConfig {
             }
         }
 
+        JsonObject memory = obj(root, "memory");
+        if (memory != null) {
+            MemoryConfig.enabled = bool(memory, "enabled", MemoryConfig.enabled);
+            MemoryConfig.topK = intVal(memory, "topK", MemoryConfig.topK);
+            MemoryConfig.embedBudgetMs = intVal(memory, "embedBudgetMs", MemoryConfig.embedBudgetMs);
+            MemoryConfig.minCosine = dbl(memory, "minCosine", MemoryConfig.minCosine);
+            // Build (or retry) the index here as well as at companion spawn. /companion reload
+            // updates these statics but never constructs a new AltoClefController, so without this
+            // turning memory on and reloading would appear to do nothing at all. Idempotent once it
+            // has succeeded.
+            adris.altoclef.player2api.CompanionMemory.warm();
+        }
+
         JsonObject behavior = obj(root, "behavior");
         if (behavior != null) {
             BehaviorConfig.triggerPrefix = str(behavior, "triggerPrefix", BehaviorConfig.triggerPrefix);
@@ -657,6 +671,16 @@ public final class CompanionConfig {
                 "_help": "Turns text into vectors, for the companion's long-term memory. Off by default and INERT — nothing reads memory yet, so leaving this off costs nothing and turning it on only makes the mod able to embed. This is a SEPARATE server from 'llm' above and must stay one: a normal llama.cpp answers /v1/embeddings with 501 'This server does not support embeddings', and starting it with --embeddings does not fix it either, because it would then embed with your CHAT model — llama.cpp serves one model per process. Run an embedding model of its own: 'ollama pull nomic-embed-text' then point endpoint at Ollama (:11434, the default here).",
                 "_expectedDimension": "The vector width this build expects, and a guard rather than a setting. All of the memory tuning — how much int8 compression costs the ranking, how many candidates to rescore, how many memories to recall — was measured at 768 dimensions with nomic-embed-text. A different embedding model produces a different width, and the mod refuses it rather than silently ranking in a space nothing was tuned for. Set to 0 only if you know you are re-tuning. Note that CHANGING the embedding model invalidates memories already stored: vectors from two models are not comparable, so recall gets quietly worse rather than erroring.",
                 "_maxConcurrentRequests": "How many embedding requests may be in flight at once (clamped 1-8). Leave at 1. A local embedding server handles one batch at a time regardless, and if your embedding server and your LLM server share a GPU, concurrent work across the two is the thing most likely to run you out of VRAM mid-conversation."
+              },
+              "memory": {
+                "enabled": false,
+                "topK": 3,
+                "minCosine": 0.5,
+                "embedBudgetMs": 120,
+                "_help": "EXPERIMENTAL, off by default, and not yet a real feature. Long-term memory: before each turn the companion looks up what it knows about you that is relevant to what you just said, and those facts are put into its context automatically - it never has to ask for them, so it works even on small local models. Requires 'embeddings' above to be enabled and working. RIGHT NOW THE FACTS ARE HARD-CODED TEST DATA about a fictional player (a bridge over a ravine, a wolf named Biscuit, and so on) and are the same for everyone: nothing is stored, nothing is learned, and nothing you say is remembered. It exists so the retrieval can be judged in a real conversation before a storage layer is built for it. Expect the companion to occasionally mention a fact that is not true of you - that is the test data talking.",
+                "_topK": "How many remembered facts may reach the prompt (measured sweet spot is 5-10). Every one costs tokens on every turn, so on a paid endpoint this is money; retrieval quality is flat past 5.",
+                "_minCosine": "How closely a memory must match what was just said before it is included, from 0 to 1. Without a floor the companion always gets topK facts even when you said 'hi', and weaves in whichever fact was least irrelevant. IMPORTANT: this cannot be tuned to be correct, only to pick which mistake you prefer. Measured, a meaningless line like 'attack that zombie' matches a fact about as strongly (0.51) as a real question like 'where is my dog?' does (0.46), so any setting that catches the second also catches the first. 0.5 errs toward saying nothing: a missed memory just leaves the companion as it was, while an unwanted one makes it bring up something you never asked about. Lower it to about 0.45 if it fails to recall things it obviously should, and expect more random asides in exchange.",
+                "_embedBudgetMs": "Milliseconds a turn may wait for the lookup before giving up and answering without memories. This wait happens on the server thread, so it is capped deliberately: a healthy local embedder answers in about 15ms, and anything slower should not be allowed to stutter the game."
               },
               "tts": {
                 "enabled": true,

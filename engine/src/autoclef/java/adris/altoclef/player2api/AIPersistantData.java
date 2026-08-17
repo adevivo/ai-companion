@@ -46,8 +46,14 @@ public class AIPersistantData {
         return lastEvent;
     }
     public ConversationHistory getConversationHistoryWrappedWithStatus(String worldStatus, String agentStatus, String altoClefDebugMsgs, Player2APIService player2apiService, Optional<String> reminderString){
+        return getConversationHistoryWrappedWithStatus(worldStatus, agentStatus, altoClefDebugMsgs,
+                player2apiService, reminderString, java.util.List.of());
+    }
+
+    /** As above, plus any memories recalled for this turn. */
+    public ConversationHistory getConversationHistoryWrappedWithStatus(String worldStatus, String agentStatus, String altoClefDebugMsgs, Player2APIService player2apiService, Optional<String> reminderString, java.util.List<String> memories){
         return this.conversationHistory
-                .copyThenWrapLatestWithStatus(worldStatus, agentStatus, altoClefDebugMsgs, player2apiService, reminderString);
+                .copyThenWrapLatestWithStatus(worldStatus, agentStatus, altoClefDebugMsgs, player2apiService, reminderString, memories);
     }
     public void addAssistantMessage(String llmMessage, Player2APIService player2apiService){
         this.conversationHistory.addAssistantMessage(llmMessage, player2apiService);

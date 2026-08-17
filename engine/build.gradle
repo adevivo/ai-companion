@@ -53,6 +53,14 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
     implementation 'com.google.code.findbugs:jsr305:3.0.2'
 
+    // The memory engine from ../../ai-companion-memory, staged into libs/.
+    //
+    // compileOnly, NOT implementation: the consumer mod already nests this jar (JiJ), and Fabric
+    // puts every nested jar on one classloader, so the classes are there at runtime. Declaring it
+    // implementation here would bundle a second copy — two versions of the same scorer on the
+    // classpath is precisely the silent-divergence failure this engine exists to prevent.
+    compileOnly 'libs:aicompanion-memory:0.1.0-SNAPSHOT'
+
     implementation 'com.fasterxml.jackson.core:jackson-core:2.16.0'
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.16.0'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.16.0'

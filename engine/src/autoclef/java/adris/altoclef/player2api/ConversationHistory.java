@@ -257,6 +257,24 @@ public class ConversationHistory {
    // ReminderString adds a reminder to the latest user message if present.
    public ConversationHistory copyThenWrapLatestWithStatus(String worldStatus, String agentStatus,
          String altoclefStatusMsgs, Player2APIService player2apiService, Optional<String> reminderString) {
+      return copyThenWrapLatestWithStatus(worldStatus, agentStatus, altoclefStatusMsgs,
+            player2apiService, reminderString, java.util.List.of());
+   }
+
+   /**
+    * As above, plus any memories retrieved for this turn.
+    *
+    * <p>Memory is one more field in the packet the brain already assembles, which is why "give the
+    * companion a memory" needs no cooperation from the model: it never asks for a memory and never
+    * learns that it could. The relevant facts are simply already in the context, next to the world
+    * state, by the time it reads anything.
+    *
+    * <p>An empty list adds no field at all, so a turn that recalls nothing produces exactly the
+    * prompt it would have produced before memory existed.
+    */
+   public ConversationHistory copyThenWrapLatestWithStatus(String worldStatus, String agentStatus,
+         String altoclefStatusMsgs, Player2APIService player2apiService, Optional<String> reminderString,
+         java.util.List<String> memories) {
       ConversationHistory copy = new ConversationHistory(this.conversationHistory.get(0).get("content").getAsString());
 
       for (int i = 1; i < this.conversationHistory.size() - 1; i++) {
@@ -276,6 +294,12 @@ public class ConversationHistory {
             msgObj.add("agentStatus", agentStatus);
             if (!altoclefStatusMsgs.isBlank()) {
                msgObj.add("gameDebugMessages", altoclefStatusMsgs);
+            }
+            if (memories != null && !memories.isEmpty()) {
+               // Presented as things already known rather than as search results. "Here is what you
+               // remember" invites the model to answer the question; a labelled retrieval dump
+               // invites it to talk about the retrieval.
+               msgObj.add("memories", String.join(" | ", memories));
             }
             last.addProperty("content", msgObj.toString());
          }

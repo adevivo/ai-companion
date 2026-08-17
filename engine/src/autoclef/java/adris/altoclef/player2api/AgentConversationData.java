@@ -172,9 +172,19 @@ public class AgentConversationData {
         String agentStatus = AgentStatus.fromMod(this.mod).toString();
         String worldStatus = WorldStatus.fromMod(this.mod).toString();
         String altoClefDebugMsgs = this.altoClefMsgBuffer.dumpAndGetString();
+
+        // Recall against what was actually said, and only when somebody said it. A self-prompted
+        // turn ("your last command finished") has no question in it, so retrieving against the
+        // InfoMessage text would rank memories about nothing and spend tokens doing it.
+        java.util.List<String> memories = java.util.List.of();
+        if (!this.autonomousTurnInFlight && lastEvent != null && lastEvent.message() != null) {
+            memories = CompanionMemory.recall(lastEvent.message(),
+                    mod.getAIPersistantData().getCharacter().name());
+        }
+
         ConversationHistory historyWithWrappedStatus = mod.getAIPersistantData()
                 .getConversationHistoryWrappedWithStatus(worldStatus, agentStatus, altoClefDebugMsgs,
-                        mod.getPlayer2APIService(), reminderString);
+                        mod.getPlayer2APIService(), reminderString, memories);
 
         LOGGER.info("[AICommandBridge/processChatWithAPI]: Calling LLM: history={}",
                 new Object[] { historyWithWrappedStatus.toString() });

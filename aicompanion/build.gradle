@@ -45,6 +45,17 @@ dependencies {
     // standalone; the nested jar keeps its own LGPL-3.0 license (META-INF/LICENSE).
     include(modImplementation("libs:PlayerEngine:+"))
 
+    // The memory engine from ../../ai-companion-memory (built there, staged into libs/). Plain
+    // Java 17 + Gson, no Minecraft and no Fabric, so Loom wraps the non-mod jar for JiJ. Gson is
+    // deliberately not nested with it — Minecraft already ships Gson, and a second copy on the
+    // classpath is a real hazard rather than a redundancy.
+    //
+    // Pinned to an exact version rather than '+': Gradle caches dynamic-version resolution, so
+    // restaging a changed jar under an unchanged version silently keeps the old one. That cost real
+    // time on PlayerEngine today. Bump the version in ../../ai-companion-memory/engine/build.gradle
+    // and here together.
+    include(implementation("libs:aicompanion-memory:0.1.0-SNAPSHOT"))
+
     implementation 'com.google.code.findbugs:jsr305:3.0.2'
 
     // In-game config screen. Cloth Config builds the screen and is JiJ'd (include) so the
