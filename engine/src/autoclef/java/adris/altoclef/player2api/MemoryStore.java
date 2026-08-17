@@ -141,15 +141,37 @@ public final class MemoryStore {
             int at = existing.get();
             MemoryRecord held = records.get(at);
             if (held.value() != null && held.value().equals(incoming.value())) {
-                MemoryRecord reinforced = held.reinforcedAt(now);
-                records.set(at, reinforced);
-                persist();
-                LOGGER.info("Memory: confirmed \"{}\" (now seen {} times)",
-                        reinforced.value(), reinforced.occurrences());
-                return reinforced;
+                // Same claim — but a restatement can still carry something the held record lacks.
+                boolean placeMoved = held.place() != null && incoming.place() != null
+                        && !held.place().equals(incoming.place());
+                if (placeMoved) {
+                    // The claim is unchanged and its location is not: the thing moved. That is the
+                    // world changing, which is a supersession, not a confirmation.
+                    records.set(at, held.supersededAt(now));
+                    LOGGER.info("Memory: \"{}\" moved from {} to {}",
+                            held.value(), held.place(), incoming.place());
+                } else {
+                    MemoryRecord reinforced = held.reinforcedAt(now);
+                    // A location learned later fills a gap rather than contradicting anything.
+                    // Dropping it — which this did — loses the only part of the restatement worth
+                    // having, and leaves the model to invent coordinates it was just handed.
+                    if (held.place() == null && incoming.place() != null) {
+                        reinforced = reinforced.withPlace(incoming.place());
+                        LOGGER.info("Memory: confirmed \"{}\" and learned where: {}",
+                                reinforced.value(), incoming.place());
+                    } else {
+                        LOGGER.info("Memory: confirmed \"{}\" (seen {} times)",
+                                reinforced.value(), reinforced.occurrences());
+                    }
+                    records.set(at, reinforced);
+                    persist();
+                    return reinforced;
+                }
+            } else {
+                records.set(at, held.supersededAt(now));
+                LOGGER.info("Memory: superseded \"{}\" with \"{}\"", held.value(),
+                        incoming.value());
             }
-            records.set(at, held.supersededAt(now));
-            LOGGER.info("Memory: superseded \"{}\" with \"{}\"", held.value(), incoming.value());
         }
 
         MemoryRecord stored = incoming.withVectorRow(vectors.size());

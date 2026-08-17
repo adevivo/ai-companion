@@ -293,20 +293,25 @@ public final class CompanionCommands {
 
         CompletableFuture.runAsync(() -> {
             try {
-                adris.altoclef.player2api.CompanionMemory.remember(owner, fact.strip(),
+                // The record as STORED, not as submitted. Reporting the position we captured would
+                // claim success even when the store kept an older record and dropped it — which is
+                // exactly what happened the first time this shipped.
+                com.neovetta.aicompanion.memory.MemoryRecord saved =
+                        adris.altoclef.player2api.CompanionMemory.remember(owner, fact.strip(),
                         thisWorldOnly
                                 ? com.neovetta.aicompanion.memory.MemoryScope.WORLD
                                 : com.neovetta.aicompanion.memory.MemoryScope.PERSON,
                         worldId, place);
                 int held = adris.altoclef.player2api.CompanionMemory.countFor(owner);
+                final String where = saved.place() == null ? ""
+                        : "  @ " + saved.place().x() + ", " + saved.place().y()
+                                + ", " + saved.place().z();
                 // Back to the server thread to talk: sendFeedback is not safe off it.
                 server.execute(() -> source.sendFeedback(() -> Text.literal(
                         (thisWorldOnly
                                 ? "Remembered, here in this world: "
                                 : "Remembered: ")
-                                + fact.strip()
-                                + (place == null ? "" : "  @ " + place.x() + ", " + place.y()
-                                        + ", " + place.z()))
+                                + fact.strip() + where)
                         .formatted(Formatting.GREEN)
                         .append(Text.literal("  (" + held + " stored)")
                                 .formatted(Formatting.DARK_GRAY)), false));

@@ -59,7 +59,7 @@ dependencies {
     // puts every nested jar on one classloader, so the classes are there at runtime. Declaring it
     // implementation here would bundle a second copy — two versions of the same scorer on the
     // classpath is precisely the silent-divergence failure this engine exists to prevent.
-    compileOnly 'libs:aicompanion-memory:0.3.0'
+    compileOnly 'libs:aicompanion-memory:0.4.0'
 
     implementation 'com.fasterxml.jackson.core:jackson-core:2.16.0'
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.16.0'
