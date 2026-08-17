@@ -194,15 +194,20 @@ public final class CompanionMemory {
                         records.size(), WORLD_FACTS.length, built.vectors().dim(),
                         (System.nanoTime() - startedAt) / 1_000_000L,
                         worldLabel, worldId);
-            } catch (Exception e) {
-                unavailableReason = e.getMessage();
+            } catch (Throwable e) {
+                // Throwable, not Exception, and that is the whole point. A version skew between the
+                // engine and the memory jar surfaces as NoSuchMethodError or NoClassDefFoundError —
+                // an Error, not an Exception — and catching only Exception let one vanish into an
+                // unobserved CompletableFuture. The symptom was a companion that simply never
+                // recalled anything, with nothing in the log at all. Never again silently.
+                unavailableReason = e.toString();
                 // Release the latch so a later warm() can try again. Without this a single failure
                 // — an embedder that had not finished starting, most likely — would be permanent
                 // for the whole server session, with /companion reload unable to clear it.
                 started.set(false);
-                LOGGER.warn("Memory: could not build the index ({}). The companion will run without"
-                        + " memories; everything else is unaffected. Fix the embedder and run"
-                        + " /companion reload to retry.", e.getMessage());
+                LOGGER.warn("Memory: could not build the index. The companion will run without"
+                        + " memories; everything else is unaffected. Fix the cause and run"
+                        + " /companion reload to retry.", e);
             }
         });
     }

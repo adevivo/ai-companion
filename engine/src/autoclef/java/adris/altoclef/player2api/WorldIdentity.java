@@ -113,6 +113,13 @@ public final class WorldIdentity extends SavedData {
         WorldIdentity identity = overworld.getDataStorage()
                 .computeIfAbsent(WorldIdentity::load, () -> {
                     WorldIdentity created = fresh(name);
+                    // ⚠️ REQUIRED. computeIfAbsent registers the instance but does not mark it
+                    // dirty, and SavedData is only written when it is. Without this the id is
+                    // minted fresh on every single load and never reaches disk — which looks like
+                    // it works, right up until every memory attached to the previous id is
+                    // unreachable. Confirmed by its absence: three loads, three different ids, no
+                    // aicompanion_world_id.dat anywhere.
+                    created.setDirty();
                     LOGGER.info("Minted a world identity for \"{}\": {}", name, created.id);
                     return created;
                 }, DATA_NAME);
