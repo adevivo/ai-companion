@@ -46,14 +46,15 @@ public final class MemoryConfig {
      * model load (~500 ms) or an embedder that has gone away (connect timeout) would be very
      * visible, so the wait is capped and a miss simply means the turn runs without memories.
      *
-     * <p>120 ms leaves room for a slow-but-working call while staying under three ticks. The real
-     * fix is to embed when the message is queued rather than when the turn dispatches — the event
-     * sits in the queue for at least a tick, which is ample — and that is the first thing to do if
-     * this slice is kept.
+     * <p>Since {@link CompanionMemory#prefetch} now starts the embedding when the message is
+     * <em>queued</em>, this budget is normally not spent at all — the vector is already there by
+     * the time the turn dispatches. It only bites when prefetch missed, which makes a wider ceiling
+     * close to free: 250 ms costs nothing in the common case and absorbs a GC pause or a model that
+     * has just been swapped back in, either of which would otherwise silently drop a recall.
      */
     public static volatile int embedBudgetMs =
             Integer.parseInt(resolve("aicompanion.memory.embedBudgetMs",
-                    "AICOMPANION_MEMORY_EMBEDBUDGETMS", "120"));
+                    "AICOMPANION_MEMORY_EMBEDBUDGETMS", "250"));
 
     /**
      * Drop memories whose cosine similarity to the turn falls below this.

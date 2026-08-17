@@ -256,7 +256,8 @@ public final class CompanionMemory {
         // The gate runs first and costs nothing: no embedding, no scan. Most turns end here.
         if (!MemoryGate.admits(turnText)) {
             gated.incrementAndGet();
-            LOGGER.debug("Memory: gate skipped this turn — {}", MemoryGate.explain(turnText));
+            LOGGER.info("Memory: no recall — gate skipped this turn ({})",
+                    MemoryGate.explain(turnText));
             return List.of();
         }
 
@@ -300,13 +301,27 @@ public final class CompanionMemory {
             long ms = (System.nanoTime() - startedAt) / 1_000_000L;
             recalls.incrementAndGet();
             recallMillis.addAndGet(ms);
-            LOGGER.debug("Memory: {} of {} candidates cleared {} in {} ms",
-                    out.size(), hits.size(), MemoryConfig.minCosine, ms);
+            if (out.isEmpty()) {
+                // INFO, not DEBUG. "Recalled nothing" is the outcome that needs explaining, and
+                // burying the reason meant a turn that should plainly have matched could not be
+                // diagnosed from a log at all — only guessed at.
+                LOGGER.info("Memory: no recall — {} candidates, best cosine {} below floor {} "
+                                + "(took {} ms)",
+                        hits.size(), hits.isEmpty() ? "n/a" : String.format("%.3f", best),
+                        MemoryConfig.minCosine, ms);
+            } else {
+                LOGGER.info("Memory: recalled {} of {} candidates, best cosine {}, in {} ms",
+                        out.size(), hits.size(), String.format("%.3f", best), ms);
+            }
             return out;
         } catch (Exception e) {
-            // Includes TimeoutException, which is the expected failure, not an exceptional one.
+            // Includes TimeoutException, which is an expected failure rather than an exceptional
+            // one — but it must still be visible. A turn that quietly skipped its own embedding
+            // looks identical to a turn where nothing was relevant, and those want opposite fixes.
             misses.incrementAndGet();
-            LOGGER.debug("Memory: no recall this turn ({})", e.getClass().getSimpleName());
+            LOGGER.info("Memory: no recall — {} after {} ms (budget {} ms)",
+                    e.getClass().getSimpleName(),
+                    (System.nanoTime() - startedAt) / 1_000_000L, MemoryConfig.embedBudgetMs);
             return List.of();
         }
     }
