@@ -33,6 +33,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Dev/admin commands for the companion. Phase 1: {@code /companion spawn} drops a companion at the
@@ -69,6 +71,14 @@ public final class CompanionCommands {
                         .then(withOptionalName("where", CompanionCommands::where))
                         .then(withOptionalName("stats", CompanionCommands::stats))
                         .then(withOptionalName("despawn", CompanionCommands::despawn))
+                        .then(CommandManager.literal("remember")
+                                .then(CommandManager.argument("fact", StringArgumentType.greedyString())
+                                        .executes(ctx -> remember(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "fact"), false))))
+                        .then(CommandManager.literal("rememberhere")
+                                .then(CommandManager.argument("fact", StringArgumentType.greedyString())
+                                        .executes(ctx -> remember(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "fact"), true))))
                         .then(CommandManager.literal("list").executes(ctx -> list(ctx.getSource())))
                         .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
                         .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
@@ -239,6 +249,60 @@ public final class CompanionCommands {
      * blocks away, got no reply and assumed their companion had died — then spawned a second one
      * beside the first. Nothing in the game would have told them otherwise.
      */
+    /**
+     * Teaches the companion a fact, and writes it to disk.
+     *
+     * <p>Two forms because scope cannot be guessed and getting it wrong is invisible:
+     * {@code /companion remember} stores something true of the player everywhere, and
+     * {@code /companion rememberhere} stores something true only in this world. "I prefer
+     * cobblestone" is the first; "my base is in the taiga" is the second, and storing the second as
+     * the first would have the companion assert it in every save.
+     *
+     * <p>Runs off the server thread: embedding is a network call and persisting writes files.
+     */
+    private static int remember(ServerCommandSource source, String fact, boolean thisWorldOnly) {
+        ServerPlayerEntity player;
+        try {
+            player = source.getPlayerOrThrow();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Only a player can teach a companion something."));
+            return 0;
+        }
+        if (fact == null || fact.isBlank()) {
+            source.sendError(Text.literal("Give it something to remember."));
+            return 0;
+        }
+
+        final UUID owner = player.getUuid();
+        final String worldId = thisWorldOnly
+                ? adris.altoclef.player2api.WorldIdentity.idOf(source.getWorld())
+                : null;
+        final MinecraftServer server = source.getServer();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                adris.altoclef.player2api.CompanionMemory.remember(owner, fact.strip(),
+                        thisWorldOnly
+                                ? com.neovetta.aicompanion.memory.MemoryScope.WORLD
+                                : com.neovetta.aicompanion.memory.MemoryScope.PERSON,
+                        worldId);
+                int held = adris.altoclef.player2api.CompanionMemory.countFor(owner);
+                // Back to the server thread to talk: sendFeedback is not safe off it.
+                server.execute(() -> source.sendFeedback(() -> Text.literal(
+                        (thisWorldOnly ? "Remembered, for this world: " : "Remembered: ")
+                                + fact.strip())
+                        .formatted(Formatting.GREEN)
+                        .append(Text.literal("  (" + held + " stored)")
+                                .formatted(Formatting.DARK_GRAY)), false));
+            } catch (Throwable e) {
+                String why = e.getMessage() == null ? e.toString() : e.getMessage();
+                server.execute(() -> source.sendError(Text.literal("Could not remember that: " + why)));
+                AiCompanion.LOGGER.warn("[{}] /companion remember failed", AiCompanion.MOD_ID, e);
+            }
+        });
+        return 1;
+    }
+
     private static int list(ServerCommandSource source) {
         List<CompanionEntity> companions = liveCompanions(source);
         if (companions.isEmpty()) {

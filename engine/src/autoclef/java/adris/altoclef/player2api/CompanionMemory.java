@@ -6,47 +6,42 @@ import com.neovetta.aicompanion.memory.MemoryFrame;
 import com.neovetta.aicompanion.memory.MemoryKind;
 import com.neovetta.aicompanion.memory.MemoryRecord;
 import com.neovetta.aicompanion.memory.MemoryRetriever;
+import com.neovetta.aicompanion.memory.MemoryScope;
 import com.neovetta.aicompanion.memory.MemoryScorer;
 import com.neovetta.aicompanion.memory.Partition;
 import com.neovetta.aicompanion.memory.Provenance;
 import com.neovetta.aicompanion.memory.RetrievalScope;
 import com.neovetta.aicompanion.memory.ScoredMemory;
-import com.neovetta.aicompanion.memory.VectorIndex;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * The retrieval slice: hard-coded memories, embedded once, ranked against each turn.
+ * The companion's long-term memory: what it recalls, and how it learns.
  *
- * <p><b>This is a probe, not a feature.</b> It exists to answer whether recalling the right fact
- * improves the companion, before storage, encryption, a write path or entity resolution are built
- * for it. Consequently:
- *
- * <ul>
- *   <li>The memories are <b>the same fictional set for every player</b> and are listed below.</li>
- *   <li>Nothing persists. The index is rebuilt on every server start.</li>
- *   <li>Nothing is ever written. The companion cannot learn a new fact; it can only recall these.</li>
- * </ul>
- *
- * <p>What it does exercise is real: the embedder, the scoring engine as it actually ships, the
- * prompt seam, and the latency all of that costs a turn.
+ * <p>Memories live in {@link MemoryStore}, one store per player, and survive a restart. Retrieval is
+ * automatic and invisible — the turn is embedded, the store is ranked, and the best matches are put
+ * into the prompt before the model runs. Nothing depends on the model choosing to ask for a memory,
+ * which is what makes this work on small local models.
  *
  * <h2>Threading</h2>
  *
- * The index is built <b>asynchronously</b> — embedding the seed facts is one network call each, and
- * doing that on the server thread would stall world load. Until it is ready, {@link #recall} returns
- * nothing, so the companion simply behaves as it does today.
+ * {@link #recall} runs on the <b>server thread</b> and normally makes no network call there:
+ * {@link #prefetch} starts the embedding when the message is queued, at least a tick earlier, and
+ * recall collects the finished vector. The bounded wait is a fallback, not the path.
  *
- * <p>{@link #recall} itself is called on the <b>server thread</b> and waits at most
- * {@link MemoryConfig#embedBudgetMs} for the turn's embedding. See that field for why this is a
- * known flaw rather than an oversight.
+ * <p>{@link #remember} embeds and writes files, so it must not be called on the server thread.
  */
 public final class CompanionMemory {
     private static final Logger LOGGER = LogManager.getLogger();
@@ -54,51 +49,32 @@ public final class CompanionMemory {
     private CompanionMemory() {}
 
     /**
-     * The seed facts.
+     * Demonstration facts, written once into an empty store when {@code memory.seedDemoFacts} is on.
      *
-     * <p>Chosen to make retrieval observable rather than to flatter it. There are near-neighbours
-     * ("cobblestone for exposed builds" vs "dislikes dirt huts") so ranking has to actually
-     * discriminate, and several facts that no plausible chat turn will match, so a turn about
-     * nothing should return nothing once {@link MemoryConfig#minCosine} is applied.
+     * <p><b>Fiction, and off by default.</b> They existed so retrieval could be judged before there
+     * was anything real to recall. Once a player has memories of their own these are noise at best
+     * and misleading at worst — a companion confidently discussing a wolf that does not exist.
      */
-    private static final String[] PERSON_FACTS = {
+    private static final String[] DEMO_PERSON_FACTS = {
         "The player prefers cobblestone over wood for anything left out in the weather.",
         "The player thinks dirt huts look lazy and tears them down on sight.",
         "The player is afraid of caves and would rather strip-mine than explore one.",
         "The player always plants saplings back after chopping a tree down.",
     };
 
-    /**
-     * Facts that are true in one save and false in the rest — pets, goals, what has been built.
-     *
-     * <p>Scoped to the world they are loaded in, so loading a different save reaches none of them.
-     * That is the property worth testing in game: the same companion, asked the same question in
-     * two worlds, should know these in one and not the other.
-     */
-    private static final String[] WORLD_FACTS = {
+    private static final String[] DEMO_WORLD_FACTS = {
         "The player is building a bridge across the ravine east of the base.",
         "The player's base is in a taiga, close to a village with a library.",
         "The player keeps a wolf named Biscuit and will not let it near creepers.",
         "The player lost a full set of diamond gear to lava under the desert temple.",
     };
 
-    /** Fixed, so the same fact keeps the same identity across restarts even without storage. */
-    private static final Instant SEEDED_AT = Instant.parse("2026-08-01T00:00:00Z");
+    /** One store per player, loaded on first use and kept for the session. */
+    private static final Map<UUID, MemoryStore> stores = new ConcurrentHashMap<>();
 
-    private static final AtomicBoolean started = new AtomicBoolean();
-    private static volatile MemoryRetriever retriever;
-    private static volatile String unavailableReason;
+    /** Derived from the stores, never authoritative — rebuilt after every write. */
+    private static final Map<UUID, MemoryRetriever> retrievers = new ConcurrentHashMap<>();
 
-    /**
-     * The save the current index was built for.
-     *
-     * <p>Load a world, quit to the menu, load another: same JVM, same statics, different world. An
-     * index built for the first would hand the second world's companion the first world's memories,
-     * and nothing about that would look wrong. Rebuilt whenever this changes.
-     */
-    private static volatile String indexedWorldId;
-
-    // Latency accounting, so "what did retrieval cost the turn" is answerable from the log.
     private static final AtomicLong recalls = new AtomicLong();
     private static final AtomicLong recallMillis = new AtomicLong();
     private static final AtomicLong misses = new AtomicLong();
@@ -110,121 +86,174 @@ public final class CompanionMemory {
      * <p>Keyed by text rather than by conversation on purpose: two companions hearing the same
      * broadcast line share one embedding instead of making the same call twice.
      */
-    private static final java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<float[]>>
-            pending = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, CompletableFuture<float[]>> pending =
+            new ConcurrentHashMap<>();
 
     private static final int PENDING_CAP = 64;
 
     /**
-     * Builds the index in the background, once. Safe to call repeatedly; only the first starts work.
+     * Loads memory for everyone currently connected. Idempotent — a loaded store is left alone.
      *
-     * <p>Called when a companion's brain comes up rather than at mod init, so a player who never
-     * spawns a companion never touches the embedder.
+     * <p>Called when a companion's brain comes up and on {@code /companion reload}, so a player who
+     * never spawns a companion never touches the embedder or the disk.
      */
     public static void warm(net.minecraft.server.MinecraftServer server) {
         warm(server == null ? null : server.overworld());
     }
 
-    /**
-     * Builds the index in the background for one save, once.
-     *
-     * <p>Rebuilds if the save changed. That matters in singleplayer: quitting to the menu and
-     * loading a different world keeps the same JVM and the same statics, and an index left over
-     * from the previous world would answer with its memories in this one.
-     */
-    public static void warm(net.minecraft.server.level.ServerLevel level) {
-        if (!MemoryConfig.enabled) {
+    /** As above, for a caller that already has the level. */
+    public static void warm(ServerLevel level) {
+        if (!MemoryConfig.enabled || level == null) {
             return;
         }
-        if (level == null) {
+        if (!EmbeddingsConfig.enabled) {
+            LOGGER.warn("Memory is enabled but embeddings are not — nothing can be ranked. "
+                    + "Set embeddings.enabled=true.");
             return;
         }
-        // Resolved on the SERVER THREAD, both of them. WorldIdentity reads and writes SavedData
-        // through DimensionDataStorage, which is not safe to touch from the index-building thread
-        // below — so the id and the label are captured here and only the strings cross over.
+        // Resolved on the server thread: WorldIdentity touches SavedData, which the async work
+        // below must not.
         WorldIdentity identity = WorldIdentity.of(level);
         String worldId = identity.id();
         String worldLabel = identity.label();
-        if (!worldId.equals(indexedWorldId)) {
-            // A different save. Drop the old index rather than answering from it.
-            retriever = null;
-            pending.clear();
-            indexedWorldId = worldId;
-            started.set(false);
-        }
-        if (!EmbeddingsConfig.enabled) {
-            // Deliberately a warning: memory on with embeddings off is a config mistake that would
-            // otherwise present as "memory silently does nothing".
-            LOGGER.warn("Memory is enabled but embeddings are not — nothing can be ranked. "
-                    + "Set embeddings.enabled=true.");
-            unavailableReason = "embeddings disabled";
-            return;
-        }
-        if (!started.compareAndSet(false, true)) {
-            return;
-        }
 
-        CompletableFuture.runAsync(() -> {
-            long startedAt = System.nanoTime();
-            try {
-                int total = PERSON_FACTS.length + WORLD_FACTS.length;
-                List<MemoryRecord> records = new ArrayList<>(total);
-                List<float[]> vectors = new ArrayList<>(total);
-
-                for (int i = 0; i < PERSON_FACTS.length; i++) {
-                    String fact = PERSON_FACTS[i];
-                    // Sequential on purpose. These are the only embeddings in flight, and on a
-                    // single-GPU host overlapping them with the brain is what crashes the machine.
-                    vectors.add(EmbeddingsService.embed(fact));
-                    records.add(seedRecord(i, fact, vectors.size() - 1, null));
-                }
-                for (int i = 0; i < WORLD_FACTS.length; i++) {
-                    String fact = WORLD_FACTS[i];
-                    vectors.add(EmbeddingsService.embed(fact));
-                    records.add(seedRecord(PERSON_FACTS.length + i, fact, vectors.size() - 1,
-                            worldId));
-                }
-
-                MemoryRetriever built = new MemoryRetriever(
-                        records, VectorIndex.of(vectors), MemoryScorer.measured());
-                retriever = built;
-                unavailableReason = null;
-                LOGGER.info("Memory: indexed {} seed facts ({} world-scoped) at {} dimensions in "
-                                + "{} ms. World \"{}\" = {}",
-                        records.size(), WORLD_FACTS.length, built.vectors().dim(),
-                        (System.nanoTime() - startedAt) / 1_000_000L,
-                        worldLabel, worldId);
-            } catch (Throwable e) {
-                // Throwable, not Exception, and that is the whole point. A version skew between the
-                // engine and the memory jar surfaces as NoSuchMethodError or NoClassDefFoundError —
-                // an Error, not an Exception — and catching only Exception let one vanish into an
-                // unobserved CompletableFuture. The symptom was a companion that simply never
-                // recalled anything, with nothing in the log at all. Never again silently.
-                unavailableReason = e.toString();
-                // Release the latch so a later warm() can try again. Without this a single failure
-                // — an embedder that had not finished starting, most likely — would be permanent
-                // for the whole server session, with /companion reload unable to clear it.
-                started.set(false);
-                LOGGER.warn("Memory: could not build the index. The companion will run without"
-                        + " memories; everything else is unaffected. Fix the cause and run"
-                        + " /companion reload to retry.", e);
+        for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+            UUID id = player.getUUID();
+            if (stores.containsKey(id)) {
+                continue;
             }
-        });
+            CompletableFuture.runAsync(() -> loadFor(id, worldId, worldLabel));
+        }
+    }
+
+    private static void loadFor(UUID player, String worldId, String worldLabel) {
+        try {
+            MemoryStore store = MemoryStore.load(player);
+            stores.put(player, store);
+
+            if (store.isEmpty() && MemoryConfig.seedDemoFacts) {
+                LOGGER.info("Memory: store empty and seedDemoFacts is on — writing {} FICTIONAL "
+                                + "demo facts. These are not real memories of this player.",
+                        DEMO_PERSON_FACTS.length + DEMO_WORLD_FACTS.length);
+                for (String fact : DEMO_PERSON_FACTS) {
+                    writeFact(player, fact, MemoryScope.PERSON, null);
+                }
+                for (String fact : DEMO_WORLD_FACTS) {
+                    writeFact(player, fact, MemoryScope.WORLD, worldId);
+                }
+            }
+            rebuild(player);
+            LOGGER.info("Memory: ready for {} — {} stored. World \"{}\" = {}",
+                    player, store.records().size(), worldLabel, worldId);
+        } catch (Throwable e) {
+            // Throwable, not Exception: a version skew between the engine and the memory jar
+            // arrives as an Error, and catching only Exception once let one die silently inside an
+            // unobserved CompletableFuture. The symptom was a companion that never recalled
+            // anything, with nothing in the log at all.
+            LOGGER.warn("Memory: could not load the store for {}. The companion will run without "
+                    + "memories; everything else is unaffected.", player, e);
+        }
+    }
+
+    /** Rebuilds a player's retriever from their store. Called after every write. */
+    private static void rebuild(UUID player) {
+        MemoryStore store = stores.get(player);
+        if (store == null || store.isEmpty()) {
+            retrievers.remove(player);
+            return;
+        }
+        retrievers.put(player, new MemoryRetriever(
+                store.records(), store.index(), MemoryScorer.measured()));
     }
 
     /**
-     * Start embedding a turn now, so the vector is ready when the turn is dispatched.
+     * Teaches the companion something and persists it.
      *
-     * <p>Called when a player message is <b>queued</b>, which happens at least one tick before the
-     * conversation manager picks it up. That is the whole point: {@link #recall} runs on the server
-     * thread, and an embedding is a network call, so the only way to keep the tick loop clean is to
-     * have the answer already.
+     * <p>⚠️ Blocking — it embeds and writes files, so it must not run on the server thread.
      *
-     * <p>Cheap to call and safe to call often — gated, deduplicated, and a no-op when memory is off.
-     * A turn the gate rejects is never embedded at all, so the common case costs nothing.
+     * @param scope whether this is true of the player everywhere, or only in this world
+     * @param worldId required when {@code scope} is {@link MemoryScope#WORLD}
+     * @return the record now held for this fact
+     */
+    public static MemoryRecord remember(UUID player, String text, MemoryScope scope, String worldId)
+            throws Exception {
+        if (!MemoryConfig.enabled) {
+            throw new IllegalStateException("Memory is disabled.");
+        }
+        if (!EmbeddingsConfig.enabled) {
+            throw new IllegalStateException("Embeddings are disabled, so nothing could rank this.");
+        }
+        if (!stores.containsKey(player)) {
+            stores.put(player, MemoryStore.load(player));
+        }
+        MemoryRecord stored = writeFact(player, text, scope, worldId);
+        rebuild(player);
+        return stored;
+    }
+
+    /** Embeds one fact and folds it into a player's store. */
+    private static MemoryRecord writeFact(UUID player, String text, MemoryScope scope,
+            String worldId) {
+        try {
+            MemoryStore store = stores.get(player);
+            Instant now = Instant.now();
+            float[] vector = EmbeddingsService.embed(text);
+
+            MemoryRecord.Builder b = MemoryRecord.builder()
+                    .id(UUID.randomUUID().toString())
+                    .serial(store.records().size())
+                    .text(text)
+                    .entity(entityOf(text))
+                    .value(text)
+                    .kind(MemoryKind.FACT)
+                    .validFrom(now)
+                    .recordedAt(now)
+                    .lastSeenAt(now)
+                    .occurrences(1)
+                    .topicDays(1)
+                    // Flat: importance carries no measurable information and ships at weight zero.
+                    .importance(0.5f)
+                    .importanceSource(ImportanceSource.UNRATED)
+                    .context(MemoryContext.GAME)
+                    .partition(Partition.OWNER)
+                    .frame(MemoryFrame.REAL)
+                    .provenance(new Provenance("in-game", "remember", player.toString(),
+                            now.toEpochMilli()));
+            if (scope == MemoryScope.WORLD) {
+                b.inWorld(worldId);
+            } else {
+                b.aboutPerson();
+            }
+            return store.remember(b.build(), vector, now);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * The entity a fact is about, derived from its text.
+     *
+     * <p>⚠️ <b>The weakest part of the write path, and knowingly a placeholder.</b> Contradiction
+     * resolution works by entity: "the base is in a taiga" should supersede "the base is in a
+     * desert", because both are about <em>the base</em>. Deriving an entity from normalised text
+     * cannot do that — the sentences differ, so they become two entities and both stay believed.
+     *
+     * <p>What it does buy is real: saying the same thing twice confirms rather than duplicates.
+     * Proper resolution needs extraction to emit a subject and a predicate separately, which is the
+     * next piece of work — so this deliberately does not pretend to be more than it is.
+     */
+    private static String entityOf(String text) {
+        return "text:" + text.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").strip();
+    }
+
+    /**
+     * Starts embedding a turn now, so the vector is ready when the turn dispatches.
+     *
+     * <p>Called when a player message is queued — at least a tick before the conversation manager
+     * picks it up, which is what keeps a network call off the tick loop.
      */
     public static void prefetch(String turnText) {
-        if (!MemoryConfig.enabled || retriever == null || turnText == null || turnText.isBlank()) {
+        if (!MemoryConfig.enabled || turnText == null || turnText.isBlank()) {
             return;
         }
         if (!MemoryGate.admits(turnText)) {
@@ -232,8 +261,6 @@ public final class CompanionMemory {
         }
         pending.computeIfAbsent(turnText, EmbeddingsService::embedAsync);
         if (pending.size() > PENDING_CAP) {
-            // These are ephemeral and each is a few KB. Clearing wholesale beats tracking an
-            // eviction order for something that never grows in normal play.
             pending.clear();
         }
     }
@@ -241,19 +268,19 @@ public final class CompanionMemory {
     /**
      * The memories worth showing this turn, best first, or an empty list.
      *
-     * <p>Never throws. Every failure — index not ready, embedder down, gate refused, nothing
-     * relevant enough — degrades to "no memories", which is exactly how the companion behaves today.
-     *
-     * @param turnText what the player actually said
-     * @param companionId the speaking companion, for scoping; may be null
+     * <p>Never throws. Every failure degrades to "no memories", which is exactly how the companion
+     * behaves with the feature switched off.
      */
-    public static List<String> recall(String turnText, String companionId) {
-        MemoryRetriever r = retriever;
-        if (!MemoryConfig.enabled || r == null || turnText == null || turnText.isBlank()) {
+    public static List<String> recall(String turnText, String companionId, UUID player,
+            String worldId) {
+        if (!MemoryConfig.enabled || player == null || turnText == null || turnText.isBlank()) {
+            return List.of();
+        }
+        MemoryRetriever r = retrievers.get(player);
+        if (r == null) {
             return List.of();
         }
 
-        // The gate runs first and costs nothing: no embedding, no scan. Most turns end here.
         if (!MemoryGate.admits(turnText)) {
             gated.incrementAndGet();
             LOGGER.info("Memory: no recall — gate skipped this turn ({})",
@@ -263,28 +290,23 @@ public final class CompanionMemory {
 
         long startedAt = System.nanoTime();
         try {
-            // Normally already complete, because prefetch() started it when the message was queued.
-            // The bounded wait is the fallback for a turn that reached here another way.
             CompletableFuture<float[]> future = pending.remove(turnText);
             if (future == null) {
                 future = EmbeddingsService.embedAsync(turnText);
             }
             float[] query = future.get(MemoryConfig.embedBudgetMs, TimeUnit.MILLISECONDS);
 
-            // Bound to the save. A world-scoped memory from another world is unreachable here,
-            // not merely ranked low — see RetrievalScope.admits().
-            String world = indexedWorldId;
+            // Bound to the save: a world memory from another world is unreachable here rather than
+            // merely ranked low. See RetrievalScope.admits().
             RetrievalScope scope = companionId == null || companionId.isBlank()
-                    ? RetrievalScope.everything().inWorld(world)
-                    : RetrievalScope.forCompanionInWorld(companionId, world);
+                    ? RetrievalScope.everything().inWorld(worldId)
+                    : RetrievalScope.forCompanionInWorld(companionId, worldId);
 
             List<ScoredMemory> hits = r.retrieve(query, Instant.now(), MemoryConfig.topK, scope);
 
-            // Two filters, answering two different questions. The floor asks "is this memory
-            // relevant at all"; the margin asks "is it as good as the best one, or just next in a
-            // list that had to return something". Ranking is already correct — the top hit was
-            // right in 7 of 8 measured turns — so the work here is deciding how much of the tail
-            // to carry, and every item carried is tokens on every turn.
+            // Two filters answering two questions: the floor asks whether a memory is relevant at
+            // all, the margin asks whether it is as good as the best one or merely next in a list
+            // that had to return something.
             double best = hits.isEmpty() ? 0 : hits.get(0).cosine();
             List<String> out = new ArrayList<>(hits.size());
             for (ScoredMemory hit : hits) {
@@ -302,9 +324,6 @@ public final class CompanionMemory {
             recalls.incrementAndGet();
             recallMillis.addAndGet(ms);
             if (out.isEmpty()) {
-                // INFO, not DEBUG. "Recalled nothing" is the outcome that needs explaining, and
-                // burying the reason meant a turn that should plainly have matched could not be
-                // diagnosed from a log at all — only guessed at.
                 LOGGER.info("Memory: no recall — {} candidates, best cosine {} below floor {} "
                                 + "(took {} ms)",
                         hits.size(), hits.isEmpty() ? "n/a" : String.format("%.3f", best),
@@ -315,9 +334,9 @@ public final class CompanionMemory {
             }
             return out;
         } catch (Exception e) {
-            // Includes TimeoutException, which is an expected failure rather than an exceptional
-            // one — but it must still be visible. A turn that quietly skipped its own embedding
-            // looks identical to a turn where nothing was relevant, and those want opposite fixes.
+            // TimeoutException is an expected failure rather than an exceptional one, but it must
+            // still be visible: a turn that quietly skipped its embedding looks identical to a turn
+            // where nothing was relevant, and those want opposite fixes.
             misses.incrementAndGet();
             LOGGER.info("Memory: no recall — {} after {} ms (budget {} ms)",
                     e.getClass().getSimpleName(),
@@ -326,59 +345,25 @@ public final class CompanionMemory {
         }
     }
 
+    /** How many memories a player currently holds. */
+    public static int countFor(UUID player) {
+        MemoryStore store = stores.get(player);
+        return store == null ? 0 : store.records().size();
+    }
+
     /** One line for the log and {@code /companion stats}. */
-    public static String stats() {
+    public static String stats(UUID player) {
         if (!MemoryConfig.enabled) {
             return "memory: disabled";
         }
-        MemoryRetriever r = retriever;
-        if (r == null) {
-            return "memory: not ready"
-                    + (unavailableReason == null ? " (building)" : " — " + unavailableReason);
+        MemoryStore store = player == null ? null : stores.get(player);
+        if (store == null) {
+            return "memory: no store loaded yet";
         }
         long n = recalls.get();
         String timing = n == 0 ? "no recalls yet"
                 : String.format("%d recalls, mean %d ms", n, recallMillis.get() / n);
-        return String.format("memory: %d facts, k=%d, %s, %d gated, %d missed",
-                r.records().size(), MemoryConfig.topK, timing, gated.get(), misses.get());
-    }
-
-    /**
-     * A seed fact as a believed, current, companion-agnostic memory about the player.
-     *
-     * <p>{@code companionId} is null and the frame is {@link MemoryFrame#REAL}: these are facts about
-     * the player, so they belong to the player rather than to whoever happens to be speaking, and
-     * every companion should recall them. An {@code IN_WORLD} memory would be gated to one companion
-     * and is the wrong shape for this.
-     */
-    private static MemoryRecord seedRecord(int i, String fact, int vectorRow, String worldId) {
-        return MemoryRecord.builder()
-                .id("seed-" + i)
-                .serial(i)
-                .text(fact)
-                .entity("seed:" + i)
-                .value(fact)
-                .kind(MemoryKind.FACT)
-                .validFrom(SEEDED_AT)
-                .recordedAt(SEEDED_AT)
-                .lastSeenAt(SEEDED_AT)
-                .occurrences(1)
-                .topicDays(1)
-                // Flat, and it does not matter: importance carries no measurable information and
-                // ships at weight zero. Kept uniform so nothing here implies otherwise.
-                .importance(0.5f)
-                .importanceSource(ImportanceSource.UNRATED)
-                .context(MemoryContext.CHAT)
-                .partition(Partition.OWNER)
-                .frame(MemoryFrame.REAL)
-                // Person facts carry no world; world facts are bound to the save they were
-                // loaded in. This is the split MemoryScope exists for: a preference follows the
-                // player everywhere, a pet does not.
-                .scope(worldId == null ? com.neovetta.aicompanion.memory.MemoryScope.PERSON
-                        : com.neovetta.aicompanion.memory.MemoryScope.WORLD)
-                .worldId(worldId)
-                .provenance(new Provenance("seed", "slice", "turn-" + i, SEEDED_AT.toEpochMilli()))
-                .vectorRow(vectorRow)
-                .build();
+        return String.format("memory: %d stored, k=%d, %s, %d gated, %d missed",
+                store.records().size(), MemoryConfig.topK, timing, gated.get(), misses.get());
     }
 }

@@ -177,9 +177,12 @@ public class AgentConversationData {
         // turn ("your last command finished") has no question in it, so retrieving against the
         // InfoMessage text would rank memories about nothing and spend tokens doing it.
         java.util.List<String> memories = java.util.List.of();
-        if (!this.autonomousTurnInFlight && lastEvent != null && lastEvent.message() != null) {
+        if (!this.autonomousTurnInFlight && lastEvent != null && lastEvent.message() != null
+                && mod.getOwner() != null) {
             memories = CompanionMemory.recall(lastEvent.message(),
-                    mod.getAIPersistantData().getCharacter().name());
+                    mod.getAIPersistantData().getCharacter().name(),
+                    mod.getOwner().getUUID(),
+                    WorldIdentity.idOf(mod.getWorld()));
         }
 
         ConversationHistory historyWithWrappedStatus = mod.getAIPersistantData()

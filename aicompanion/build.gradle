@@ -43,7 +43,14 @@ dependencies {
     // baritone/automatone + adris.altoclef (AltoClefController, IAutomatone, etc.).
     // include(...) nests it into the built jar (JiJ) so the CurseForge download runs
     // standalone; the nested jar keeps its own LGPL-3.0 license (META-INF/LICENSE).
-    include(modImplementation("libs:PlayerEngine:+"))
+    //
+    // ⚠️ Pinned, not '+'. Gradle caches dynamic-version resolution, so a rebuilt jar staged under
+    // the same version is silently ignored — and with '+' that stayed true even after the version
+    // moved, because the cached resolution was still considered fresh. It cost three separate
+    // debugging sessions, once as a runtime NoSuchMethodError that vanished into a swallowed
+    // Error. An exact version fails loudly at compile time instead. Bump this together with
+    // ../engine/gradle.properties.
+    include(modImplementation("libs:PlayerEngine:1.0.94"))
 
     // The memory engine from ../../ai-companion-memory (built there, staged into libs/). Plain
     // Java 17 + Gson, no Minecraft and no Fabric, so Loom wraps the non-mod jar for JiJ. Gson is
@@ -54,7 +61,7 @@ dependencies {
     // restaging a changed jar under an unchanged version silently keeps the old one. That cost real
     // time on PlayerEngine today. Bump the version in ../../ai-companion-memory/engine/build.gradle
     // and here together.
-    include(implementation("libs:aicompanion-memory:0.2.0"))
+    include(implementation("libs:aicompanion-memory:0.3.0"))
 
     implementation 'com.google.code.findbugs:jsr305:3.0.2'
 

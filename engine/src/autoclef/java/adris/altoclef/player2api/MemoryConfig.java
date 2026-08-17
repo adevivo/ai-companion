@@ -113,6 +113,22 @@ public final class MemoryConfig {
                     "AICOMPANION_MEMORY_RELATIVEMARGIN", "0.05"));
 
     /**
+     * Write the fictional demo facts into an empty store on first load.
+     *
+     * <p>Off by default, and it should stay off outside testing. The facts describe a player who
+     * does not exist — a bridge over a ravine, a wolf named Biscuit — so a companion with them
+     * loaded will confidently discuss things that never happened. They existed to judge retrieval
+     * before there was anything real to recall, and now that memories persist they are noise.
+     *
+     * <p>Only ever written into an <em>empty</em> store, so turning this on cannot pollute real
+     * memories. Turning it off does not remove ones already written — delete the player's directory
+     * under {@code config/aicompanion/memories/} for that.
+     */
+    public static volatile boolean seedDemoFacts =
+            Boolean.parseBoolean(resolve("aicompanion.memory.seedDemoFacts",
+                    "AICOMPANION_MEMORY_SEEDDEMOFACTS", "false"));
+
+    /**
      * Whether to decide "is this turn about the player at all" before ranking anything.
      *
      * <p>On by default, and it is the mechanism that makes {@link #minCosine} tractable — see
