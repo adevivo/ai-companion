@@ -18,6 +18,15 @@ sourceSets {
         compileClasspath += main.compileClasspath + main.runtimeClasspath + main.output
         runtimeClasspath += main.compileClasspath + main.runtimeClasspath + main.output
     }
+    // Tests for the autoclef sourceset, which is where the memory code lives. Added 2026-08-17: this
+    // fork had no test infrastructure at all, so MemoryGate — a guard whose whole job is to refuse
+    // things — had nothing checking that it refused the right things, and it duly produced a false
+    // negative in game. Deliberately narrow: plain JUnit over the classes that are pure logic. Do not
+    // grow this into a home for tests that need a running Minecraft.
+    test {
+        compileClasspath += autoclef.compileClasspath + autoclef.output
+        runtimeClasspath += autoclef.compileClasspath + autoclef.output
+    }
 }
 
 repositories {
@@ -68,6 +77,16 @@ dependencies {
     shadow('com.fasterxml.jackson.core:jackson-core:2.16.0')
     shadow('com.fasterxml.jackson.core:jackson-annotations:2.16.0')
     shadow('com.fasterxml.jackson.core:jackson-databind:2.16.0')
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+    }
 }
 
 shadowJar {

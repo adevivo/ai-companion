@@ -118,6 +118,21 @@ public class ConversationManager {
      */
     public static void onServerStopping() {
         int dropped = queueData.size();
+        // Before anything is cleared: the periodic save bounds what a crash can lose, but an orderly
+        // quit should lose nothing, and quitting to the title screen stops the server every time. A
+        // failure here must not stop the rest of the shutdown from running.
+        int flushed = 0;
+        for (AgentConversationData data : queueData.values()) {
+            try {
+                if (data.getMod() != null && data.getMod().getAIPersistantData() != null) {
+                    data.getMod().getAIPersistantData().flushHistory();
+                    flushed++;
+                }
+            } catch (Throwable e) {
+                LOGGER.warn("ConversationManager/onServerStopping: could not save history for {} ({})",
+                        data.getName(), e.toString());
+            }
+        }
         queueData.clear();
         lastEarshotNotice.clear();
         // The pool is static, so an in-flight request at shutdown would otherwise leave a slot
@@ -126,8 +141,8 @@ public class ConversationManager {
         TTSManager.reset();
         Player2APIService.resetSessionCounters();
         EventBus.clear();
-        LOGGER.info("ConversationManager/onServerStopping: cleared {} conversation(s), released locks, "
-                + "reset session counters and event subscriptions", dropped);
+        LOGGER.info("ConversationManager/onServerStopping: saved history for {} of {} conversation(s), "
+                + "released locks, reset session counters and event subscriptions", flushed, dropped);
     }
 
     /**

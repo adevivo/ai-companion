@@ -14,9 +14,11 @@ import com.neovetta.aicompanion.memory.RetrievalScope;
 import com.neovetta.aicompanion.memory.ScoredMemory;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -75,6 +77,15 @@ public final class CompanionMemory {
     /** Derived from the stores, never authoritative — rebuilt after every write. */
     private static final Map<UUID, MemoryRetriever> retrievers = new ConcurrentHashMap<>();
 
+    /** Per-player subject tokens for the gate, derived from the store. See {@link #rebuild}. */
+    private static final Map<UUID, Set<String>> subjects = new ConcurrentHashMap<>();
+
+    /** Provenance for a fact the player typed into a command: authored by them, true by construction. */
+    public static final String SOURCE_COMMAND = "remember";
+
+    /** Provenance for a fact {@link MemoryExtractor} read out of a conversation. */
+    public static final String SOURCE_EXTRACTOR = "extractor";
+
     private static final AtomicLong recalls = new AtomicLong();
     private static final AtomicLong recallMillis = new AtomicLong();
     private static final AtomicLong misses = new AtomicLong();
@@ -111,6 +122,11 @@ public final class CompanionMemory {
                     + "Set embeddings.enabled=true.");
             return;
         }
+        // Before any store is touched: the model load is process-global and costs ~600 ms, which is
+        // more than a recall's whole budget. Paying it here means no player turn pays it. Idempotent,
+        // and outside the per-player loop below because a returning player whose store is already
+        // loaded still needs a warm embedder. See EmbeddingsService.warmUp().
+        EmbeddingsService.warmUp();
         // Resolved on the server thread: WorldIdentity touches SavedData, which the async work
         // below must not.
         WorldIdentity identity = WorldIdentity.of(level);
@@ -160,10 +176,28 @@ public final class CompanionMemory {
         MemoryStore store = stores.get(player);
         if (store == null || store.isEmpty()) {
             retrievers.remove(player);
+            subjects.remove(player);
             return;
         }
         retrievers.put(player, new MemoryRetriever(
                 store.records(), store.index(), MemoryScorer.measured()));
+
+        // Indexed here rather than per turn: recall() runs on the server thread, and the token set is
+        // a function of the store, which only changes on a write. Every record counts, including ones
+        // no longer valid — a superseded "home" still makes the WORD "home" worth admitting, and the
+        // scorer decides which record answers. Gating on validity here would make asking about a fact
+        // that has moved fail at the gate, silently, which is the exact failure being fixed.
+        Set<String> tokens = new HashSet<>();
+        for (MemoryRecord record : store.records()) {
+            tokens.addAll(MemoryGate.tokensOf(record.text()));
+        }
+        subjects.put(player, Set.copyOf(tokens));
+    }
+
+    /** What each player's stored memories are ABOUT, for {@link MemoryGate}. Rebuilt on every write. */
+    private static Set<String> subjectsOf(UUID player) {
+        Set<String> tokens = subjects.get(player);
+        return tokens == null ? Set.of() : tokens;
     }
 
     /**
@@ -191,6 +225,21 @@ public final class CompanionMemory {
      */
     public static MemoryRecord remember(UUID player, String text, MemoryScope scope, String worldId,
             com.neovetta.aicompanion.memory.Place place) throws Exception {
+        return remember(player, text, scope, worldId, place, SOURCE_COMMAND);
+    }
+
+    /**
+     * As above, recording HOW the companion came to know it.
+     *
+     * <p>{@code sourceId} lands in {@link Provenance} and is the only thing that will distinguish a
+     * fact the player typed from one the extractor inferred, once both are in the same store. That
+     * distinction is not cosmetic: a commanded memory was authored by the player and is true by
+     * construction, while an extracted one is a model's reading of a conversation and carries the
+     * measured error rates that come with it. Anything that later audits, weights or retracts memories
+     * needs to be able to tell them apart, and provenance is the only place that survives a restart.
+     */
+    public static MemoryRecord remember(UUID player, String text, MemoryScope scope, String worldId,
+            com.neovetta.aicompanion.memory.Place place, String sourceId) throws Exception {
         if (!MemoryConfig.enabled) {
             throw new IllegalStateException("Memory is disabled.");
         }
@@ -200,7 +249,7 @@ public final class CompanionMemory {
         if (!stores.containsKey(player)) {
             stores.put(player, MemoryStore.load(player));
         }
-        MemoryRecord stored = writeFact(player, text, scope, worldId, place);
+        MemoryRecord stored = writeFact(player, text, scope, worldId, place, sourceId);
         rebuild(player);
         return stored;
     }
@@ -208,11 +257,16 @@ public final class CompanionMemory {
     /** Embeds one fact and folds it into a player's store. */
     private static MemoryRecord writeFact(UUID player, String text, MemoryScope scope,
             String worldId) {
-        return writeFact(player, text, scope, worldId, null);
+        return writeFact(player, text, scope, worldId, null, SOURCE_COMMAND);
     }
 
     private static MemoryRecord writeFact(UUID player, String text, MemoryScope scope,
             String worldId, com.neovetta.aicompanion.memory.Place place) {
+        return writeFact(player, text, scope, worldId, place, SOURCE_COMMAND);
+    }
+
+    private static MemoryRecord writeFact(UUID player, String text, MemoryScope scope,
+            String worldId, com.neovetta.aicompanion.memory.Place place, String sourceId) {
         try {
             MemoryStore store = stores.get(player);
             Instant now = Instant.now();
@@ -236,7 +290,7 @@ public final class CompanionMemory {
                     .context(MemoryContext.GAME)
                     .partition(Partition.OWNER)
                     .frame(MemoryFrame.REAL)
-                    .provenance(new Provenance("in-game", "remember", player.toString(),
+                    .provenance(new Provenance("in-game", sourceId, player.toString(),
                             now.toEpochMilli()));
             if (scope == MemoryScope.WORLD) {
                 b.inWorld(worldId);
@@ -274,11 +328,14 @@ public final class CompanionMemory {
      * <p>Called when a player message is queued — at least a tick before the conversation manager
      * picks it up, which is what keeps a network call off the tick loop.
      */
-    public static void prefetch(String turnText) {
+    public static void prefetch(String turnText, UUID player) {
         if (!MemoryConfig.enabled || turnText == null || turnText.isBlank()) {
             return;
         }
-        if (!MemoryGate.admits(turnText)) {
+        // Same tokens recall() will use. A prefetch that gated differently from the recall it feeds
+        // would quietly cost the recall its head start — the turn would be admitted later, with no
+        // vector waiting, and pay the full embed inside embedBudgetMs.
+        if (!MemoryGate.admits(turnText, subjectsOf(player))) {
             return;
         }
         pending.computeIfAbsent(turnText, EmbeddingsService::embedAsync);
@@ -303,10 +360,11 @@ public final class CompanionMemory {
             return List.of();
         }
 
-        if (!MemoryGate.admits(turnText)) {
+        Set<String> storedSubjects = subjectsOf(player);
+        if (!MemoryGate.admits(turnText, storedSubjects)) {
             gated.incrementAndGet();
             LOGGER.info("Memory: no recall — gate skipped this turn ({})",
-                    MemoryGate.explain(turnText));
+                    MemoryGate.explain(turnText, storedSubjects));
             return List.of();
         }
 

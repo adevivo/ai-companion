@@ -23,6 +23,22 @@ public class ConversationHistory {
    private static final int MAX_HISTORY = 64;
    private static final int SUMMARY_COUNT = 48;
 
+   /**
+    * Messages added since the last write to disk. Replaces a {@code size() % 8 == 0} test that only
+    * saved when the message count landed <em>exactly</em> on a multiple of eight — a coincidence check
+    * rather than an interval. Messages arrive in pairs and batches, so a count that steps over a
+    * multiple never comes back, and the file is then never written for the rest of the session.
+    *
+    * <p>Measured on 2026-08-17: a session of four exchanges wrote nothing at all, and quitting to the
+    * title screen lost the whole conversation. The companion had been told "I like spruce, it looks
+    * better than oak" and, four turns and one restart later, answered that oak was the player's
+    * favourite. Even when the old check did fire it could lose up to seven messages.
+    */
+   private int unsavedMessages = 0;
+
+   /** How many messages may accumulate before the history is written out. */
+   private static final int SAVE_EVERY = 8;
+
    public ConversationHistory(String initialSystemPrompt, String characterName, String characterShortName) {
       Path configDir = DirUtil.getConfigDir();
       String fileName = characterName.replaceAll("\\s+", "_") + "_" + characterName.replaceAll("\\s+", "_") + ".txt";
@@ -52,7 +68,9 @@ public class ConversationHistory {
       if (doCutOff && this.conversationHistory.size() > 64) {
          List<JsonObject> toSummarize = new ArrayList<>(this.conversationHistory.subList(1, 49));
          String summary = this.summarizeHistory(toSummarize, player2apiService);
-         if (summary == "") {
+         // .isEmpty(), not == "": summarizeHistory returns the "" literal on failure, which happens to
+         // be interned and so happens to compare equal, but an empty string from the API would not.
+         if (summary.isEmpty()) {
             this.conversationHistory.remove(1);
          } else {
             JsonObject systemPrompt = this.conversationHistory.get(0);
@@ -71,7 +89,7 @@ public class ConversationHistory {
          if (this.historyFile != null) {
             this.saveToFile();
          }
-      } else if (doCutOff && this.conversationHistory.size() % 8 == 0 && this.historyFile != null) {
+      } else if (doCutOff && this.historyFile != null && ++this.unsavedMessages >= SAVE_EVERY) {
          this.saveToFile();
       }
    }
@@ -94,7 +112,21 @@ public class ConversationHistory {
       }
    }
 
+   /**
+    * Write the history out now, whatever the interval says.
+    *
+    * <p>For shutdown. The periodic save above bounds how much a crash can lose; this is what makes an
+    * orderly quit lose nothing, and quitting to the title screen is the common case — a singleplayer
+    * world stops its server every time.
+    */
+   public void flush() {
+      if (this.historyFile != null && this.unsavedMessages > 0) {
+         this.saveToFile();
+      }
+   }
+
    private void saveToFile() {
+      this.unsavedMessages = 0;
       try {
          BufferedWriter writer = Files.newBufferedWriter(this.historyFile);
 
@@ -236,15 +268,39 @@ public class ConversationHistory {
 
       List<JsonObject> kept = new ArrayList<>(this.conversationHistory);
       int dropped = 0;
+      int before = total;
       // Walk forward from the oldest middle message, keeping index 0 and the final entry.
       while (total > maxChars && kept.size() > 2) {
          total -= contentLength(kept.remove(1));
          dropped++;
       }
-      LOGGER.warn("ConversationHistory: prompt was {} chars over the {} budget — dropped {} oldest "
-                  + "turn(s), {} remain. Long prompts make some models answer in prose instead of JSON, "
-                  + "which runs no command.",
-            total > maxChars ? "still" : "", maxChars, dropped, kept.size());
+      // Both sizes, because the pair is what diagnoses this: a big "before" with a small "after" is a
+      // long tail of history, while a "before" barely above budget that will not come down is one
+      // oversized turn that dropping cannot fix. A previous version passed the word "still" into the
+      // {} that should have held a number, so the line read "prompt was still chars over the 16000
+      // budget" — the warning survived and its only datum did not.
+      if (total > maxChars) {
+         // Dropping every droppable turn was not enough, which means the two messages this method may
+         // never drop are together over budget on their own. That is not a trimming failure and no
+         // amount of history-shedding will fix it: either the system prompt has outgrown the budget or
+         // the budget is set below what one turn costs. Said explicitly because the generic line above
+         // reads like the trimmer is broken, and the operator would go looking in the wrong place.
+         // Measured 2026-08-17: system prompt 14,902 + newest wrapped turn 1,664 = 16,566 against a
+         // 16,000 budget, so this fired on every single turn and all conversation history was being
+         // discarded to no effect.
+         LOGGER.warn("ConversationHistory: prompt was {} chars against a {} budget — dropped ALL {} "
+                     + "droppable turn(s) and it is STILL {} chars. The system prompt ({}) plus the "
+                     + "newest turn ({}) are {} on their own, which this method may not drop, so "
+                     + "history cannot get under the budget: raise llm.maxPromptChars above {} or "
+                     + "shorten the system prompt.",
+               before, maxChars, dropped, total,
+               contentLength(kept.get(0)), contentLength(kept.get(kept.size() - 1)), total, total);
+      } else {
+         LOGGER.warn("ConversationHistory: prompt was {} chars against a {} budget — dropped {} oldest "
+                     + "turn(s), {} remain at {} chars. Long prompts make some models answer in prose "
+                     + "instead of JSON, which runs no command.",
+               before, maxChars, dropped, kept.size(), total);
+      }
       return kept;
    }
 

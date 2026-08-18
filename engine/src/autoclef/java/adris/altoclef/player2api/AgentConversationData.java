@@ -177,13 +177,25 @@ public class AgentConversationData {
         // turn ("your last command finished") has no question in it, so retrieving against the
         // InfoMessage text would rank memories about nothing and spend tokens doing it.
         java.util.List<String> memories = java.util.List.of();
+        // Resolved here, not in the callback below: WorldIdentity touches SavedData and this is the
+        // server thread, while onLLMResponse runs on a completion thread. Both recall and extraction
+        // need it, so it is read once.
+        String turnWorldId = mod.getOwner() == null ? null : WorldIdentity.idOf(mod.getWorld());
         if (!this.autonomousTurnInFlight && lastEvent != null && lastEvent.message() != null
                 && mod.getOwner() != null) {
             memories = CompanionMemory.recall(lastEvent.message(),
                     mod.getAIPersistantData().getCharacter().name(),
                     mod.getOwner().getUUID(),
-                    WorldIdentity.idOf(mod.getWorld()));
+                    turnWorldId);
         }
+
+        // What extraction will read, captured while the owner is still resolvable on this thread. A
+        // self-prompted turn is excluded for the same reason recall excludes it: the companion talking
+        // to itself is not the player telling it anything.
+        final String learnFromMessage = this.autonomousTurnInFlight || lastEvent == null
+                ? null : lastEvent.message();
+        final java.util.UUID learnForPlayer = mod.getOwner() == null ? null : mod.getOwner().getUUID();
+        final String learnOwnerName = mod.getOwnerUsername();
 
         ConversationHistory historyWithWrappedStatus = mod.getAIPersistantData()
                 .getConversationHistoryWrappedWithStatus(worldStatus, agentStatus, altoClefDebugMsgs,
@@ -213,6 +225,11 @@ public class AgentConversationData {
                 if (llmMessage != null || command != null) {
                     mod.getAIPersistantData().addAssistantMessage(llmMessage, mod.getPlayer2APIService());
                     onCharacterEvent.accept(new Event.CharacterMessage(llmMessage, command, this));
+                    // Learn from the exchange only after the player has their answer, so a slow or dead
+                    // extractor can never delay a reply. Returns immediately and does its own work
+                    // async; no-op unless memory.extractionEnabled is on.
+                    MemoryLearner.learnFrom(learnFromMessage, llmMessage, learnForPlayer,
+                            learnOwnerName, turnWorldId, mod.getPlayer2APIService());
                 } else {
                     LOGGER.warn(
                             "[AICommandBridge/processChatWithAPI/onLLMResponse]: Generated null llm message and command");
@@ -302,8 +319,13 @@ public class AgentConversationData {
         // Start embedding now rather than when the turn dispatches. The event waits here for at
         // least a tick, and recall() runs on the SERVER THREAD — so this is what keeps a network
         // call off the tick loop. No-op unless memory is on and the gate accepts the turn.
+        //
+        // The owner goes in because the gate consults what they have stored, and it must reach the
+        // same verdict here as recall() does later — otherwise the turn is admitted with no vector
+        // waiting and pays the full embed against embedBudgetMs.
         if (event instanceof Event.UserMessage msg) {
-            CompanionMemory.prefetch(msg.message());
+            CompanionMemory.prefetch(msg.message(),
+                    mod.getOwner() == null ? null : mod.getOwner().getUUID());
         }
     }
 

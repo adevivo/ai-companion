@@ -62,6 +62,17 @@ public class AIPersistantData {
         return this.character;
     }
 
+    /**
+     * Write this companion's conversation history to disk now.
+     *
+     * <p>Called at server shutdown. Quitting a singleplayer world stops its server, so this is the
+     * ordinary end of every session rather than an edge case, and without it the last few messages —
+     * or on a short session, all of them — never reach the file.
+     */
+    public void flushHistory(){
+        this.conversationHistory.flush();
+    }
+
     public void updateSystemPrompt(){
         String systemPrompt = Prompts.getAINPCSystemPrompt(character, mod.getCommandExecutor().agentCommands(), mod.getOwnerUsername());
         conversationHistory.setBaseSystemPrompt(systemPrompt);

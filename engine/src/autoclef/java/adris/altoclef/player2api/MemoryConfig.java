@@ -139,6 +139,25 @@ public final class MemoryConfig {
             Boolean.parseBoolean(resolve("aicompanion.memory.gateEnabled",
                     "AICOMPANION_MEMORY_GATEENABLED", "true"));
 
+    /**
+     * Whether the companion learns from conversation, instead of only from {@code /companion remember}.
+     *
+     * <p><b>Off by default, because it spends money on every turn.</b> One extra LLM call per exchange:
+     * measured at 442 prompt and 32 completion tokens, and 970 turns on a hosted model cost $0.1277 —
+     * about $0.00013 a turn, or roughly an eighth of the conversation turn it accompanies. Cheap, but
+     * not free, and never a surprise the player did not switch on.
+     *
+     * <p>The call runs after the reply has already been sent, so it can never delay an answer, and a
+     * failure produces no memories rather than a broken turn. See {@link MemoryExtractor} for what the
+     * model is asked and what code decides.
+     *
+     * <p>⚠️ Expect it to write nothing most of the time. 86% of turns held no durable fact in the
+     * research corpus, so an empty extraction is the normal outcome and not a sign it is broken.
+     */
+    public static volatile boolean extractionEnabled =
+            Boolean.parseBoolean(resolve("aicompanion.memory.extractionEnabled",
+                    "AICOMPANION_MEMORY_EXTRACTIONENABLED", "false"));
+
     private static String resolve(String property, String env, String fallback) {
         String v = System.getProperty(property);
         if (v == null || v.isBlank()) {

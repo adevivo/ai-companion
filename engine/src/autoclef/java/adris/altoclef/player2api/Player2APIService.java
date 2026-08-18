@@ -163,6 +163,17 @@ public class Player2APIService {
     * really is a JSON object, may pass true.
     */
    private static void applyLlmParams(JsonObject requestBody, boolean jsonMode) {
+      applyLlmParams(requestBody, jsonMode, null);
+   }
+
+   /**
+    * @param temperatureOverride a temperature for this call alone, or null to use
+    *        {@link LlmConfig#temperature}. For side tasks that want determinism rather than
+    *        conversational variety. An endpoint that locks temperature still wins — overriding it there
+    *        is a 400, not a warmer reply.
+    */
+   private static void applyLlmParams(JsonObject requestBody, boolean jsonMode,
+         Double temperatureOverride) {
       String model = LlmConfig.model;
       boolean openAi = LlmConfig.baseUrl != null && LlmConfig.baseUrl.contains("api.openai.com");
       // OpenAI's gpt-5.x and o-series lock temperature to the default and 400 on any override;
@@ -172,8 +183,9 @@ public class Player2APIService {
       if (model != null && !model.isBlank()) {
          requestBody.addProperty("model", model);
       }
-      if (LlmConfig.temperature >= 0 && !fixedTemperature) {
-         requestBody.addProperty("temperature", LlmConfig.temperature);
+      double temperature = temperatureOverride == null ? LlmConfig.temperature : temperatureOverride;
+      if (temperature >= 0 && !fixedTemperature) {
+         requestBody.addProperty("temperature", temperature);
       }
       if (LlmConfig.maxTokens > 0) {
          // OpenAI retired max_tokens on newer models ("use max_completion_tokens instead") but
@@ -410,6 +422,53 @@ public class Player2APIService {
       }
       // The prompt asks for under 250 characters; a runaway reply is a malfunction, not dialogue.
       return text.length() > 250 ? text.substring(0, 250).trim() : text;
+   }
+
+   /**
+    * One deterministic JSON call for a side task, returning the raw assistant content unparsed.
+    *
+    * <p>Distinct from {@link #completeConversation} in what it does on failure: that method exists to
+    * protect a conversation turn, so it retries, salvages prose and finally fabricates a
+    * reason/command/message object rather than let the companion go mute. None of that is wanted here.
+    * A side task that cannot be parsed should simply produce nothing, and inventing an agent-contract
+    * object for a caller that is not the agent would be worse than an empty string.
+    *
+    * <p>Temperature 0 and JSON mode, because those are the conditions the extraction numbers were
+    * measured under: 970 turns produced 0 parse failures at those settings, and running with the
+    * conversational temperature instead would quietly be a different experiment from the one whose
+    * results justified building this.
+    *
+    * <p>Counts against {@link LlmConfig#maxRequests} like any other call — a per-turn side task is
+    * exactly the thing a spend cap exists to bound.
+    */
+   public String completeDeterministicJson(ConversationHistory conversationHistory) throws Exception {
+      enforceRequestCap();
+      JsonObject requestBody = new JsonObject();
+      JsonArray messagesArray = new JsonArray();
+      for (JsonObject msg : conversationHistory.getListJSONBounded(LlmConfig.maxPromptChars)) {
+         messagesArray.add(msg);
+      }
+      requestBody.add("messages", messagesArray);
+      applyLlmParams(requestBody, true, 0.0);
+      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
+            "/v1/chat/completions", true, requestBody);
+      recordUsage(responseMap);
+      if (responseMap.containsKey("choices")) {
+         JsonArray choices = responseMap.get("choices").getAsJsonArray();
+         if (choices.size() != 0) {
+            JsonObject messageObject = choices.get(0).getAsJsonObject().getAsJsonObject("message");
+            if (messageObject != null && messageObject.has("content")) {
+               if (wasTruncated(choices)) {
+                  LOGGER.warn("Deterministic JSON reply was cut off by the output token limit "
+                        + "(llm.maxTokens={}); it will not parse. Raise it to at least {}.",
+                        LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS);
+               }
+               return messageObject.get("content").getAsString();
+            }
+         }
+      }
+      LOGGER.warn("Deterministic JSON call returned no choices; treating as no result.");
+      return "";
    }
 
    public String completeConversationToString(ConversationHistory conversationHistory) throws Exception {

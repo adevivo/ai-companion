@@ -49,6 +49,15 @@ public final class EmbeddingsService {
     /** Set once, on the first successful call, so the observed width is logged exactly once. */
     private static final AtomicBoolean dimensionLogged = new AtomicBoolean();
 
+    /** Set once, by the first {@link #warmUp()}, so the model load is paid for exactly once. */
+    private static final AtomicBoolean warmed = new AtomicBoolean();
+
+    /**
+     * What {@link #warmUp()} embeds. Deliberately not a plausible player turn: the vector is thrown
+     * away, and anything turn-shaped here would be confusing to find in a log next to real recalls.
+     */
+    private static final String WARM_TEXT = "warmup";
+
     /** Width the server actually returned, or 0 before the first success. */
     private static volatile int observedDimension = 0;
 
@@ -63,6 +72,15 @@ public final class EmbeddingsService {
      * @throws Exception on transport failure, a non-200 response, or an unparseable body
      */
     public static float[] embed(String text) throws Exception {
+        return embed(text, true);
+    }
+
+    /**
+     * @param measured whether this call belongs in the latency stats. False only for {@link #warmUp()}:
+     *                 a warm-up is not a turn, and letting a model load land in {@code max} would put
+     *                 a number in {@link #stats()} that no retrieval ever paid.
+     */
+    private static float[] embed(String text, boolean measured) throws Exception {
         if (!EmbeddingsConfig.enabled) {
             throw new IllegalStateException(
                     "Embeddings are disabled. Set embeddings.enabled=true in the config, "
@@ -119,17 +137,68 @@ public final class EmbeddingsService {
         }
 
         observedDimension = vector.length;
-        calls.incrementAndGet();
-        totalMillis.addAndGet(elapsedMs);
-        maxMillis.accumulateAndGet(elapsedMs, Math::max);
-        minMillis.accumulateAndGet(elapsedMs, Math::min);
+        if (measured) {
+            calls.incrementAndGet();
+            totalMillis.addAndGet(elapsedMs);
+            maxMillis.accumulateAndGet(elapsedMs, Math::max);
+            minMillis.accumulateAndGet(elapsedMs, Math::min);
+        }
 
         if (dimensionLogged.compareAndSet(false, true)) {
-            LOGGER.info("Embeddings: {} at {} returned {} dimensions in {} ms (first call, "
+            LOGGER.info("Embeddings: {} at {} returned {} dimensions in {} ms ({}, "
                             + "includes any model load).",
-                    EmbeddingsConfig.model, EmbeddingsConfig.baseUrl, vector.length, elapsedMs);
+                    EmbeddingsConfig.model, EmbeddingsConfig.baseUrl, vector.length, elapsedMs,
+                    measured ? "first call" : "warm-up");
         }
         return vector;
+    }
+
+    /**
+     * Pays the embedder's model-load cost once, off the critical path, so no player turn pays it.
+     *
+     * <h2>Why this exists</h2>
+     *
+     * Measured 2026-08-17 against {@code nomic-embed-text} on Ollama: the first call of a session took
+     * <b>595 ms</b>, subsequent ones 0–42 ms. That is the model being paged in, not the embedding.
+     *
+     * <p>{@code CompanionMemory.recall} runs on the server thread with a {@code MemoryConfig.embedBudgetMs}
+     * ceiling (250 ms), so whichever turn happens to be first in a session loses its recall to a
+     * {@code TimeoutException} — and the companion then *denies knowing* something it has stored, which
+     * is the worst failure shape available. Raising the budget past the load cost is not the fix: that
+     * would put a ~700 ms stall on the server thread, which is the thing the budget exists to prevent.
+     *
+     * <p>It hid for a session because the ordering usually saves it — a {@code /companion rememberhere}
+     * embeds on a pool thread with no budget, so a write happening to come first warms the model for
+     * free. It only bites when the first embedding of a session is a recall.
+     *
+     * <p>Idempotent and non-blocking: safe to call from the server thread, and safe to call on every
+     * {@code /companion reload}. Failure is ignored on purpose — if the embedder is down, the next real
+     * turn will log that properly, and a warm-up has nothing to say that a recall will not say better.
+     */
+    public static void warmUp() {
+        if (!EmbeddingsConfig.enabled || !warmed.compareAndSet(false, true)) {
+            return;
+        }
+        CompletableFuture
+                .supplyAsync(() -> {
+                    try {
+                        return embed(WARM_TEXT, false);
+                    } catch (RuntimeException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new java.util.concurrent.CompletionException(e);
+                    }
+                }, pool())
+                .whenComplete((vector, error) -> {
+                    if (error != null) {
+                        LOGGER.warn("Embeddings: warm-up failed ({}). Retrieval will still work, but "
+                                + "the first recall of this session pays the model load and may miss "
+                                + "its {} ms budget.", error.toString(), MemoryConfig.embedBudgetMs);
+                    } else {
+                        LOGGER.info("Embeddings: warm-up done — the model is loaded and the first "
+                                + "recall will not pay for it.");
+                    }
+                });
     }
 
     /**
@@ -225,6 +294,9 @@ public final class EmbeddingsService {
     /**
      * One-line latency summary for the log and {@code /companion} diagnostics, or a note that nothing
      * has been embedded yet.
+     *
+     * <p>Counts real embeddings only. {@link #warmUp()} is excluded, so these numbers describe what a
+     * turn costs rather than what a cold model load costs — the two differ by an order of magnitude.
      */
     public static String stats() {
         long n = calls.get();
