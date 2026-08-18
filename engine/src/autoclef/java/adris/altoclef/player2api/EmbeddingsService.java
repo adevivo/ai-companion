@@ -191,9 +191,17 @@ public final class EmbeddingsService {
                 }, pool())
                 .whenComplete((vector, error) -> {
                     if (error != null) {
+                        // Give the one attempt back. Observed 2026-08-17: the embedder was not running
+                        // at world load, the warm-up failed, the owner pointed the config at a machine
+                        // that WAS running it and reloaded — and no warm-up ever ran again, because the
+                        // flag had already been spent on the attempt that could not have worked. A
+                        // failure means the model was never loaded, so nothing has been warmed and
+                        // there is nothing to protect; the next /companion reload should get another go.
+                        warmed.set(false);
                         LOGGER.warn("Embeddings: warm-up failed ({}). Retrieval will still work, but "
-                                + "the first recall of this session pays the model load and may miss "
-                                + "its {} ms budget.", error.toString(), MemoryConfig.embedBudgetMs);
+                                + "the first recall pays the model load and may miss its {} ms budget. "
+                                + "Fix the endpoint and /companion reload to try again.",
+                                error.toString(), MemoryConfig.embedBudgetMs);
                     } else {
                         LOGGER.info("Embeddings: warm-up done — the model is loaded and the first "
                                 + "recall will not pay for it.");

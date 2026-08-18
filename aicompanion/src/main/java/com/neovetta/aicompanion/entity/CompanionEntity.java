@@ -432,9 +432,43 @@ public class CompanionEntity extends LivingEntity
         aiDisabled = false;
     }
 
+    /**
+     * When this entity last ticked, in wall-clock milliseconds. See {@link #isTicking()}.
+     *
+     * <p>Volatile because it is written on the server thread and read from command handling.
+     */
+    private volatile long lastTickMs = 0L;
+
+    /**
+     * Whether this companion is actually being ticked right now.
+     *
+     * <p><b>Why this is measured rather than inferred.</b> Minecraft stops ticking an entity outside
+     * the players' simulation distance, and a companion that is not ticking cannot run a task — which
+     * means it cannot walk back. Observed 2026-08-17: sent to gather wheat seeds, Luna pathed to 198
+     * blocks away with simulation distance at 12 chunks (192 blocks), and then sat there. Four
+     * {@code /companion come} commands over nineteen minutes each set a fresh pathfinding task, printed
+     * "Luna coming to …", and changed her distance by less than two blocks. Despawning her was the only
+     * way out.
+     *
+     * <p>Distance to the owner would be a proxy for this, and a bad one: the real condition is "is this
+     * entity receiving ticks", which also goes false for an unloaded chunk, a suspended world, or
+     * anything else that arrives later. Asking the entity when it last ran answers the actual question.
+     *
+     * <p>The threshold is a second — twenty ticks — so an ordinary lag spike never reads as frozen.
+     */
+    public boolean isTicking() {
+        return lastTickMs != 0L && System.currentTimeMillis() - lastTickMs < 1000L;
+    }
+
+    /** How long since this companion last ticked, in milliseconds, or -1 if it never has. */
+    public long millisSinceTick() {
+        return lastTickMs == 0L ? -1L : System.currentTimeMillis() - lastTickMs;
+    }
+
     // --- Ticking: drive the managers; the controller is guarded until the nav step ---
     @Override
     public void tick() {
+        lastTickMs = System.currentTimeMillis();
         this.interactionManager.update();
         this.inventory.updateItems();
         lastAttackedTicks++; // LivingEntities don't tick attack cooldown by default

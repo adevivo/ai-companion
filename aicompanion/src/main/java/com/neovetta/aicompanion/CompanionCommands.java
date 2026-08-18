@@ -222,7 +222,16 @@ public final class CompanionCommands {
         return builder.buildFuture();
     };
 
-    /** Recall the companion to the caller — interrupts whatever it was doing and paths back. */
+    /**
+     * Recall the companion to the caller — interrupts whatever it was doing and paths back.
+     *
+     * <p>Or teleports, when walking is impossible. A companion outside the players' simulation distance
+     * receives no ticks, so it cannot run a task, so it cannot walk anywhere: this command would set a
+     * pathfinding goal, report "coming to …", and do nothing at all. That is not a slow recall, it is a
+     * companion that is never coming back, and the only escape was to despawn it. Since this is the
+     * command an owner reaches for precisely when a companion has gone too far, it has to work at any
+     * distance — arriving is the contract and walking is the flavour.
+     */
     private static int come(ServerCommandSource source, String name) {
         CompanionEntity companion = findCompanion(source, name);
         if (companion == null) {
@@ -230,6 +239,20 @@ public final class CompanionCommands {
         }
         ServerPlayerEntity player = source.getPlayer();
         BlockPos target = player != null ? player.getBlockPos() : companion.getBlockPos();
+        String who = companion.displayName();
+
+        boolean stranded = !companion.isTicking();
+        if (stranded) {
+            // Teleport BEFORE handing over a task. Arriving next to the owner is what puts the companion
+            // back inside the simulated area, and only then can anything it is asked to do actually run.
+            double distance = player != null ? Math.sqrt(companion.squaredDistanceTo(player)) : -1;
+            long idleMs = companion.millisSinceTick();
+            AiCompanion.LOGGER.warn("[{}] {} has not ticked for {} ms at {} blocks — outside simulation "
+                    + "distance, so it cannot walk back. Teleporting instead of pathing.",
+                    AiCompanion.MOD_ID, who, idleMs, String.format("%.0f", distance));
+            companion.teleport(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, false);
+        }
+
         AltoClefController ctrl = companion.getController();
         if (ctrl != null) {
             // Controller-aware: replaces the current task so it stops "running off" and comes back.
@@ -237,8 +260,10 @@ public final class CompanionCommands {
         } else {
             companion.goTo(target);
         }
-        String who = companion.displayName();
-        source.sendFeedback(() -> Text.literal(who + " coming to " + target.toShortString()), false);
+        source.sendFeedback(() -> Text.literal(stranded
+                ? who + " was too far away to walk back and has been brought to "
+                        + target.toShortString()
+                : who + " coming to " + target.toShortString()), false);
         return 1;
     }
 
