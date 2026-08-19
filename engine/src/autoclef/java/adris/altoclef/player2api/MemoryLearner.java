@@ -57,7 +57,17 @@ public final class MemoryLearner {
         if (!MemoryConfig.enabled || !MemoryConfig.extractionEnabled) {
             return;
         }
-        if (player == null || service == null || playerMessage == null || playerMessage.isBlank()) {
+        if (playerMessage == null || playerMessage.isBlank()) {
+            // Ordinary and frequent: a self-prompted turn has no player line to learn from. Silent on
+            // purpose — logging it would put a line under every autonomous turn and drown the ones
+            // below that mean something.
+            return;
+        }
+        if (player == null || service == null) {
+            // Neither of these should happen on a turn that had a player message, and both would
+            // present as extraction that simply never runs.
+            LOGGER.warn("Memory extraction: not running — {}. Nothing will be learned this turn.",
+                    player == null ? "no owner resolved" : "no LLM service");
             return;
         }
         // The same gate retrieval uses, for the same reason and at a different cost: there is nothing
@@ -66,7 +76,14 @@ public final class MemoryLearner {
         // store-aware route exists to let a turn ask about something already known, which is a reason
         // to retrieve and not a reason to extract.
         if (!MemoryGate.admits(playerMessage)) {
-            LOGGER.debug("Memory extraction: skipping this turn ({})", MemoryGate.explain(playerMessage));
+            // INFO, not debug. At debug this produced NO output on a server logging at INFO, so a
+            // turn refused here left no trace at any prefix — and on 2026-08-18 the one turn of four
+            // that actually held a durable fact ("he's a brown dog; pitbull lab mix…") was refused
+            // for having no first- or second-person pronoun, silently. The absence of a line read as
+            // "extraction ran and found nothing", which wants the opposite fix. One line per skipped
+            // turn is the cheapest possible price for telling those two apart.
+            LOGGER.info("Memory extraction: skipping this turn ({}) — turn was: \"{}\"",
+                    MemoryGate.explain(playerMessage), abbreviate(playerMessage));
             return;
         }
         CompletableFuture.runAsync(() ->
@@ -96,8 +113,13 @@ public final class MemoryLearner {
                 // unable to tell "the model found nothing" from "extraction never ran" — and this
                 // project has now been bitten three times by a silent path that looked like a working
                 // one. It is one line per turn.
-                LOGGER.info("Memory: learned nothing from this turn ({} extracted, none kept)",
-                        facts.size());
+                //
+                // The raw reply comes too, truncated. "0 extracted" alone cannot distinguish a model
+                // that answered {"facts": []} from one that answered something the parser threw away,
+                // and those want completely different fixes.
+                LOGGER.info("Memory: learned nothing from this turn ({} extracted, none kept). "
+                                + "Extractor replied: {}",
+                        facts.size(), abbreviate(raw));
                 return;
             }
 
@@ -136,6 +158,15 @@ public final class MemoryLearner {
             // feature that has quietly stopped running, which they should hear about.
             MemoryHealth.extractionFailed(e);
         }
+    }
+
+    /** Enough of a string to recognise it in a log, without wrapping the console. */
+    private static String abbreviate(String text) {
+        if (text == null) {
+            return "<null>";
+        }
+        String flat = text.replace('\n', ' ').strip();
+        return flat.length() <= 300 ? flat : flat.substring(0, 299) + "…";
     }
 
     /**

@@ -131,6 +131,19 @@ public final class CompanionMemory {
         // and outside the per-player loop below because a returning player whose store is already
         // loaded still needs a warm embedder. See EmbeddingsService.warmUp().
         EmbeddingsService.warmUp();
+        // What memory is actually set to do, once per warm — which is world load and every
+        // /companion reload. Cheap, and it answers from the log alone the question that otherwise
+        // needs someone to go and read a config file on another machine: is extraction even on
+        // here? A player's config pins its own values, so a changed default never reaches them and
+        // the setting cannot be inferred from the version.
+        LOGGER.info("Memory: extraction {}, gate {}, k={}, minCosine={}, margin={}, embed budget {} ms",
+                MemoryConfig.extractionEnabled
+                        ? "ON"
+                        : "OFF — nothing will be learned from conversation "
+                                + "(set memory.extractionEnabled=true)",
+                MemoryConfig.gateEnabled ? "on" : "off",
+                MemoryConfig.topK, MemoryConfig.minCosine, MemoryConfig.relativeMargin,
+                MemoryConfig.embedBudgetMs);
         // Resolved on the server thread: WorldIdentity touches SavedData, which the async work
         // below must not.
         WorldIdentity identity = WorldIdentity.of(level);
@@ -364,16 +377,25 @@ public final class CompanionMemory {
         if (!MemoryConfig.enabled || player == null || turnText == null || turnText.isBlank()) {
             return List.of();
         }
-        MemoryRetriever r = retrievers.get(player);
-        if (r == null) {
-            return List.of();
-        }
-
+        // Gate first, store second. The other order returned silently whenever the store was empty,
+        // which produced NO log line at all — indistinguishable from recall never having run, and
+        // observed doing exactly that on 2026-08-18 when the player asked "do you recall my dog's
+        // name?" against an empty store. Both branches still return an empty list, so nothing the
+        // companion does changes; what changes is that a turn now always leaves a verdict behind.
+        // It also makes `gated` mean what its name says — turns the gate skipped — rather than
+        // "turns the gate skipped, among those that happened to have something stored".
         Set<String> storedSubjects = subjectsOf(player);
         if (!MemoryGate.admits(turnText, storedSubjects)) {
             gated.incrementAndGet();
             LOGGER.info("Memory: no recall — gate skipped this turn ({})",
                     MemoryGate.explain(turnText, storedSubjects));
+            return List.of();
+        }
+
+        MemoryRetriever r = retrievers.get(player);
+        if (r == null) {
+            LOGGER.info("Memory: no recall — this turn wanted a memory, but nothing is stored for "
+                    + "{} yet.", player);
             return List.of();
         }
 
