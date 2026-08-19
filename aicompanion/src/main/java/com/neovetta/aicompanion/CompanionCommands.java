@@ -428,6 +428,15 @@ public final class CompanionCommands {
                 count, skillCount)), false);
         source.sendFeedback(() -> Text.literal(
                 "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
+        // Whatever reloadAndApply just found out about memory, said here rather than saved for the
+        // next conversation turn. Someone who ran this command has usually just changed a memory or
+        // embeddings setting, and this is the moment they are waiting to hear whether it took.
+        // Silent when memory is off or nothing changed, which is almost always.
+        for (adris.altoclef.player2api.MemoryHealth.Notice notice
+                : adris.altoclef.player2api.MemoryHealth.drain()) {
+            source.sendFeedback(() -> Text.literal(notice.text())
+                    .formatted(notice.problem() ? Formatting.RED : Formatting.GREEN), false);
+        }
         AiCompanion.LOGGER.info("[{}] config reloaded via /companion reload ({} live companion(s) updated)",
                 AiCompanion.MOD_ID, count);
         return 1;

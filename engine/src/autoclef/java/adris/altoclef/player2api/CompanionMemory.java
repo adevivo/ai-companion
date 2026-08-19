@@ -120,8 +120,12 @@ public final class CompanionMemory {
         if (!EmbeddingsConfig.enabled) {
             LOGGER.warn("Memory is enabled but embeddings are not — nothing can be ranked. "
                     + "Set embeddings.enabled=true.");
+            // The player switched memory on and it will do nothing at all. That is worth a line in
+            // their chat rather than only in a log they are not reading while playing.
+            MemoryHealth.embeddingsOff();
             return;
         }
+        MemoryHealth.embeddingsOn();
         // Before any store is touched: the model load is process-global and costs ~600 ms, which is
         // more than a recall's whole budget. Paying it here means no player turn pays it. Idempotent,
         // and outside the per-player loop below because a returning player whose store is already
@@ -159,6 +163,7 @@ public final class CompanionMemory {
                 }
             }
             rebuild(player);
+            MemoryHealth.storeLoaded();
             LOGGER.info("Memory: ready for {} — {} stored. World \"{}\" = {}",
                     player, store.records().size(), worldLabel, worldId);
         } catch (Throwable e) {
@@ -168,6 +173,10 @@ public final class CompanionMemory {
             // anything, with nothing in the log at all.
             LOGGER.warn("Memory: could not load the store for {}. The companion will run without "
                     + "memories; everything else is unaffected.", player, e);
+            // Distinct from every other failure here: the memories still exist. MemoryStore.load
+            // throws rather than discarding a torn corpus, so the file is intact and the player
+            // should be told to look at it, not told their companion has forgotten them.
+            MemoryHealth.storeUnreadable(e);
         }
     }
 
@@ -409,6 +418,9 @@ public final class CompanionMemory {
             long ms = (System.nanoTime() - startedAt) / 1_000_000L;
             recalls.incrementAndGet();
             recallMillis.addAndGet(ms);
+            // The machinery ran, which is what health is about. Whether it FOUND anything is a
+            // separate question with a perfectly good "no" — see MemoryHealth.recallSucceeded().
+            MemoryHealth.recallSucceeded();
             if (out.isEmpty()) {
                 LOGGER.info("Memory: no recall — {} candidates, best cosine {} below floor {} "
                                 + "(took {} ms)",
@@ -424,6 +436,12 @@ public final class CompanionMemory {
             // still be visible: a turn that quietly skipped its embedding looks identical to a turn
             // where nothing was relevant, and those want opposite fixes.
             misses.incrementAndGet();
+            // Only a timeout is counted towards "memory is too slow". Anything else means the embed
+            // itself failed, and EmbeddingsService has already reported that with the real reason —
+            // counting it here too would announce the same outage twice in two different words.
+            if (e instanceof java.util.concurrent.TimeoutException) {
+                MemoryHealth.recallTimedOut();
+            }
             LOGGER.info("Memory: no recall — {} after {} ms (budget {} ms)",
                     e.getClass().getSimpleName(),
                     (System.nanoTime() - startedAt) / 1_000_000L, MemoryConfig.embedBudgetMs);
@@ -449,7 +467,8 @@ public final class CompanionMemory {
         long n = recalls.get();
         String timing = n == 0 ? "no recalls yet"
                 : String.format("%d recalls, mean %d ms", n, recallMillis.get() / n);
-        return String.format("memory: %d stored, k=%d, %s, %d gated, %d missed",
-                store.records().size(), MemoryConfig.topK, timing, gated.get(), misses.get());
+        return String.format("memory: %d stored, k=%d, %s, %d gated, %d missed, %s",
+                store.records().size(), MemoryConfig.topK, timing, gated.get(), misses.get(),
+                MemoryHealth.summary());
     }
 }

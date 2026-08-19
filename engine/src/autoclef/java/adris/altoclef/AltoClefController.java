@@ -402,12 +402,27 @@ public class AltoClefController {
 
    /** Puts a line in the owner's chat, so failures are visible in-game and not only in the log. */
    public void tellOwner(String message) {
+      tellOwner(message, true);
+   }
+
+   /**
+    * As above, for a notice that is not bad news.
+    *
+    * <p>Everything here used to be red, which is right for a failure and wrong for the message that
+    * says the failure is over — a green "memory is back" is the confirmation someone gets after going
+    * away to fix something, and rendering it in the same red as the complaint reads as a second
+    * complaint.
+    *
+    * @param problem whether this reports something broken, rather than something recovered
+    */
+   public void tellOwner(String message, boolean problem) {
       if (message == null || message.isBlank()) {
          return;
       }
       try {
          if (this.owner instanceof ServerPlayer serverOwner) {
-            serverOwner.sendSystemMessage(Component.literal(message).withStyle(ChatFormatting.RED));
+            serverOwner.sendSystemMessage(Component.literal(message)
+                  .withStyle(problem ? ChatFormatting.RED : ChatFormatting.GREEN));
          }
       } catch (Exception e) {
          Debug.logWarning("Could not deliver notice to the owner: " + e);

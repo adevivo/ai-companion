@@ -110,6 +110,10 @@ public final class EmbeddingsService {
                     EmbeddingsConfig.connectTimeoutMs, EmbeddingsConfig.timeoutMs);
         } catch (Exception e) {
             failures.incrementAndGet();
+            // Reported on the FIRST failure rather than counted up to a threshold: an endpoint that
+            // refuses a connection is not having a bad moment, and every recall and every write
+            // goes through here. See MemoryHealth.
+            MemoryHealth.embedFailed(e);
             throw e;
         }
         long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
@@ -119,6 +123,7 @@ public final class EmbeddingsService {
             vector = extractVector(response);
         } catch (Exception e) {
             failures.incrementAndGet();
+            MemoryHealth.embedFailed(e);
             throw e;
         }
 
@@ -127,16 +132,21 @@ public final class EmbeddingsService {
             failures.incrementAndGet();
             // Loud on purpose. A wrong-width vector is worse than an error, because retrieval still
             // "works" — it just ranks in a space none of the tuning was measured in.
-            throw new IllegalStateException(String.format(
+            IllegalStateException wrongWidth = new IllegalStateException(String.format(
                     "Embedding model '%s' at %s returned %d dimensions, expected %d. "
                             + "Every retrieval constant (int8 quantisation cost, candidate multiplier, k) "
                             + "was measured at %d. Point at the right model, or set "
                             + "embeddings.expectedDimension to 0 to accept this and re-measure.",
                     EmbeddingsConfig.model, EmbeddingsConfig.baseUrl,
                     vector.length, expected, expected));
+            // Same latch as an unreachable endpoint, because the consequence is the same: pointed at
+            // the wrong model, nothing can be stored or recalled at all.
+            MemoryHealth.embedFailed(wrongWidth);
+            throw wrongWidth;
         }
 
         observedDimension = vector.length;
+        MemoryHealth.embedSucceeded();
         if (measured) {
             calls.incrementAndGet();
             totalMillis.addAndGet(elapsedMs);

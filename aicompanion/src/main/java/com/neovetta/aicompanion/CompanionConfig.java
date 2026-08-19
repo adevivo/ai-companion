@@ -246,6 +246,10 @@ public final class CompanionConfig {
         // constructs a new AltoClefController, so without this, turning memory on and reloading
         // would appear to do nothing at all. Idempotent once it has succeeded, and a no-op when
         // memory is off.
+        // Before warm(), not after: reload is "I have fixed it, try again", and warm() is what
+        // re-checks the config and stages a fresh verdict. Clearing the latches afterwards would
+        // throw that verdict away.
+        adris.altoclef.player2api.MemoryHealth.rearm();
         adris.altoclef.player2api.CompanionMemory.warm(server);
         // A player who just started their Kokoro container is in the TTS back-off until it expires.
         // Reload is the obvious "I have fixed it, try again" signal, so honour it as one.

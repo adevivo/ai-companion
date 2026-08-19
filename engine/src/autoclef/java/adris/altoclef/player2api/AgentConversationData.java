@@ -189,6 +189,19 @@ public class AgentConversationData {
                     turnWorldId);
         }
 
+        // Say out loud when memory has stopped working. Every failure in that path degrades to "no
+        // memories" so that a dead embedder can never break a turn — which also makes an outage
+        // completely invisible from the player's seat, and leaves the companion DENYING knowledge of
+        // something it has stored. That reads as a broken feature rather than a broken endpoint, and
+        // the only place it was ever reported was latest.log.
+        //
+        // Drained here because this is the server thread and the owner is resolved: MemoryHealth is
+        // reported into from pool threads that have neither. At most one line per distinct problem
+        // for as long as it lasts, so this is silent on essentially every turn.
+        for (MemoryHealth.Notice notice : MemoryHealth.drain()) {
+            mod.tellOwner(notice.text(), notice.problem());
+        }
+
         // What extraction will read, captured while the owner is still resolvable on this thread. A
         // self-prompted turn is excluded for the same reason recall excludes it: the companion talking
         // to itself is not the player telling it anything.

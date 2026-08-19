@@ -86,6 +86,11 @@ public final class MemoryLearner {
             // and must not be able to become the source of a fact — see MemoryExtractor.isGrounded.
             List<MemoryExtractor.Candidate> candidates =
                     MemoryExtractor.plan(facts, ownerUsername, playerMessage);
+            // Reported here, before the candidates are weighed: the call came back and parsed, which
+            // is the whole of what health tracks. Extraction learning NOTHING is the normal outcome
+            // on 86% of turns, and counting that as a failure would have the companion announce that
+            // it had stopped learning while it was working exactly as designed.
+            MemoryHealth.extractionSucceeded();
             if (candidates.isEmpty()) {
                 // Logged at INFO even though it is the common case, because the alternative is being
                 // unable to tell "the model found nothing" from "extraction never ran" — and this
@@ -126,6 +131,10 @@ public final class MemoryLearner {
         } catch (Throwable e) {
             LOGGER.warn("Memory: extraction failed for this turn; nothing was learned. "
                     + "The conversation is unaffected.", e);
+            // Counted rather than announced: one failed call costs one turn's worth of facts, most
+            // of which would have been nothing. A run of them means the player is paying for a
+            // feature that has quietly stopped running, which they should hear about.
+            MemoryHealth.extractionFailed(e);
         }
     }
 
