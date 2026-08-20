@@ -44,16 +44,84 @@ public class Player2APIService {
          new java.util.concurrent.atomic.AtomicLong(0);
    private static final java.util.concurrent.atomic.AtomicLong totalTokens =
          new java.util.concurrent.atomic.AtomicLong(0);
+   /**
+    * Input tokens the provider served from its prompt cache, when it says so.
+    *
+    * <p>Tracked because the cost of this mod is dominated by a system prompt that is byte-identical
+    * on every request — measured 2026-08-19 at 14,684 chars, 91% of everything sent — and providers
+    * bill a repeated prefix at a steep discount (xAI: $0.50/M cached against $2.00/M). Without this
+    * number the total alone cannot distinguish "the prefix is being cached" from "it is being paid
+    * for in full every turn", and those differ by roughly a factor of three on the bill.
+    */
+   private static final java.util.concurrent.atomic.AtomicLong cachedPromptTokens =
+         new java.util.concurrent.atomic.AtomicLong(0);
    /** Highest {@code totalTokens / usageReportEveryTokens} milestone already reported. */
    private static final java.util.concurrent.atomic.AtomicLong reportedMilestone =
          new java.util.concurrent.atomic.AtomicLong(0);
 
+   /**
+    * xAI's cache-routing header. Prompt cache entries live <b>per server</b>, so without this a
+    * request goes wherever the balancer sends it and a hit is luck — which is why a byte-identical
+    * 14.7k system prompt was still being billed at the uncached rate. The value is opaque to the
+    * provider; all it has to be is stable for the conversation it names.
+    *
+    * <p>Harmless everywhere else: llama.cpp and the Player2 API ignore headers they do not know.
+    */
+   private static final String CONV_ID_HEADER = "x-grok-conv-id";
+
    private String clientId;
    private AltoClefController controller;
+
+   /**
+    * Stable conversation id for cache routing, resolved once and kept.
+    *
+    * <p>Derived from the companion's own entity id so two companions do not share a route: their
+    * personas differ, so their prompt prefixes differ, and pinning both to one server would have
+    * them evicting each other's cache. Resolved lazily because the entity is not necessarily
+    * attached when this service is constructed, and it falls back to a random id rather than
+    * failing — an unroutable request still works, it just pays full price.
+    */
+   private volatile String convId;
 
    public Player2APIService(AltoClefController controller, String clientId) {
       this.clientId = clientId;
       this.controller = controller;
+   }
+
+   private String conversationId() {
+      String id = convId;
+      if (id != null) {
+         return id;
+      }
+      synchronized (this) {
+         if (convId == null) {
+            String derived = null;
+            try {
+               if (controller != null && controller.getPlayer() != null) {
+                  derived = controller.getPlayer().getUUID().toString();
+               }
+            } catch (Throwable ignored) {
+               // Never let cache routing be the thing that breaks a conversation.
+            }
+            convId = "aicompanion-" + (derived != null ? derived : UUID.randomUUID().toString());
+         }
+         return convId;
+      }
+   }
+
+   /**
+    * One chat-completion round trip, with cache routing and usage accounting applied.
+    *
+    * <p>Every LLM call in this class goes through here so that neither can be forgotten at a new
+    * call site — the header is worthless if only two of the three paths send it, since the third
+    * would keep landing on other servers and evicting nothing useful.
+    */
+   private Map<String, JsonElement> chatCompletion(JsonObject requestBody) throws Exception {
+      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(
+            controller.getOwner(), clientId, "/v1/chat/completions", true, requestBody,
+            java.util.Collections.singletonMap(CONV_ID_HEADER, conversationId()));
+      recordUsage(responseMap);
+      return responseMap;
    }
 
    /**
@@ -89,11 +157,13 @@ public class Player2APIService {
       promptTokens.set(0);
       completionTokens.set(0);
       totalTokens.set(0);
+      cachedPromptTokens.set(0);
       reportedMilestone.set(0);
    }
 
    /** Immutable view of this session's LLM spend. */
-   public record UsageSnapshot(long promptTokens, long completionTokens, long totalTokens, int requests) {}
+   public record UsageSnapshot(long promptTokens, long completionTokens, long totalTokens,
+         long cachedPromptTokens, int requests) {}
 
    /**
     * Read the session counters for display. The four values are read independently, so a snapshot
@@ -102,7 +172,7 @@ public class Player2APIService {
     */
    public static UsageSnapshot usageSnapshot() {
       return new UsageSnapshot(promptTokens.get(), completionTokens.get(), totalTokens.get(),
-            requestCount.get());
+            cachedPromptTokens.get(), requestCount.get());
    }
 
    /**
@@ -122,7 +192,9 @@ public class Player2APIService {
          long out = usage.has("completion_tokens") ? usage.get("completion_tokens").getAsLong() : 0;
          // Prefer the server's own total; fall back to the parts when it isn't reported.
          long tot = usage.has("total_tokens") ? usage.get("total_tokens").getAsLong() : in + out;
+         long cached = cachedPromptTokensOf(usage);
 
+         cachedPromptTokens.addAndGet(cached);
          promptTokens.addAndGet(in);
          completionTokens.addAndGet(out);
          long runningTotal = totalTokens.addAndGet(tot);
@@ -143,10 +215,41 @@ public class Player2APIService {
       }
    }
 
+   /**
+    * Prompt tokens served from cache, read from whichever shape the provider uses.
+    *
+    * <p>Two spellings on purpose. xAI names it {@code cached_prompt_text_tokens} at the top of the
+    * usage object; the OpenAI-compatible convention nests {@code cached_tokens} under
+    * {@code prompt_tokens_details}, and several proxies follow that instead. Reading only one would
+    * report a flat zero against a provider that was in fact caching perfectly, which is worse than
+    * not reporting at all — it is a number that argues for changes nobody needs to make.
+    */
+   private static long cachedPromptTokensOf(JsonObject usage) {
+      if (usage.has("cached_prompt_text_tokens")) {
+         return usage.get("cached_prompt_text_tokens").getAsLong();
+      }
+      JsonElement details = usage.get("prompt_tokens_details");
+      if (details != null && details.isJsonObject()) {
+         JsonObject d = details.getAsJsonObject();
+         if (d.has("cached_tokens")) {
+            return d.get("cached_tokens").getAsLong();
+         }
+      }
+      return 0;
+   }
+
    private void reportUsage(long runningTotal) {
+      long in = promptTokens.get();
+      long cached = cachedPromptTokens.get();
+      // The cache share is the actionable half of this line: input is the overwhelming majority of
+      // spend here, and a low percentage against a prompt whose prefix never changes means the
+      // discount is being missed rather than that there is nothing to cache.
+      String cacheNote = cached > 0
+            ? String.format(" %,d of the input was cached (%.0f%%).", cached, 100.0 * cached / Math.max(1, in))
+            : " None of the input was reported as cached.";
       String summary = String.format(
-            "LLM usage this session: %,d tokens (%,d in / %,d out) over %,d requests.",
-            runningTotal, promptTokens.get(), completionTokens.get(), requestCount.get());
+            "LLM usage this session: %,d tokens (%,d in / %,d out) over %,d requests.%s",
+            runningTotal, in, completionTokens.get(), requestCount.get(), cacheNote);
       LOGGER.info(summary);
       if (controller != null && controller.getOwner() instanceof ServerPlayer owner) {
          owner.displayClientMessage(Component.literal("[companion] " + summary), false);
@@ -283,9 +386,7 @@ public class Player2APIService {
    private String requestContent(JsonObject requestBody, String lastMessageForDebug) throws Exception {
       enforceRequestCap();
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
-      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
-            "/v1/chat/completions", true, requestBody);
-      recordUsage(responseMap);
+      Map<String, JsonElement> responseMap = chatCompletion(requestBody);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
@@ -450,9 +551,7 @@ public class Player2APIService {
       }
       requestBody.add("messages", messagesArray);
       applyLlmParams(requestBody, true, 0.0);
-      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
-            "/v1/chat/completions", true, requestBody);
-      recordUsage(responseMap);
+      Map<String, JsonElement> responseMap = chatCompletion(requestBody);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
@@ -486,9 +585,7 @@ public class Player2APIService {
       String lastMessageForDebug = conversationHistory.getListJSON().get(conversationHistory.getListJSON().size() - 1)
             .toString();
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
-      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
-            "/v1/chat/completions", true, requestBody);
-      recordUsage(responseMap);
+      Map<String, JsonElement> responseMap = chatCompletion(requestBody);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
