@@ -24,6 +24,10 @@ public class AiCompanionClient implements ClientModInitializer {
         HandledScreens.register(CompanionScreens.TYPE, CompanionScreen::new);
         // /companion config → server sends this packet → open the Cloth Config screen. Must hop to
         // the client thread: network handlers run on netty threads, and screens are main-thread only.
+        // Thinking for our own companion when the server asks. Registers a JOIN handshake plus one
+        // receiver; does nothing at all unless the server has llm.clientBrain on and asks.
+        ClientBrain.register();
+
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.OPEN_CONFIG_SCREEN,
                 (client, handler, buf, responseSender) ->
                         client.execute(() -> client.setScreen(CompanionConfigScreen.create(client.currentScreen))));

@@ -409,7 +409,8 @@ public class AltoClefController {
     * that two companions with two different owners must not share a credential.
     */
    private final adris.altoclef.player2api.brain.BrainTransport brainTransport =
-         new adris.altoclef.player2api.brain.LocalBrainTransport(this);
+         new adris.altoclef.player2api.brain.NetworkBrainTransport(
+               this, new adris.altoclef.player2api.brain.LocalBrainTransport(this));
 
    /** @see adris.altoclef.player2api.brain.BrainTransport */
    public adris.altoclef.player2api.brain.BrainTransport getBrainTransport() {

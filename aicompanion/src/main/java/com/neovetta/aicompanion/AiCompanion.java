@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion;
 
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import adris.altoclef.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import com.neovetta.aicompanion.screen.CompanionScreens;
@@ -25,6 +26,39 @@ import org.slf4j.LoggerFactory;
 public class AiCompanion implements ModInitializer {
     public static final String MOD_ID = "aicompanion";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+
+    /**
+     * Server-side half of the client brain: who can think, results coming back, and cleanup.
+     *
+     * <p>Registered unconditionally. The switch that matters is {@code llm.clientBrain}, checked
+     * when a turn is dispatched — a client announcing itself costs nothing and means the setting can
+     * be turned on at runtime without anyone reconnecting.
+     */
+    private static void registerBrainReceivers() {
+        ServerPlayNetworking.registerGlobalReceiver(
+                adris.altoclef.player2api.brain.BrainWire.HELLO,
+                (server, player, handler, buf, sender) ->
+                        adris.altoclef.player2api.brain.NetworkBrainTransport
+                                .markCapable(player.getUuid()));
+
+        ServerPlayNetworking.registerGlobalReceiver(
+                adris.altoclef.player2api.brain.BrainWire.TURN_RESULT,
+                (server, player, handler, buf, sender) -> {
+                    java.util.UUID requestId = buf.readUuid();
+                    String reply = new String(buf.readByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+                    String error = buf.readString(512);
+                    // Off the network thread and onto the server thread: delivering a result resumes
+                    // a conversation turn, which touches companion state.
+                    server.execute(() -> adris.altoclef.player2api.brain.NetworkBrainTransport
+                            .deliver(requestId, reply, error));
+                });
+
+        // A player who quits mid-turn would otherwise leave a request nobody will ever answer, and
+        // the same companion is reused on reconnect — so it would look permanently mute, not late.
+        net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.DISCONNECT.register(
+                (handler, server) -> adris.altoclef.player2api.brain.NetworkBrainTransport
+                        .forget(handler.getPlayer().getUuid()));
+    }
 
     public static Identifier id(String path) {
         return new Identifier(MOD_ID, path);
@@ -138,6 +172,7 @@ public class AiCompanion implements ModInitializer {
         CompanionCommands.register();
         // Register the chat hook so nearby players' messages route to a companion's brain.
         ConversationManager.init();
+        registerBrainReceivers();
         LOGGER.info("[{}] initialized — entity {}, /companion command, chat hook", MOD_ID, id("companion"));
     }
 }

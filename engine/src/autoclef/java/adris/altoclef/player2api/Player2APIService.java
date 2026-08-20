@@ -88,6 +88,21 @@ public class Player2APIService {
       this.controller = controller;
    }
 
+   /**
+    * A service with no companion behind it, for a client doing its own thinking.
+    *
+    * <p>Reuses this class rather than growing a second client that would drift: the retry, salvage
+    * and truncation handling here is scar tissue from observed model failures, and a parallel
+    * implementation would have to relearn all of it. Only the chat-completion path is supported —
+    * TTS, STT and health all genuinely need a companion and its owner.
+    *
+    * <p>⚠️ Requires {@link LlmConfig#localMode}. The hosted Player2 path authenticates per player
+    * against a token the server holds; there is no client-side equivalent.
+    */
+   public Player2APIService(String clientId) {
+      this(null, clientId);
+   }
+
    private String conversationId() {
       String id = convId;
       if (id != null) {
@@ -118,7 +133,8 @@ public class Player2APIService {
     */
    private Map<String, JsonElement> chatCompletion(JsonObject requestBody) throws Exception {
       Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(
-            controller.getOwner(), clientId, "/v1/chat/completions", true, requestBody,
+            controller == null ? null : controller.getOwner(), clientId,
+            "/v1/chat/completions", true, requestBody,
             java.util.Collections.singletonMap(CONV_ID_HEADER, conversationId()));
       recordUsage(responseMap);
       return responseMap;

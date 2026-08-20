@@ -332,23 +332,69 @@ public class ConversationHistory {
          String altoclefStatusMsgs, Player2APIService player2apiService, Optional<String> reminderString,
          java.util.List<String> memories) {
       ConversationHistory copy = new ConversationHistory(this.conversationHistory.get(0).get("content").getAsString());
-
-      for (int i = 1; i < this.conversationHistory.size() - 1; i++) {
-         copy.addHistory(Utils.deepCopy(this.conversationHistory.get(i)), false, player2apiService);
+      List<JsonObject> wrapped = wrapLatest(this.conversationHistory, worldStatus, agentStatus,
+            altoclefStatusMsgs, reminderString.orElse(null), memories);
+      for (int i = 1; i < wrapped.size(); i++) {
+         copy.addHistory(wrapped.get(i), false, player2apiService);
       }
+      return copy;
+   }
 
-      if (this.conversationHistory.size() > 1) {
-         JsonObject last = Utils.deepCopy(this.conversationHistory.get(this.conversationHistory.size() - 1));
+   /**
+    * Fold this turn's status into the newest user message, as a pure function.
+    *
+    * <p>Extracted from {@link #copyThenWrapLatestWithStatus} so that <b>the same assembly runs
+    * wherever the prompt is built</b>. Once a client does its companion's thinking it has to inject
+    * its own memories here, and the only alternatives were string surgery on an already-assembled
+    * prompt or a second copy of these rules — and a second copy would drift, silently, since nothing
+    * compares the two.
+    *
+    * <p>Static and free of {@code Player2APIService} on purpose: the original passed one to
+    * {@code addHistory}, which ignores it whenever {@code doCutOff} is false, and a client has no
+    * server-side service to hand it.
+    *
+    * @param raw the full history, system prompt first; not modified
+    * @return a new list, deep-copied below index 0
+    */
+   /**
+    * Wrap an already-assembled message list so it can be handed to {@link Player2APIService}.
+    *
+    * <p>For a client that received raw history over the wire and assembled the prompt itself. It is
+    * a carrier, not a conversation: nothing is persisted, summarised or trimmed, because the server
+    * owns the real history and this copy exists for the length of one call.
+    */
+   public static ConversationHistory of(List<JsonObject> messages) {
+      ConversationHistory h = new ConversationHistory(
+            messages.isEmpty() ? "" : messages.get(0).get("content").getAsString());
+      for (int i = 1; i < messages.size(); i++) {
+         h.conversationHistory.add(messages.get(i));
+      }
+      return h;
+   }
+
+   public static List<JsonObject> wrapLatest(List<JsonObject> raw, String worldStatus,
+         String agentStatus, String altoclefStatusMsgs, String reminder,
+         java.util.List<String> memories) {
+      List<JsonObject> out = new ArrayList<>(raw.size());
+      if (raw.isEmpty()) {
+         return out;
+      }
+      out.add(raw.get(0));
+      for (int i = 1; i < raw.size() - 1; i++) {
+         out.add(Utils.deepCopy(raw.get(i)));
+      }
+      if (raw.size() > 1) {
+         JsonObject last = Utils.deepCopy(raw.get(raw.size() - 1));
          if ("user".equals(last.get("role").getAsString())) {
             String originalContent = last.get("content").getAsString();
             ObjectStatus msgObj = new ObjectStatus();
             msgObj.add("userMessage", originalContent);
-            reminderString.ifPresent(remind -> {
-               msgObj.add("reminders", remind);
-            });
+            if (reminder != null) {
+               msgObj.add("reminders", reminder);
+            }
             msgObj.add("worldStatus", worldStatus);
             msgObj.add("agentStatus", agentStatus);
-            if (!altoclefStatusMsgs.isBlank()) {
+            if (altoclefStatusMsgs != null && !altoclefStatusMsgs.isBlank()) {
                msgObj.add("gameDebugMessages", altoclefStatusMsgs);
             }
             if (memories != null && !memories.isEmpty()) {
@@ -359,11 +405,9 @@ public class ConversationHistory {
             }
             last.addProperty("content", msgObj.toString());
          }
-
-         copy.addHistory(last, false, player2apiService);
+         out.add(last);
       }
-
-      return copy;
+      return out;
    }
 
    @Override

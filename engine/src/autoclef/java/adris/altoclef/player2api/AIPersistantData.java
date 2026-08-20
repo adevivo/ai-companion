@@ -55,6 +55,11 @@ public class AIPersistantData {
         return this.conversationHistory
                 .copyThenWrapLatestWithStatus(worldStatus, agentStatus, altoClefDebugMsgs, player2apiService, reminderString, memories);
     }
+    /** The unwrapped history, for a client that has to assemble the prompt itself. */
+    public java.util.List<com.google.gson.JsonObject> rawHistory(){
+        return this.conversationHistory.getListJSON();
+    }
+
     public void addAssistantMessage(String llmMessage, Player2APIService player2apiService){
         this.conversationHistory.addAssistantMessage(llmMessage, player2apiService);
     }

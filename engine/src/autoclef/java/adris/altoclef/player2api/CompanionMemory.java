@@ -159,6 +159,28 @@ public final class CompanionMemory {
         }
     }
 
+    /**
+     * Load one player's corpus with no level to hand — the client-side entry point.
+     *
+     * <p>{@link #warm(ServerLevel)} cannot be reused: it walks the player list and resolves a world
+     * id through {@code SavedData}, neither of which exists on a client. A client knows exactly one
+     * player — the one at the keyboard — and is told the world id by the server.
+     *
+     * <p>Idempotent, and safe to call on every turn: a loaded store is left alone.
+     */
+    public static void warmForClient(UUID player) {
+        if (!MemoryConfig.enabled || player == null || stores.containsKey(player)) {
+            return;
+        }
+        if (!EmbeddingsConfig.enabled) {
+            MemoryHealth.embeddingsOff();
+            return;
+        }
+        MemoryHealth.embeddingsOn();
+        EmbeddingsService.warmUp();
+        loadFor(player, null, "client");
+    }
+
     private static void loadFor(UUID player, String worldId, String worldLabel) {
         try {
             MemoryStore store = MemoryStore.load(player);

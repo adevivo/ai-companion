@@ -166,6 +166,39 @@ public final class LlmConfig {
             Long.parseLong(resolve("aicompanion.llm.usageReportEveryTokens",
                     "AICOMPANION_LLM_USAGEREPORTEVERYTOKENS", "100000"));
 
+    /**
+     * Let the owning player's client do its companion's thinking, instead of the game server.
+     *
+     * <p><b>Off by default.</b> On a dedicated server this is the difference between the operator
+     * funding every player's tokens and each player funding their own, and between every player's
+     * memories sitting on the operator's disk and staying on their own machine. In single-player it
+     * changes nothing observable — client and server are one process — which is exactly what makes
+     * it safe to test there first.
+     *
+     * <p>⚠️ <b>Requires {@link #localMode}.</b> The hosted Player2 path authenticates per player
+     * against a token the server holds, and there is no client-side equivalent yet; a client asked
+     * to think without one would fail every turn and fall back, paying the timeout each time. When
+     * {@code localMode} is false this switch is ignored and the server keeps thinking.
+     *
+     * <p>Falling back is normal, not exceptional: a vanilla client, an out-of-date one, or one that
+     * simply does not answer must never leave a companion mute. See {@code NetworkBrainTransport}.
+     */
+    public static volatile boolean clientBrain =
+            Boolean.parseBoolean(resolve("aicompanion.llm.clientBrain",
+                    "AICOMPANION_LLM_CLIENTBRAIN", "false"));
+
+    /**
+     * How long the server waits for a client to think before doing it itself, in milliseconds.
+     *
+     * <p>Generous on purpose. This is not a latency budget — nothing is blocked while it runs, the
+     * turn is already asynchronous — it is a liveness check on a client that said it could think and
+     * then went quiet. A frontier model on a slow link can legitimately take many seconds, and
+     * cutting it off to run the turn again on the server would spend twice and answer once.
+     */
+    public static volatile int clientBrainTimeoutMs =
+            Integer.parseInt(resolve("aicompanion.llm.clientBrainTimeoutMs",
+                    "AICOMPANION_LLM_CLIENTBRAINTIMEOUTMS", "45000"));
+
     private static String resolve(String property, String env, String fallback) {
         String v = System.getProperty(property);
         if (v == null || v.isBlank()) {

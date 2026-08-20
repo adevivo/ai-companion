@@ -187,7 +187,15 @@ public class AgentConversationData {
                 // Null on a self-prompted turn, which is what makes both memory paths skip it.
                 this.autonomousTurnInFlight || lastEvent == null ? null : lastEvent.message(),
                 turnWorldId,
-                this.autonomousTurnInFlight);
+                this.autonomousTurnInFlight,
+                // Ingredients rather than a prompt. The local path ignores these and uses the
+                // assembled history below; a client uses them to assemble its own, which is what
+                // keeps its memories off the wire.
+                mod.getAIPersistantData().rawHistory(),
+                worldStatus,
+                agentStatus,
+                altoClefDebugMsgs,
+                reminderString.orElse(null));
 
         // Whose key pays and whose memories are read — see BrainTransport. Local today; the seam is
         // what lets that become the owning client without touching this loop.

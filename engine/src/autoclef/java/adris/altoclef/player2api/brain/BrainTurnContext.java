@@ -1,5 +1,7 @@
 package adris.altoclef.player2api.brain;
 
+import com.google.gson.JsonObject;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -16,6 +18,14 @@ import java.util.UUID;
  * @param turnText      what the player actually said, or <b>null</b> on a self-prompted turn
  * @param worldId       the current save's minted id, or null if it could not be resolved
  * @param autonomous    true when the companion prompted itself rather than being spoken to
+ * @param rawMessages   the unwrapped history, system prompt first — the ingredients of a prompt
+ *                      rather than a prompt. Carried because whoever assembles the prompt is also
+ *                      whoever injects the memories, and the whole point of moving the brain is that
+ *                      the player's memories are not put on the wire by the server.
+ * @param worldStatus   the world blob; only the server can compute it
+ * @param agentStatus   the companion blob; likewise
+ * @param debugMessages engine chatter for this turn, possibly blank
+ * @param reminder      the nudge for this event type, or null
  */
 public record BrainTurnContext(
         UUID companionUuid,
@@ -24,7 +34,12 @@ public record BrainTurnContext(
         String ownerName,
         String turnText,
         String worldId,
-        boolean autonomous) {
+        boolean autonomous,
+        List<JsonObject> rawMessages,
+        String worldStatus,
+        String agentStatus,
+        String debugMessages,
+        String reminder) {
 
     /**
      * Whether this turn is one a player drove, with an owner and a message to work from.
