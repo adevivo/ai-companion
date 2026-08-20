@@ -249,6 +249,15 @@ public final class CompanionConfig {
         // Before warm(), not after: reload is "I have fixed it, try again", and warm() is what
         // re-checks the config and stages a fresh verdict. Clearing the latches afterwards would
         // throw that verdict away.
+        // Loud on purpose. This one is invisible from inside the game when it is wrong: a companion
+        // thinking on the server looks exactly like one thinking on the client, and the only symptom
+        // of "the client never took over" is a bill on the wrong account.
+        AiCompanion.LOGGER.info("[{}] brain: {}{}", AiCompanion.MOD_ID,
+                LlmConfig.clientBrain ? "client-side when the owner's client can" : "server-side",
+                LlmConfig.clientBrain && !LlmConfig.localMode
+                        ? " — but llm.localMode is false, so client-side is IGNORED and the server "
+                                + "will think (the hosted auth path has no client-side equivalent)"
+                        : "");
         adris.altoclef.player2api.MemoryHealth.rearm();
         adris.altoclef.player2api.CompanionMemory.warm(server);
         // A player who just started their Kokoro container is in the TTS back-off until it expires.
@@ -441,6 +450,9 @@ public final class CompanionConfig {
             ConversationManager.resizePool(LlmConfig.maxConcurrentRequests);
             LlmConfig.usageReportEveryTokens =
                     longVal(llm, "usageReportEveryTokens", LlmConfig.usageReportEveryTokens);
+            LlmConfig.clientBrain = bool(llm, "clientBrain", LlmConfig.clientBrain);
+            LlmConfig.clientBrainTimeoutMs =
+                    intVal(llm, "clientBrainTimeoutMs", LlmConfig.clientBrainTimeoutMs);
             // API key: env/sysprop wins (so the secret need not live on disk); otherwise the file
             // value applies unconditionally. The check must be "did the env supply it?", not "is the
             // current value blank?" — after the first load the static holds the file's key, and a
