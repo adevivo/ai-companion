@@ -189,10 +189,11 @@ public final class CompanionConfig {
             rewrite(root, path, raw, changes);
             apply(root);
             AiCompanion.LOGGER.info(
-                    "[{}] config loaded: roster={}, llm.endpoint={}, model={}, maxTokens={}, tts={}, aiCrossTalk={}. Skins dir: {}",
+                    "[{}] config loaded: roster={}, llm.endpoint={}, model={}, maxTokens={}, tts={}, brain={}, aiCrossTalk={}. Skins dir: {}",
                     AiCompanion.MOD_ID, describeRoster(), LlmConfig.baseUrl,
                     LlmConfig.model, LlmConfig.maxTokens,
                     TtsConfig.enabled ? TtsConfig.voice + " @ " + TtsConfig.endpoint : "off",
+                    describeBrain(),
                     BehaviorConfig.aiCrossTalk, skinsDir());
         } catch (Exception e) {
             AiCompanion.LOGGER.warn("[{}] failed to load {} ({}) — using built-in defaults",
@@ -239,6 +240,27 @@ public final class CompanionConfig {
      * <p>Shared "apply" step for {@code /companion reload} and the config screen's save hook. Call on
      * the server thread.
      */
+    /**
+     * Which brain the config asks for, for the startup summary.
+     *
+     * <p>On the line that prints at <b>boot</b>, not only on reload. A companion thinking on the
+     * server is indistinguishable in game from one thinking on the client — the only symptom of
+     * "the client never took over" is a bill on the wrong account, which nobody notices during a
+     * session. Reported here because this is the one place that always runs.
+     *
+     * <p>It names the {@code localMode} conflict explicitly rather than printing "client", because
+     * client-side is ignored without it and a setting that reads as on while doing nothing is the
+     * exact failure this line exists to prevent.
+     */
+    private static String describeBrain() {
+        if (!LlmConfig.clientBrain) {
+            return "server";
+        }
+        return LlmConfig.localMode
+                ? "client-when-able"
+                : "server (clientBrain IGNORED — needs llm.localMode=true)";
+    }
+
     public static int reloadAndApply(MinecraftServer server) {
         CompanionSkills.reload(); // pick up edited/added .md files before apply() re-advertises them
         load();
@@ -249,15 +271,6 @@ public final class CompanionConfig {
         // Before warm(), not after: reload is "I have fixed it, try again", and warm() is what
         // re-checks the config and stages a fresh verdict. Clearing the latches afterwards would
         // throw that verdict away.
-        // Loud on purpose. This one is invisible from inside the game when it is wrong: a companion
-        // thinking on the server looks exactly like one thinking on the client, and the only symptom
-        // of "the client never took over" is a bill on the wrong account.
-        AiCompanion.LOGGER.info("[{}] brain: {}{}", AiCompanion.MOD_ID,
-                LlmConfig.clientBrain ? "client-side when the owner's client can" : "server-side",
-                LlmConfig.clientBrain && !LlmConfig.localMode
-                        ? " — but llm.localMode is false, so client-side is IGNORED and the server "
-                                + "will think (the hosted auth path has no client-side equivalent)"
-                        : "");
         adris.altoclef.player2api.MemoryHealth.rearm();
         adris.altoclef.player2api.CompanionMemory.warm(server);
         // A player who just started their Kokoro container is in the TTS back-off until it expires.
