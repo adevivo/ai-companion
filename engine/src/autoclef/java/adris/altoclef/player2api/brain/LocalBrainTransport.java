@@ -44,6 +44,11 @@ public final class LocalBrainTransport implements BrainTransport {
         if (!ctx.isPlayerDriven()) {
             return List.of();
         }
+        // Reaching here with clientBrain on means this player's client cannot think, so the eager
+        // warm that was skipped at world load has to happen after all. Idempotent and async: this
+        // turn recalls nothing, the next one works. No-op in the ordinary server-brain case, where
+        // the store was already loaded.
+        CompanionMemory.loadOnDemand(ctx.ownerUuid(), ctx.worldId());
         return CompanionMemory.recall(ctx.turnText(), ctx.companionName(), ctx.ownerUuid(),
                 ctx.worldId());
     }

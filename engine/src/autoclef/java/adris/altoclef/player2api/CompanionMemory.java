@@ -126,6 +126,23 @@ public final class CompanionMemory {
             return;
         }
         MemoryHealth.embeddingsOn();
+        // When the owning client does the thinking, it also owns the corpus — so loading every
+        // player's memories here is work for nothing, and worse than nothing. The server's copy
+        // stops being written the moment the switch is flipped, so it freezes at that instant while
+        // the client's moves on; turning clientBrain back off would then answer from a stale
+        // snapshot, which reads as "it forgot the last month" rather than "it is reading the wrong
+        // file". Not loading it makes the fallback memory-less, which is correct: those memories
+        // belong to the client.
+        //
+        // Players whose client CANNOT think still get a server-side store — loaded on demand by
+        // LocalBrainTransport when it actually has to answer for them, rather than speculatively
+        // for everyone here.
+        if (LlmConfig.clientBrain && LlmConfig.localMode) {
+            LOGGER.info("Memory: not loading corpora — llm.clientBrain is on, so each player's "
+                    + "memories live on their own client. A player whose client cannot think gets "
+                    + "a server-side store loaded on demand.");
+            return;
+        }
         // Before any store is touched: the model load is process-global and costs ~600 ms, which is
         // more than a recall's whole budget. Paying it here means no player turn pays it. Idempotent,
         // and outside the per-player loop below because a returning player whose store is already
@@ -213,6 +230,23 @@ public final class CompanionMemory {
             // should be told to look at it, not told their companion has forgotten them.
             MemoryHealth.storeUnreadable(e);
         }
+    }
+
+    /**
+     * Load one player's corpus because the server has to answer for them after all.
+     *
+     * <p>For the fallback path when {@code llm.clientBrain} is on: the eager warm was skipped, but
+     * this player's client cannot think, so the server needs their memories. Asynchronous and
+     * idempotent — the turn that triggers it recalls nothing and the next one works, which is the
+     * same shape as any cold start and far better than a file read on the server thread.
+     */
+    public static void loadOnDemand(UUID player, String worldId) {
+        if (!MemoryConfig.enabled || !EmbeddingsConfig.enabled || player == null
+                || stores.containsKey(player)) {
+            return;
+        }
+        EmbeddingsService.warmUp();
+        CompletableFuture.runAsync(() -> loadFor(player, worldId, "on demand"));
     }
 
     /** Rebuilds a player's retriever from their store. Called after every write. */

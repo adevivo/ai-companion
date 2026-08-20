@@ -141,6 +141,49 @@ class MemoryExtractorTest {
     }
 
     @Nested
+    @DisplayName("living things are not possessions")
+    class PetsVersusItems {
+
+        @Test
+        @DisplayName("related_to keeps a pet with the player, everywhere")
+        void petIsPersonScoped() {
+            // Observed 2026-08-20: a real dog was stored WORLD-scoped and pinned to one save,
+            // because the model reached for `owns`. related_to is the predicate that gets it right,
+            // and the scope table already follows it.
+            List<MemoryExtractor.Candidate> out = MemoryExtractor.plan(
+                    List.of(new MemoryExtractor.ExtractedFact(
+                            "user", "related_to", "a dog named duke", "user")),
+                    "Dauk808", "I have a dog named Duke");
+            assertEquals(1, out.size());
+            assertEquals(MemoryScope.PERSON, out.get(0).scope());
+        }
+
+        @Test
+        @DisplayName("owns still scopes an ITEM to the save it lives in")
+        void itemStaysWorldScoped() {
+            // The negative control for the fix above. Moving `owns` to PERSON to rescue the dog
+            // would leak every pickaxe into every world — an invisible mistake traded for a visible
+            // one. The table must keep doing this.
+            List<MemoryExtractor.Candidate> out = MemoryExtractor.plan(
+                    List.of(new MemoryExtractor.ExtractedFact(
+                            "user", "owns", "a diamond pickaxe", "user")),
+                    "Dauk808", "I have a diamond pickaxe now");
+            assertEquals(1, out.size());
+            assertEquals(MemoryScope.WORLD, out.get(0).scope());
+        }
+
+        @Test
+        @DisplayName("the prompt still tells the model which one to use")
+        void promptCarriesTheRule() {
+            // The correction lives in the prompt, so the prompt is where it can be lost. Nothing
+            // else in this suite would notice if that guidance were edited away.
+            String prompt = MemoryExtractor.systemPrompt("Dauk808");
+            assertTrue(prompt.contains("related_to"), prompt);
+            assertTrue(prompt.toLowerCase().contains("pet"), "prompt no longer mentions pets");
+        }
+    }
+
+    @Nested
     @DisplayName("scope is decided by table, never by the model")
     class Scope {
 

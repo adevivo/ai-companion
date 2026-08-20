@@ -116,6 +116,15 @@ public final class MemoryExtractor {
      * feature being off. So {@code owns}, {@code uses} and {@code works_on} are here: in Minecraft a
      * possession, a tool in hand and a project underway all belong to one save, even though the same
      * predicates would be biographical in the chat corpus the vocabulary was measured on.
+     *
+     * <p>⚠️ <b>{@code owns} stays here, and a real pet is not the counter-example it looks like.</b>
+     * Observed 2026-08-20: "Dauk808 owns dog named duke" was stored WORLD-scoped, pinning a
+     * real-life dog to one save. The tempting fix is to move {@code owns} to PERSON — which would
+     * leak every pickaxe and stack of bones into every world, trading a visible mistake for an
+     * invisible one. The actual fault was upstream: the model chose {@code owns} for a living thing,
+     * having chosen {@code related_to} for the same fact a session earlier. That is the measured
+     * predicate instability, so it is corrected in the prompt, where the model is told to describe
+     * pets and people with {@code related_to}. The table is right; the input was wrong.
      */
     private static final Set<String> WORLD_PREDICATES = Set.of(
             "located_in", "owns", "uses", "works_on", "configured_with");
@@ -205,6 +214,9 @@ public final class MemoryExtractor {
                   skilled_in, interested_in, located_in, related_to, plans_to, has_trait,
                   configured_with, experienced. Never invent one. If nothing in the list fits, leave
                   the fact out.
+                - "owns" is for ITEMS and blocks. For a living thing — a pet, an animal, a person,
+                  a family member — use "related_to" instead, even when the player says "my" or
+                  "I have". "my dog Duke" is related_to; "my diamond pickaxe" is owns.
                 - "value" is a short noun phrase, lowercase, no punctuation. Not a sentence.
                 - Report only what the exchange actually states. Do not infer, extrapolate, or fill in
                   what would probably be true.
@@ -222,6 +234,8 @@ public final class MemoryExtractor {
                 {"facts": [{"subject": "the base", "predicate": "located_in", "value": "the taiga north of spawn", "about": "world"}]}
                 Player: "Luna is such a cheerful companion"  ->
                 {"facts": [{"subject": "Luna", "predicate": "has_trait", "value": "cheerful", "about": "other"}]}
+                Player: "I have a dog named Duke"  ->
+                {"facts": [{"subject": "user", "predicate": "related_to", "value": "a dog named duke", "about": "user"}]}
                 """
                 .formatted(ownerUsername);
     }
