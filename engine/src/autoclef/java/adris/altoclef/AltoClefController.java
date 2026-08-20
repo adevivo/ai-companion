@@ -400,6 +400,22 @@ public class AltoClefController {
       }
    }
 
+   /**
+    * Where this companion's thinking happens, and whose key and memories it uses.
+    *
+    * <p>Local for now — the game server does the work, as it always has. The seam exists so that
+    * moving it to the owning client is a change of implementation rather than a change to the
+    * conversation loop. Per companion rather than static, because the whole point of the move is
+    * that two companions with two different owners must not share a credential.
+    */
+   private final adris.altoclef.player2api.brain.BrainTransport brainTransport =
+         new adris.altoclef.player2api.brain.LocalBrainTransport(this);
+
+   /** @see adris.altoclef.player2api.brain.BrainTransport */
+   public adris.altoclef.player2api.brain.BrainTransport getBrainTransport() {
+      return this.brainTransport;
+   }
+
    /** Puts a line in the owner's chat, so failures are visible in-game and not only in the log. */
    public void tellOwner(String message) {
       tellOwner(message, true);
