@@ -133,19 +133,21 @@ navigation, task execution, and world interaction stay in engine code and must s
 3. **Keep** `ConversationManager` orchestration + the AltoClef task engine + Automatone navigation.
 4. **Add config** (see below) and our own thin entity/spawn glue.
 
-### ⚠️ Primary risk — command discipline
-AltoClef expects the LLM to emit **parseable high-level commands**. In testing,
-**Qwen2.5-14B-Instruct-Q4_K_M** proved **not very capable** at strict command/JSON output — it is
-*not* the local model to use; reliable command discipline needs a **much more capable** local model.
-**Mitigate with GBNF grammar / constrained output on llama.cpp + a strict command schema + a repair
-step.** This must be validated *first* (Phase 2).
+### Command discipline
+AltoClef expects the LLM to emit **parseable high-level commands**, so whatever model you pick has to
+hold a strict output format turn after turn. That is the first thing to validate with a new brain, and
+it is not a given — instruction-following matters far more here than raw parameter count.
+
+**Qwen2.5-14B-Instruct-Q4_K_M handles it well** and is the recommended local default: capable enough for
+reliable command discipline across extended testing, and small enough to run on consumer hardware. See
+[The LLM backend](#the-llm-backend) for how to launch it. GBNF grammar / constrained output on
+llama.cpp, plus a strict command schema and a repair step, keep output valid regardless of model.
 
 **Model is swappable, not fixed.** The `LLMCompleter` is **provider-agnostic** (local llama.cpp / any
-OpenAI-compatible endpoint / optionally a frontier API), selected from config. So model choice is deferred
-to **empirical Phase-2 testing**, not committed now. Guidance: prefer **local** (free, private, offline-resilient);
-for command discipline, **instruction-following + a better quant beats raw size**, and GBNF *forces* valid
-output regardless of model. Cost levers if a frontier model is used: throttled triggers, small situation
-packets, and prompt caching of the static system/persona.
+OpenAI-compatible endpoint / a frontier API), selected from config. Guidance: prefer **local** (free,
+private, offline-resilient); **a better quant beats raw size** for command discipline. Cost levers if a
+frontier model is used: throttled triggers, small situation packets, and prompt caching of the static
+system/persona.
 
 ---
 
@@ -155,17 +157,46 @@ packets, and prompt caching of the static system/persona.
 # macOS / Linux
 llama-server \
   -m /path/to/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf \
-  --host 0.0.0.0 --port 3030 -c 262144 -ngl 40 --mlock
+  --host 0.0.0.0 --port 3030 -c 8192 -ngl 40
 ```
 ```powershell
 # Windows 11 (PowerShell) — backtick continues lines; binary is llama-server.exe
 llama-server.exe `
   -m C:\path\to\models\Qwen2.5-14B-Instruct-Q4_K_M.gguf `
-  --host 0.0.0.0 --port 3030 -c 262144 -ngl 40 --mlock
+  --host 0.0.0.0 --port 3030 -c 8192 -ngl 40
 ```
 Endpoint `http://localhost:3030` — OpenAI-compatible `/v1/chat/completions`, or native `/completion`
-(supports **GBNF grammar**). Note: **Qwen2.5-14B-Instruct-Q4_K_M was not capable enough** for reliable
-command discipline — treat it as a floor, not a recommendation; a **much more capable local model** is needed.
+(supports **GBNF grammar**). **Qwen2.5-14B-Instruct-Q4_K_M is the recommended local model** — it holds
+the command format reliably and runs on consumer hardware.
+
+### ⚠️ Don't starve the game of VRAM and RAM
+
+If you run the model on the **same machine you play on**, llama.cpp and Minecraft compete for the same
+VRAM and system RAM — and when that competition is lost, what goes down is usually the whole computer,
+not just the game. A hard freeze, a black screen, a driver reset, or a spontaneous reboot mid-session is
+almost always this. A Minecraft mod can crash the *game*; it cannot crash your *PC*.
+
+**Shader packs make it considerably more likely.** They want a large slice of VRAM themselves and they
+allocate in bursts, so a single ordinary action — placing water, stepping into the Nether, loading new
+chunks — can spike hard enough to tip a machine that was already at the edge. If the crash reliably
+follows one specific action, that is the shape of this problem, not a bug in that feature.
+
+Three knobs, in the order worth reaching for:
+
+| Flag | What it does | Advice |
+|---|---|---|
+| `-c` | Context window — sets KV-cache size | **Start at `8192`.** Cost grows linearly with the number, so a very large context reserves *gigabytes* before a single token is generated. The companion sends small situation packets and does not need a big window. |
+| `-ngl` | Number of layers offloaded to the GPU | **Lower it** to shift work onto CPU and system RAM, freeing VRAM for the game. `0` runs entirely on CPU — slower, but it will not contend with your GPU at all. |
+| `--mlock` | Pins the model in physical RAM, preventing paging | **Leave it off** on a machine you also game on. It is a throughput optimisation for a dedicated inference box; on a shared machine it removes the OS's ability to relieve memory pressure, which is exactly what you need it to be able to do. |
+
+**The reliable fix is not to share at all.** Point `llm.endpoint` at a **second machine on your LAN** —
+`--host 0.0.0.0` already makes the server reachable from other hosts — or use a hosted endpoint (see
+[Choosing a brain](#choosing-a-brain)). Either way your gaming rig keeps all of its VRAM, and you can run
+a much larger model than the rig could have hosted itself.
+
+If you have already crashed this way, expect `latest.log` to be empty or truncated — a hard hang never
+gets the chance to flush it. On Windows, check **Event Viewer → Windows Logs → System** for a
+*Kernel-Power event 41* (unclean shutdown) or a display-driver-reset entry timestamped at the crash.
 
 ---
 
