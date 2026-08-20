@@ -233,6 +233,98 @@ public final class MemoryGate {
         return personal || trigger || namesStored;
     }
 
+    /**
+     * Whether this turn is worth spending an extraction call on.
+     *
+     * <h2>A different question from {@link #admits(String, Set)}, and that is the whole point</h2>
+     *
+     * Retrieval asks <em>"is this turn about the player, so that a stored fact could be relevant?"</em>
+     * Extraction asks <em>"does this turn state something durable?"</em> Those come apart exactly
+     * where facts live: in the sentence <em>after</em> the player introduces a subject, which is
+     * naturally third-person and mentions them not at all.
+     *
+     * <p>Measured cost of conflating them, three times on the same subject:
+     *
+     * <pre>
+     *   "he's a brown dog; pitbull lab mix. He's a sweetheart"   ← refused: no first/second person
+     *   "the base is in the taiga north of spawn"                ← refused: same
+     * </pre>
+     *
+     * The first is the only turn of four in the 2026-08-18 session that held a durable fact, and the
+     * only one extraction never saw. The second is the extractor prompt's own worked example for a
+     * world fact, and is <b>also</b> the scenario brief 3 prescribes for testing world scoping — it
+     * would have silently done nothing.
+     *
+     * <h2>So this keeps the syntactic filters and drops the semantic one</h2>
+     *
+     * A word floor and a command opener are cheap, near-certain judgements about form: "ok" holds
+     * nothing, and "go get wood" is an instruction. Whether a sentence <em>states a durable fact</em>
+     * is a semantic judgement that a keyword list provably cannot make — and one the extractor
+     * itself already makes, far better, a moment later. Filtering on it twice only subtracts.
+     *
+     * <p><b>The asymmetry that justifies retrieval's caution does not transfer here.</b> A wrongly
+     * skipped retrieval is recoverable — the fact is still stored, ask again. A wrongly skipped
+     * extraction is permanent: the moment passed, nothing was written, and nothing records that
+     * anything was missed. People state things once, in passing, which is the entire reason
+     * extraction exists instead of {@code /companion remember}.
+     *
+     * <p>Expect this to admit turns that yield nothing. That is correct and already priced in: 86% of
+     * turns hold no durable fact, so an empty extraction is the normal outcome, and the POC's verdict
+     * on the resulting trivia is that it is <em>token cost, not correctness</em> — displacement was
+     * measured at zero with the shipped weights.
+     */
+    public static boolean admitsForExtraction(String turnText) {
+        if (!MemoryConfig.gateEnabled) {
+            return true;
+        }
+        if (turnText == null || turnText.isBlank()) {
+            return false;
+        }
+        String first = null;
+        int count = 0;
+        for (String w : turnText.toLowerCase(Locale.ROOT).split("[^a-z0-9']+")) {
+            if (w.isEmpty()) {
+                continue;
+            }
+            if (first == null) {
+                first = w;
+            }
+            count++;
+        }
+        if (count < MIN_WORDS) {
+            return false;
+        }
+        return first == null || !COMMAND_OPENERS.contains(first);
+    }
+
+    /** Why extraction skipped a turn. Never user-facing. */
+    public static String explainForExtraction(String turnText) {
+        if (!MemoryConfig.gateEnabled) {
+            return "gate off";
+        }
+        if (turnText == null || turnText.isBlank()) {
+            return "blank";
+        }
+        String first = null;
+        int count = 0;
+        for (String w : turnText.toLowerCase(Locale.ROOT).split("[^a-z0-9']+")) {
+            if (w.isEmpty()) {
+                continue;
+            }
+            if (first == null) {
+                first = w;
+            }
+            count++;
+        }
+        if (count < MIN_WORDS) {
+            return "too short (" + count + " words, floor " + MIN_WORDS + ")";
+        }
+        if (first != null && COMMAND_OPENERS.contains(first)) {
+            return "opens with a command word (" + first + ")";
+        }
+        return "admitted";
+    }
+
     /** Why a turn was skipped, for the debug log. Never user-facing. */
     public static String explain(String turnText) {
         return explain(turnText, Set.of());

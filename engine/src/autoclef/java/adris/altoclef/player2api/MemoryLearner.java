@@ -70,12 +70,12 @@ public final class MemoryLearner {
                     player == null ? "no owner resolved" : "no LLM service");
             return;
         }
-        // The same gate retrieval uses, for the same reason and at a different cost: there is nothing
-        // durable to learn from "hi" or "attack that zombie", and here a wasted turn is a paid API call
-        // rather than a wasted embedding. Note it runs WITHOUT store tokens on purpose — the
-        // store-aware route exists to let a turn ask about something already known, which is a reason
-        // to retrieve and not a reason to extract.
-        if (!MemoryGate.admits(playerMessage)) {
+        // The gate's EXTRACTION form, not its retrieval form. Retrieval asks whether a stored fact
+        // could be relevant to this turn; extraction asks whether this turn states one. Those differ
+        // precisely where facts live — the sentence after a subject is introduced, which is
+        // third-person and mentions the player not at all. Using the retrieval form here cost three
+        // real facts about the same dog before anyone noticed. See MemoryGate.admitsForExtraction.
+        if (!MemoryGate.admitsForExtraction(playerMessage)) {
             // INFO, not debug. At debug this produced NO output on a server logging at INFO, so a
             // turn refused here left no trace at any prefix — and on 2026-08-18 the one turn of four
             // that actually held a durable fact ("he's a brown dog; pitbull lab mix…") was refused
@@ -83,7 +83,7 @@ public final class MemoryLearner {
             // "extraction ran and found nothing", which wants the opposite fix. One line per skipped
             // turn is the cheapest possible price for telling those two apart.
             LOGGER.info("Memory extraction: skipping this turn ({}) — turn was: \"{}\"",
-                    MemoryGate.explain(playerMessage), abbreviate(playerMessage));
+                    MemoryGate.explainForExtraction(playerMessage), abbreviate(playerMessage));
             return;
         }
         CompletableFuture.runAsync(() ->

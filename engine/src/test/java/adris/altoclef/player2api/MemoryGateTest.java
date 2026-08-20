@@ -119,6 +119,71 @@ class MemoryGateTest {
     }
 
     @Nested
+    @DisplayName("extraction asks a different question from retrieval")
+    class ExtractionGate {
+
+        @Test
+        @DisplayName("the third-person continuation that cost three real facts is admitted")
+        void thirdPersonContinuationAdmitted() {
+            // 2026-08-18: the only turn of four that held a durable fact, and the only one
+            // extraction never saw — refused for having no first- or second-person pronoun.
+            assertTrue(MemoryGate.admitsForExtraction(
+                    "he's a brown dog; pitbull lab mix. He's a sweetheart but kinda a sissy wimp"));
+            // And retrieval still refuses it, which is correct and must not drift.
+            assertFalse(MemoryGate.admits(
+                    "he's a brown dog; pitbull lab mix. He's a sweetheart but kinda a sissy wimp"));
+        }
+
+        @Test
+        @DisplayName("the extractor's own world-fact example is admitted without a pronoun")
+        void worldFactWithoutPronounAdmitted() {
+            // Brief 3 prescribes this exact sentence for testing world scoping, and it is the
+            // extractor prompt's worked example. Under the retrieval gate it silently did nothing,
+            // so the test would have read as "the world-fact path is broken".
+            assertTrue(MemoryGate.admitsForExtraction("the base is in the taiga north of spawn"));
+        }
+
+        @Test
+        @DisplayName("an instruction is still refused — the syntactic filters are kept")
+        void commandsStillRefused() {
+            assertFalse(MemoryGate.admitsForExtraction("go grab me ten logs"));
+            assertFalse(MemoryGate.admitsForExtraction("attack that zombie"));
+            assertFalse(MemoryGate.admitsForExtraction("follow me"));
+        }
+
+        @Test
+        @DisplayName("filler is still refused")
+        void fillerStillRefused() {
+            assertFalse(MemoryGate.admitsForExtraction("ok"));
+            assertFalse(MemoryGate.admitsForExtraction("lol"));
+            assertFalse(MemoryGate.admitsForExtraction("hi"));
+            assertFalse(MemoryGate.admitsForExtraction(""));
+            assertFalse(MemoryGate.admitsForExtraction(null));
+        }
+
+        @Test
+        @DisplayName("relaxing extraction does not relax retrieval")
+        void retrievalIsUnchanged() {
+            // The load-bearing control for this whole change. Retrieval's caution is justified by an
+            // asymmetry that does not apply to writing, so its behaviour must not move at all.
+            assertFalse(MemoryGate.admits("what's 2 + 2"));
+            assertFalse(MemoryGate.admits("the base is in the taiga north of spawn"));
+            assertTrue(MemoryGate.admits("I always build with spruce"));
+            assertTrue(MemoryGate.admits("do you remember the temple"));
+        }
+
+        @Test
+        @DisplayName("the skip reason names the syntactic rule that fired")
+        void explanationsAreSpecific() {
+            assertTrue(MemoryGate.explainForExtraction("ok").contains("too short"));
+            assertTrue(MemoryGate.explainForExtraction("go grab me ten logs")
+                    .contains("command word"));
+            assertEquals("admitted",
+                    MemoryGate.explainForExtraction("he's a brown dog and a sweetheart"));
+        }
+    }
+
+    @Nested
     @DisplayName("negative controls — still refused with a full store")
     class NegativeControls {
 
