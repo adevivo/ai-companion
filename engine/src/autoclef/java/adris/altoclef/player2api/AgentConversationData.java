@@ -407,6 +407,11 @@ public class AgentConversationData {
         shouldIgnoreGreetingDance = true;
         // queue up greeting
         addEventToQueue(mod.getAIPersistantData().getGreetingEvent());
+        // Read the flag, then set it: they have met now, so the next greeting is a welcome back.
+        // Recorded at the moment of greeting rather than when the reply lands, because a greeting
+        // whose turn failed is still a meeting — and re-introducing itself on every restart until
+        // one succeeds is the worse failure of the two.
+        mod.getAIPersistantData().setMetOwner(true);
     }
 
     public void onCommandFinish(AgentSideEffects.CommandExecutionStopReason stopReason) {

@@ -322,6 +322,85 @@ public class Player2APIService {
    }
 
    /**
+    * Why a reply hit the token cap, and therefore whether raising the cap is the fix.
+    *
+    * <p>⚠️ "Raise llm.maxTokens" is the right advice for a reply that was genuinely too long, and the
+    * <b>wrong</b> advice for a model that produced its answer and then failed to stop. Observed
+    * 2026-08-22 on a free 9B model: it emitted a complete, correct {@code {reason, command, message}}
+    * and then several hundred blank lines followed by {@code </</</</…} until the cap ended it. The
+    * closing brace never arrived, so the object could not be parsed. Raising the cap there does not
+    * rescue the turn — it buys more garbage, and on a paid endpoint it is billed.
+    *
+    * <p>The tell is cheap and reliable: a long run of one repeated character at the tail. Small and
+    * heavily-quantised models are where this shows up, which is exactly what a free tier is made of.
+    */
+   private static String truncationNote(String content) {
+      if (looksDegenerate(content)) {
+         return "The tail is a repeated character, so the model did not run out of room — it failed to "
+               + "STOP. Raising llm.maxTokens buys more of the same (and costs more on a paid "
+               + "endpoint); use a larger or less quantised model instead.";
+      }
+      return "Raise llm.maxTokens to at least " + LlmConfig.MIN_USEFUL_MAX_TOKENS + ".";
+   }
+
+   /** A tail of one character repeated far past anything a real reply ends with. */
+   private static boolean looksDegenerate(String content) {
+      if (content == null) {
+         return false;
+      }
+      String tail = content.stripTrailing();
+      // Trailing whitespace is itself the commonest form of it, so measure before stripping too.
+      int trailingBlank = content.length() - tail.length();
+      if (trailingBlank >= 200) {
+         return true;
+      }
+      if (tail.isEmpty()) {
+         return false;
+      }
+      // Otherwise look for one character repeated at the end, ignoring whitespace between repeats.
+      String squeezed = tail.replaceAll("\s+", "");
+      if (squeezed.length() < 60) {
+         return false;
+      }
+      char last = squeezed.charAt(squeezed.length() - 1);
+      int run = 0;
+      for (int i = squeezed.length() - 1; i >= 0 && squeezed.charAt(i) == last; i--) {
+         run++;
+      }
+      if (run >= 40) {
+         return true;
+      }
+      // A repeated short motif rather than a single char — "</</</" is two characters, not one.
+      String motif = squeezed.substring(Math.max(0, squeezed.length() - 2));
+      int motifRun = 0;
+      for (int i = squeezed.length() - 2; i >= 0 && squeezed.startsWith(motif, i); i -= 2) {
+         motifRun++;
+      }
+      return motifRun >= 20;
+   }
+
+   /**
+    * Whether this call actually asked for JSON, said on the failure that cannot otherwise tell you.
+    *
+    * <p>"The model is bad at JSON" and "nothing ever asked it for JSON" produce an identical log line
+    * and want opposite fixes — one is a model or endpoint to replace, the other is a setting to turn
+    * back on. Worse, an endpoint that silently ignores {@code response_format} looks exactly like a
+    * model with a weak grasp of the envelope: it obeys the system prompt most turns and drifts into
+    * prose on the rest, which is the intermittent pattern that reads as "flaky model" and is not.
+    *
+    * <p>Constrained decoding cannot produce prose. So if this says JSON mode was requested and the
+    * reply is still prose, the endpoint is not honouring the field, and no amount of prompt work will
+    * fix it — llama.cpp and xAI honour it, several local OpenAI-compatible shims do not.
+    */
+   private static String jsonModeNote() {
+      return LlmConfig.useGrammar
+            ? "JSON mode WAS requested (response_format=json_object), so this endpoint is ignoring it "
+                  + "— a backend that honours it cannot return prose."
+            : "JSON mode is OFF (llm.useGrammar=false), so nothing asked the model for JSON — turn it "
+                  + "on before blaming the model.";
+   }
+
+   /**
     * Marker on the object returned when the reply could not be parsed as the agent contract.
     *
     * <p>Such a turn carries a message but no command, which means the agent stops acting. Consumers
@@ -354,11 +433,11 @@ public class Player2APIService {
          // well-formed object. The retry counts against llm.maxRequests, which is correct.
          boolean firstTruncated = lastReplyTruncated;
          if (firstTruncated) {
-            LOGGER.warn("LLM reply was cut off by the output token limit (llm.maxTokens={}); retrying once. Raw=<<{}>>",
-                  LlmConfig.maxTokens, content);
+            LOGGER.warn("LLM reply was cut off by the output token limit (llm.maxTokens={}); retrying once. {} Raw=<<{}>>",
+                  LlmConfig.maxTokens, truncationNote(content), content);
          } else {
-            LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. Raw=<<{}>>",
-                  first.getMessage(), content);
+            LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. {} Raw=<<{}>>",
+                  first.getMessage(), jsonModeNote(), content);
          }
          String retried = requestContent(requestBody, lastMessageForDebug);
          try {
@@ -369,11 +448,12 @@ public class Player2APIService {
                // Retrying cannot help: the cap is the same, so the second reply is cut off in the
                // same place. Say so once, plainly, rather than reporting it as malformed JSON.
                LOGGER.error("LLM reply was cut off by the output token limit again (llm.maxTokens={}). "
-                           + "Nothing ran. Raise llm.maxTokens to at least {}. Raw=<<{}>>",
-                     LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS, retried);
+                           + "Nothing ran. {} Raw=<<{}>>",
+                     LlmConfig.maxTokens, truncationNote(retried), retried);
             } else {
-               LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. Raw=<<{}>>",
-                     second.getMessage(), retried);
+               LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. "
+                           + "{} Raw=<<{}>>",
+                     second.getMessage(), jsonModeNote(), retried);
             }
             // Before giving up: a model that ignores the JSON envelope usually still answers the
             // right shape, just rendered as prose — "**Command:** `get coal_ore 29`". Throwing that
@@ -627,10 +707,14 @@ public class Player2APIService {
    /**
     * Ask the owner's client to speak {@code message}.
     *
-    * <p>Local-TTS path: we send the Kokoro endpoint/voice/speed rather than Player2 credentials, so no
-    * cloud auth token is needed (the old {@code awaitToken} call threw in local mode). The client does
-    * the synthesis request and playback — see {@code AudioUtils.streamAudio} — and answers on
+    * <p>Local-TTS path: we send the Kokoro voice/speed rather than Player2 credentials, so no cloud
+    * auth token is needed (the old {@code awaitToken} call threw in local mode). The client does the
+    * synthesis request and playback — see {@code AudioUtils.streamAudio} — and answers on
     * {@link TTSManager#ACK_CHANNEL} when the line is finished or could not be played.
+    *
+    * <p>The endpoint still goes out on the wire, but the client uses its OWN {@code tts.endpoint}
+    * and falls back to this only if that is blank. This value describes THIS machine's network,
+    * which on a dedicated server is not the network the audio has to be fetched over.
     *
     * @param speaker the companion entity speaking, echoed back in the ack so the right speech lock is
     *                released

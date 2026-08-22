@@ -504,7 +504,21 @@ public class AltoClefController {
    }
 
    public boolean isOwner(UUID playerToCheck) {
-      return playerToCheck.equals(owner.getUUID());
+      UUID ownerUuid = getOwnerUuid();
+      return ownerUuid != null && ownerUuid.equals(playerToCheck);
+   }
+
+   /**
+    * Who this companion belongs to, or null.
+    *
+    * <p>Null-safe where {@code getOwner().getUUID()} was not, because this is now consulted on the
+    * chat path for every companion on the server: one restored from a save whose owner is offline
+    * has no {@code owner} reference until the brain re-attaches, and asking "is this message yours"
+    * has to answer no rather than throw.
+    */
+   public UUID getOwnerUuid() {
+      Player o = getOwner();
+      return o == null ? null : o.getUUID();
    }
 
    public adris.altoclef.player2api.AIPersistantData getAIPersistantData() {

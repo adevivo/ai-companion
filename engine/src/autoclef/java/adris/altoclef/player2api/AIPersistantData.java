@@ -20,16 +20,37 @@ public class AIPersistantData {
         this.character = character;
         this.mod = mod;
         String systemPrompt = Prompts.getAINPCSystemPrompt(character, mod.getCommandExecutor().agentCommands(), mod.getOwnerUsername());
-        this.conversationHistory = new ConversationHistory(systemPrompt, character.name(), character.shortName());
+        this.conversationHistory = new ConversationHistory(systemPrompt, character.name(),
+                character.shortName(), mod.getOwnerUuid());
     }
 
     public void clearHistory() {
         conversationHistory.clear();
     }
 
+    /**
+     * Whether this companion and its owner have met before.
+     *
+     * <p>Set from the entity, which persists it in NBT. It used to be inferred from whether a
+     * conversation-history file existed, which was the <em>only</em> real dependency on that file
+     * surviving a restart — and it stops being answerable at all in two situations that are now
+     * ordinary: history persistence turned off, and the corpus living on the owner's client, where
+     * the server can see neither the file nor the memories. A flag on the companion is true wherever
+     * either of those lives.
+     */
+    private boolean metOwner = false;
+
+    public void setMetOwner(boolean met) {
+        this.metOwner = met;
+    }
+
+    public boolean hasMetOwner() {
+        return this.metOwner;
+    }
+
     public Event getGreetingEvent() {
         String suffix = " IMPORTANT: SINCE THIS IS THE FIRST MESSAGE, ONLY USE COMMAND `bodylang greeting`";
-        if (conversationHistory.isLoadedFromFile()) {
+        if (metOwner) {
             return (new InfoMessage("You want to welcome user back." + suffix));
         } else {
             return (new InfoMessage(character.greetingInfo() + suffix));

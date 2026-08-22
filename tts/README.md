@@ -76,14 +76,17 @@ server: AgentSideEffects ─► TTSManager ─► Player2APIService.textToSpeech
 client: PlayerEngineClient ─► AudioUtils.streamAudio ─► POST {endpoint}/v1/audio/speech ─► javax.sound
 ```
 
-The server never touches audio — it only tells the client *what* to say and *where* to synthesize it.
-The **client** makes the HTTP call and plays the result, so sound comes out of the player's speakers
-rather than the server's (which, on a headless box, would be nowhere).
+The server never touches audio — it only tells the client *what* to say and in *which voice*. The
+**client** decides where to synthesize it, makes the HTTP call and plays the result, so sound comes
+out of the player's speakers rather than the server's (which, on a headless box, would be nowhere).
 
-The consequence: **`tts.endpoint` is resolved on the client machine.** For singleplayer / LAN on one
-box, `localhost:8880` is correct. For a **remote dedicated server**, each player needs their own local
-Kokoro (keep `localhost:8880`), or you point them at one reachable host (e.g. `http://10.0.0.5:8880`)
-and bind the container beyond loopback. The server's config value is pushed to clients as-is.
+The consequence: **`tts.endpoint` is read from the client's own config**, not the server's. For
+singleplayer / LAN on one box, `localhost:8880` is correct. For a **remote dedicated server**, each
+player either runs their own local Kokoro (keep `localhost:8880`) or points their own
+`tts.endpoint` at one reachable host (e.g. `http://10.0.0.5:8880`) with the container bound beyond
+loopback. Editing it on the server does nothing for anybody: the server's network is not the one the
+audio is fetched over. `model`, `voice` and `speed` are the companion's, so those *do* come from the
+server.
 
 While a line is being spoken, `TTSManager` holds a lock so the companion won't start another LLM turn
 and talk over itself. The release is time-estimated from message length (~25 chars/sec), so a TTS
@@ -110,7 +113,7 @@ failure can't wedge the conversation.
 | Key | Default | Meaning |
 |---|---|---|
 | `tts.enabled` | `false` | Master switch. |
-| `tts.endpoint` | `http://localhost:8880` | Kokoro base URL, **resolved client-side**. |
+| `tts.endpoint` | `http://localhost:8880` | Kokoro base URL, read from the **client's own** config. |
 | `tts.model` | `kokoro` | Sent as `model`; for OpenAI compatibility. |
 | `tts.voice` | `af_heart` | Voice id; overridden by a persona's `voiceIds[0]`. |
 | `tts.speed` | `1.0` | Synthesis rate; `1.0` is natural. |

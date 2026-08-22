@@ -263,7 +263,7 @@ public class EntityTracker extends Tracker {
     * The loaded player whose name matches {@code name} ignoring case, or null.
     *
     * <p>Matching used to be exact, and the agent does not reliably reproduce capitalisation: asked to
-    * follow an owner called Dauk808 it issued {@code follow dauk808}, the lookup found nobody, and
+    * follow an owner whose name carries capitals it issued the lower-cased form, found nobody, and
     * {@code FollowPlayerTask} sat in "doing nothing until player loads into render distance" while
     * the companion cheerfully reported that it was following. Minecraft usernames are unique
     * case-insensitively, so there is nothing to disambiguate.

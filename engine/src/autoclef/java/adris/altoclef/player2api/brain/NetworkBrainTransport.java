@@ -4,6 +4,7 @@ import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.ConversationHistory;
 import adris.altoclef.player2api.LLMCompleter;
 import adris.altoclef.player2api.LlmConfig;
+import adris.altoclef.player2api.ServerPolicy;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.util.List;
@@ -31,10 +32,25 @@ import org.apache.logging.log4j.Logger;
  * player's memories never reach the server — which is the point, and is why assembly moves too. A
  * server that assembled the prompt would have to be handed the memories to put in it.
  *
- * <h2>Falling back is normal operation</h2>
+ * <h2>Falling back is normal operation — but only for a client that never claimed otherwise</h2>
  *
- * A vanilla client, an out-of-date one, or one that goes quiet must never leave a companion mute. Two
- * mechanisms, and both are needed:
+ * ⚠️ There are two different situations here and they have opposite answers, because the difference
+ * is whose money it is.
+ *
+ * <ul>
+ *   <li>A client that <b>never announced</b> — vanilla, out of date, or {@code clientBrain} off — was
+ *       always the server's to think for. That is the operator's own configuration. Answer it.</li>
+ *   <li>A client that <b>announced and then failed</b> has its own brain and its own key; it is
+ *       simply broken. Answering costs the <em>operator</em> for a guest's misconfiguration, every
+ *       turn, for as long as it stays broken, and neither of them can see it happening. Refuse by
+ *       default and tell the owner — see {@link adris.altoclef.player2api.ServerPolicy#serverAnswersWhenClientFails}.</li>
+ * </ul>
+ *
+ * <p>The capability handshake is what separates the two, which is a second job for a mechanism that
+ * already had to exist.
+ *
+ * <p>A vanilla client, an out-of-date one, or one that goes quiet must never leave a companion mute.
+ * Two mechanisms, and both are needed:
  *
  * <ul>
  *   <li><b>The handshake.</b> Only a client that announced itself is asked. Without this the server
@@ -117,15 +133,29 @@ public final class NetworkBrainTransport implements BrainTransport {
         p.complete(replyJson, error);
     }
 
+    /**
+     * Whether this player's client does its own thinking, and therefore holds its own corpus.
+     *
+     * <p>Player-scoped rather than companion-scoped, deliberately. A companion's turn is the common
+     * case, but {@code /companion remember} is a per-player act that must work with no companion
+     * spawned at all — and routing it through a companion's transport would fall back to the server
+     * in exactly that case, which is the bug it exists to fix: memories split across two machines,
+     * with a recall that finds nothing and says nothing.
+     *
+     * <p>One definition, used by both, so the two can never disagree about where a player's memories
+     * live.
+     */
+    public static boolean canThink(UUID player) {
+        return LlmConfig.clientBrain && LlmConfig.localMode
+                && player != null && CAPABLE.contains(player);
+    }
+
     /** Whether this companion's owner is online and able to think for it right now. */
     private ServerPlayer thinkingOwner() {
-        if (!LlmConfig.clientBrain || !LlmConfig.localMode) {
-            return null;
-        }
         if (!(mod.getOwner() instanceof ServerPlayer owner)) {
             return null;
         }
-        return CAPABLE.contains(owner.getUUID()) ? owner : null;
+        return canThink(owner.getUUID()) ? owner : null;
     }
 
     @Override
@@ -184,12 +214,12 @@ public final class NetworkBrainTransport implements BrainTransport {
             BrainWire.writeTurnRequest(buf, requestId, ctx.companionUuid(), context);
             ServerPlayNetworking.send(owner, BrainWire.TURN_REQUEST, buf);
         } catch (Throwable e) {
-            // Could not even send it. Fall back now rather than waiting out a timeout for a packet
-            // that never left.
+            // Could not even send it. Decide now rather than waiting out a timeout for a packet that
+            // never left — and decide it in the one place that knows who pays, rather than reaching
+            // for the fallback directly and quietly billing the operator.
             PENDING.remove(requestId);
-            LOGGER.warn("Brain: could not send a turn to {}; thinking on the server instead.",
-                    owner.getUUID(), e);
-            fallback.submit(ctx, prompt, completer, onReply, onError);
+            LOGGER.warn("Brain: could not send a turn to {}.", owner.getUUID(), e);
+            pending.fail("the turn could not be sent");
             return;
         }
 
@@ -238,8 +268,7 @@ public final class NetworkBrainTransport implements BrainTransport {
             }
             cancelTimeout();
             if (error != null && !error.isBlank()) {
-                LOGGER.warn("Brain: the client could not think ({}); thinking on the server instead.",
-                        error);
+                LOGGER.warn("Brain: the client could not think ({}).", error);
                 runOnServer();
                 return;
             }
@@ -262,11 +291,41 @@ public final class NetworkBrainTransport implements BrainTransport {
                 return;
             }
             cancelTimeout();
-            LOGGER.warn("Brain: {}; thinking on the server instead.", why);
+            LOGGER.warn("Brain: {}.", why);
             runOnServer();
         }
 
+        /**
+         * The client announced it could think and then could not. Decide who pays.
+         *
+         * <p>⚠️ By default, nobody. See {@link ServerPolicy#serverAnswersWhenClientFails}: answering
+         * here spends the <em>operator's</em> key on a guest's broken endpoint, silently, on every
+         * turn, for as long as it stays broken. The player sees working replies and has no reason to
+         * fix anything; the operator sees a bill and no cause.
+         *
+         * <p>Refusing must not make the companion mute, though — {@code AgentSideEffects.onError}
+         * only writes to the log, so the owner would get nothing at all. So the owner is told
+         * directly, in words they can act on, and the turn is completed as an error so the
+         * conversation does not sit in {@code isProcessing} for ever.
+         */
         private void runOnServer() {
+            if (!ServerPolicy.serverAnswersWhenClientFails) {
+                String who = ctx.companionName() == null || ctx.companionName().isBlank()
+                        ? "Your companion" : ctx.companionName();
+                LOGGER.warn("Brain: {} could not think for {} and this server does not answer for "
+                        + "guests (server.serverAnswersWhenClientFails=false). Turn abandoned.",
+                        who, owner);
+                try {
+                    transport.mod.tellOwner(who + " could not reach your model. Check llm.endpoint "
+                            + "in your own config — this server does not think for you.", true);
+                } catch (Throwable ignored) {
+                    // Owner offline, or mid-teardown. The error below still frees the conversation.
+                }
+                onError.accept("client brain unavailable and the server does not answer for guests");
+                return;
+            }
+            LOGGER.warn("Brain: answering for {} on this server's key "
+                    + "(server.serverAnswersWhenClientFails=true).", owner);
             try {
                 // Recall was skipped on the way out, because the client was expected to do it. The
                 // fallback prompt therefore has no memories in it — correct rather than ideal: a

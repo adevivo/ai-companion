@@ -34,8 +34,9 @@ import java.net.URL;
  * Client-side audio playback for companion speech.
  *
  * <p>Runs on the player's machine (driven by the {@code playerengine:stream_tts} packet), so the
- * audio comes out of the player's speakers, not the server's. The endpoint/voice/speed are supplied
- * by the server in that packet rather than read from config here.
+ * audio comes out of the player's speakers, not the server's. Voice/model/speed are supplied by the
+ * server in that packet; the endpoint is this client's own {@code tts.endpoint}, resolved by the
+ * caller — see {@code PlayerEngineClient}.
  */
 public class AudioUtils {
 

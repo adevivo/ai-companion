@@ -46,6 +46,22 @@ public final class BrainWire {
     public static final ResourceLocation HELLO = id("brain_hello");
 
     /**
+     * S2C — "write this into your own corpus", for {@code /companion remember}.
+     *
+     * <p>The commands are Brigadier and run on the server, so they never went through the transport
+     * at all. Observed 2026-08-20 with {@code clientBrain} on: {@code /companion rememberhere home}
+     * wrote to the server while everything learned from conversation went to the client. The
+     * memories were then split across two machines and asking where home was recalled nothing, with
+     * no error anywhere — the worst shape a bug can have.
+     *
+     * <p>⚠️ <b>The confirmation is printed by the client, from the record as stored.</b> Reporting
+     * what was submitted would claim success even when the store kept an older record and dropped
+     * this one, which is what happened the first time the command shipped. The client is also the
+     * only side that can count the corpus once it owns it.
+     */
+    public static final ResourceLocation MEMORY_REMEMBER = id("memory_remember");
+
+    /**
      * Everything the client needs to build the prompt itself.
      *
      * <p>The server sends <b>ingredients, not a prompt</b>: raw history plus the status blobs it
@@ -72,6 +88,52 @@ public final class BrainWire {
         buf.writeUUID(requestId);
         buf.writeByteArray((replyJson == null ? "" : replyJson).getBytes(StandardCharsets.UTF_8));
         buf.writeUtf(error == null ? "" : error, 512);
+    }
+
+    /**
+     * S2C payload for {@link #MEMORY_REMEMBER}: a fact, its scope, and where the player was standing.
+     *
+     * <p>The place is captured on the server thread before this is sent, because "here" means where
+     * they were when they typed it, and a memory about a place that carries no place is what makes
+     * the companion borrow a coordinate from elsewhere in the prompt and present it as recall.
+     *
+     * <p>Sent as one JSON blob rather than typed fields for the same reason the turn context is: one
+     * definition of the field names, read by one method, instead of a writer and a reader that can
+     * drift apart silently.
+     */
+    public static void writeRemember(FriendlyByteBuf buf, JsonObject request) {
+        buf.writeByteArray(request.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static JsonObject readRemember(FriendlyByteBuf buf) {
+        return com.google.gson.JsonParser
+                .parseString(new String(buf.readByteArray(), StandardCharsets.UTF_8))
+                .getAsJsonObject();
+    }
+
+    /**
+     * Builds the remember request. {@code place} is null for a person-scoped memory, which is true
+     * of the player everywhere and so belongs to no coordinate.
+     */
+    public static JsonObject rememberRequest(String fact, boolean thisWorldOnly, String worldId,
+            String placeDimension, Integer placeX, Integer placeY, Integer placeZ) {
+        JsonObject o = new JsonObject();
+        o.addProperty("fact", fact == null ? "" : fact);
+        o.addProperty("thisWorldOnly", thisWorldOnly);
+        // Absent rather than null, so a missing field can never become the string "null" inside a
+        // stored memory — see the same rule in context() below.
+        if (worldId != null) {
+            o.addProperty("worldId", worldId);
+        }
+        if (placeDimension != null && placeX != null && placeY != null && placeZ != null) {
+            JsonObject place = new JsonObject();
+            place.addProperty("dimension", placeDimension);
+            place.addProperty("x", placeX);
+            place.addProperty("y", placeY);
+            place.addProperty("z", placeZ);
+            o.add("place", place);
+        }
+        return o;
     }
 
     /** Builds the context object. Kept here so both sides read one definition of the field names. */

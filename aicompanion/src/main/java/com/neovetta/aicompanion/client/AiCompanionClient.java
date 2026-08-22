@@ -27,6 +27,17 @@ public class AiCompanionClient implements ClientModInitializer {
         // Thinking for our own companion when the server asks. Registers a JOIN handshake plus one
         // receiver; does nothing at all unless the server has llm.clientBrain on and asks.
         ClientBrain.register();
+        // Announce our own companions and trigger prefix at join, and take the operator's rules back
+        // for the read-only Server tab. Both directions no-op against a server too old to have the
+        // channels registered, which is the ordinary case and not an error.
+        ClientConfigSync.register();
+
+        // /companion reload → re-read OUR file and apply the half that is ours. Off the netty
+        // thread: this reads a file from disk and rebuilds the roster, and a network read thread is
+        // the wrong place for either — observed running on "Netty Client IO #1" before this hop.
+        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.RELOAD_CLIENT_CONFIG,
+                (client, handler, buf, responseSender) ->
+                        java.util.concurrent.CompletableFuture.runAsync(ClientConfigSync::reloadOwnConfig));
 
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.OPEN_CONFIG_SCREEN,
                 (client, handler, buf, responseSender) ->
@@ -71,6 +82,12 @@ public class AiCompanionClient implements ClientModInitializer {
         // /companion tokens → flip the usage panel and echo it. Client thread, same as the radar toggle.
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.TOKEN_HUD_TOGGLE,
                 (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::toggleTokenHudAndEcho));
+
+        // Count our own spend when we are the ones spending it — see CompanionTokenHud#selfUpdate.
+        // Registered unconditionally: it is a counter read and a modulo, and it returns immediately
+        // on any client that has made no LLM calls of its own, which is every client on a
+        // server-side brain.
+        ClientTickEvents.END_CLIENT_TICK.register(client -> CompanionTokenHud.selfUpdate());
 
         HudRenderCallback.EVENT.register(CompanionRadarHud::render);
         HudRenderCallback.EVENT.register(CompanionStatusHud::render);

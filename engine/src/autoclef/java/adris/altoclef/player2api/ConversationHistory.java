@@ -40,9 +40,41 @@ public class ConversationHistory {
    private static final int SAVE_EVERY = 8;
 
    public ConversationHistory(String initialSystemPrompt, String characterName, String characterShortName) {
+      this(initialSystemPrompt, characterName, characterShortName, null);
+   }
+
+   /**
+    * A companion's history, kept on disk under the <b>owner's</b> directory.
+    *
+    * <p>⚠️ The file used to be named after the character alone — and named after it twice, because
+    * {@code characterName} was interpolated where {@code characterShortName} was meant, which is how
+    * {@code Ava_Ava.txt} got its name. Harmless in singleplayer. On a shared server it means two
+    * players whose companions happen to share a roster name share one conversation file: each reads
+    * the other's history at startup and both write over it. Now that a player brings their own
+    * roster, sharing a name stops being a coincidence and becomes the likely case.
+    *
+    * <p>{@code owner} may be null for a companion spawned from the console, which has nobody to file
+    * it under; those keep the flat legacy path so an existing save is not orphaned.
+    *
+    * @param owner the player this companion belongs to, or null
+    */
+   public ConversationHistory(String initialSystemPrompt, String characterName, String characterShortName,
+         java.util.UUID owner) {
+      // ServerPolicy.persistHistory off means this object never touches the disk at all: a null
+      // historyFile is already the "carrier, not a conversation" case that every other constructor
+      // relies on, so there is one no-persistence path rather than a second set of guards.
+      if (!ServerPolicy.persistHistory) {
+         this.historyFile = null;
+         this.setBaseSystemPrompt(initialSystemPrompt);
+         this.loadedFromFile = false;
+         return;
+      }
       Path configDir = DirUtil.getConfigDir();
-      String fileName = characterName.replaceAll("\\s+", "_") + "_" + characterName.replaceAll("\\s+", "_") + ".txt";
-      this.historyFile = configDir.resolve(fileName);
+      String safeName = characterName.replaceAll("\\s+", "_");
+      this.historyFile = owner == null
+            ? configDir.resolve(safeName + "_" + safeName + ".txt")
+            : configDir.resolve("aicompanion").resolve("history").resolve(owner.toString())
+                  .resolve(safeName + ".txt");
       if (Files.exists(this.historyFile)) {
          this.loadFromFile();
          this.setBaseSystemPrompt(initialSystemPrompt);
@@ -80,7 +112,13 @@ public class ConversationHistory {
             this.conversationHistory.clear();
             this.conversationHistory.add(systemPrompt);
             JsonObject summaryMsg = new JsonObject();
-            summaryMsg.addProperty("role", "assistant");
+            // "system", not "assistant". Written as an assistant turn, the summary is a third layer
+            // of the companion reading its own words back as its own speech — the same failure the
+            // grounding guard exists to stop in the store, in the one place that guard cannot see.
+            // Measured on 2026-08-20: a fact the player stated aged out under the prompt budget and
+            // only the companion's paraphrases of it survived, so it went on citing itself as the
+            // source. As a system line it reads as notes about the conversation, which is what it is.
+            summaryMsg.addProperty("role", "system");
             summaryMsg.addProperty("content", "Summary of earlier events: " + summary);
             this.conversationHistory.add(summaryMsg);
             this.conversationHistory.addAll(tail);
@@ -128,6 +166,13 @@ public class ConversationHistory {
    private void saveToFile() {
       this.unsavedMessages = 0;
       try {
+         // The path is nested under the owner now, so the directory may not exist. Without this the
+         // first write throws NoSuchFileException, the stack trace goes to stderr, and the history
+         // is simply never written — the same silent no-op the periodic-save bug produced.
+         Path parent = this.historyFile.getParent();
+         if (parent != null) {
+            Files.createDirectories(parent);
+         }
          BufferedWriter writer = Files.newBufferedWriter(this.historyFile);
 
          try {

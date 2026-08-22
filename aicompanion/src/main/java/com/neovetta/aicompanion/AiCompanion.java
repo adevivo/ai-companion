@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion;
 
+import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import adris.altoclef.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
@@ -56,8 +57,82 @@ public class AiCompanion implements ModInitializer {
         // A player who quits mid-turn would otherwise leave a request nobody will ever answer, and
         // the same companion is reused on reconnect — so it would look permanently mute, not late.
         net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.DISCONNECT.register(
-                (handler, server) -> adris.altoclef.player2api.brain.NetworkBrainTransport
-                        .forget(handler.getPlayer().getUuid()));
+                (handler, server) -> {
+                    java.util.UUID id = handler.getPlayer().getUuid();
+                    adris.altoclef.player2api.brain.NetworkBrainTransport.forget(id);
+                    // Their roster and trigger prefix leave with them. Keeping either would let a
+                    // player who has gone go on shaping a server they are no longer connected to.
+                    ClientProfiles.forget(id);
+                    // And their companions go with them. Left standing they are unresponsive bodies
+                    // drawn as default Steve to everyone else, holding a slot in the server's cap
+                    // for as long as their owner stays away. Never removes one it could not first
+                    // write and read back — see CompanionParking.
+                    CompanionParking.park(server, id);
+                });
+
+        // Bring them back when their owner returns. Registered here rather than beside the client
+        // packet handlers because it is world state, not a conversation.
+        net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.JOIN.register(
+                (handler, sender, server) ->
+                        CompanionParking.restore(server, handler.getPlayer()));
+    }
+
+    /**
+     * The half of configuration that has to cross the wire, in both directions.
+     *
+     * <p>Most of it needs no plumbing: each side loads its own file and acts on what it read. These
+     * two are the exceptions, and both for the same reason — the machine that <em>owns</em> the
+     * setting is not the machine that <em>acts</em> on it. A player owns their companions but the
+     * server spawns them; an operator owns the rules but the player needs to see them.
+     */
+    private static void registerConfigReceivers() {
+        ServerPlayNetworking.registerGlobalReceiver(CLIENT_PROFILE,
+                (server, player, handler, buf, sender) -> {
+                    String json = new String(buf.readByteArray(),
+                            java.nio.charset.StandardCharsets.UTF_8);
+                    // Onto the server thread: this reads the player list for the impersonation check
+                    // and talks to the player, neither of which is safe off it.
+                    server.execute(() -> {
+                        try {
+                            com.google.gson.JsonObject payload = com.google.gson.JsonParser
+                                    .parseString(json).getAsJsonObject();
+                            for (String problem : ClientProfiles.announce(player, payload)) {
+                                player.sendMessage(net.minecraft.text.Text.literal("[companion] " + problem)
+                                        .formatted(net.minecraft.util.Formatting.YELLOW), false);
+                            }
+                        } catch (Throwable e) {
+                            // A malformed announcement means a broken or hostile client, not a
+                            // reason to drop the player: they fall back to this server's roster and
+                            // are told so, rather than finding /companion spawn mysteriously empty.
+                            LOGGER.warn("[{}] unreadable roster announcement from {}", MOD_ID,
+                                    player.getName().getString(), e);
+                            player.sendMessage(net.minecraft.text.Text.literal(
+                                    "[companion] your companion config could not be read — using this "
+                                            + "server's defaults").formatted(net.minecraft.util.Formatting.YELLOW),
+                                    false);
+                        }
+                        sendServerPolicy(player);
+                    });
+                });
+    }
+
+    /**
+     * Tell one client what this server enforces, for the read-only Server tab.
+     *
+     * <p>Display only. Nothing client-side acts on these — the caps, the permission levels and the
+     * chat routing all run here — but a config screen that showed the client's own copy of the block
+     * would be showing values nobody reads, which is worse than showing nothing.
+     */
+    public static void sendServerPolicy(net.minecraft.server.network.ServerPlayerEntity player) {
+        try {
+            net.minecraft.network.PacketByteBuf out = PacketByteBufs.create();
+            out.writeByteArray(CompanionConfig.serverPolicyJson().toString()
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            ServerPlayNetworking.send(player, SERVER_POLICY, out);
+        } catch (Throwable e) {
+            LOGGER.warn("[{}] could not send the server policy to {}", MOD_ID,
+                    player.getName().getString(), e);
+        }
     }
 
     public static Identifier id(String path) {
@@ -71,6 +146,30 @@ public class AiCompanion implements ModInitializer {
      * (Fabric only forwards to the server when the ROOT literal is unknown to the client).
      */
     public static final Identifier OPEN_CONFIG_SCREEN = id("open_config_screen");
+
+    /**
+     * C2S: the client's own companions and trigger prefix, sent once on join.
+     *
+     * <p>⚠️ Untrusted. See {@link ClientProfiles} and {@code RosterGuard} — this is the first place
+     * the mod acts on something a connecting client wrote, and it reaches chat and the system
+     * prompt.
+     */
+    public static final Identifier CLIENT_PROFILE = id("client_profile");
+
+    /** S2C: the operator's {@code server} block, for the read-only Server tab. Display only. */
+    public static final Identifier SERVER_POLICY = id("server_policy");
+
+    /**
+     * S2C packet (empty payload): re-read your own config file and apply the player-owned half.
+     *
+     * <p>{@code /companion reload} used to be operator-only, which was right about the server's half
+     * and wrong about everyone's own. A non-operator on a dedicated server could not reload the
+     * settings they are the only one who reads — their endpoints, their memory switches — and the
+     * config screen could not do it for them either, so the only way to apply an edit was to quit
+     * the game. Reload is now available to everyone and does the half that belongs to the caller;
+     * the server's half still needs permission. See {@code CompanionCommands#reload}.
+     */
+    public static final Identifier RELOAD_CLIENT_CONFIG = id("reload_client_config");
 
     /**
      * S2C packet: the companion's live position/health for the radar HUD. Sent every ~10 ticks to the
@@ -173,6 +272,7 @@ public class AiCompanion implements ModInitializer {
         // Register the chat hook so nearby players' messages route to a companion's brain.
         ConversationManager.init();
         registerBrainReceivers();
+        registerConfigReceivers();
         LOGGER.info("[{}] initialized — entity {}, /companion command, chat hook", MOD_ID, id("companion"));
     }
 }

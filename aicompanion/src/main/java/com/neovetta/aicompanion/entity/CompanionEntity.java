@@ -100,6 +100,30 @@ public class CompanionEntity extends LivingEntity
     private String rosterName = "";
 
     /**
+     * Who this companion actually is, persisted whole.
+     *
+     * <p>⚠️ This is what makes a client-owned roster survive its owner. Identity used to be a name
+     * plus a lookup in the server's config, which works only while the server is the place identity
+     * lives. Now a player brings their own, so the server has no entry to look up once they log off
+     * — and if the operator happens to have a companion with the same name, the lookup finds the
+     * wrong one and swaps the two silently.
+     *
+     * <p>Null for a companion saved before this existed; {@code entryFor} falls back to the old
+     * name lookup in that case, which is what those companions have always done.
+     */
+    private CompanionConfig.RosterEntry identity;
+
+    /**
+     * Whether this companion and its owner have met.
+     *
+     * <p>Drives "welcome back" versus an introduction. It used to be inferred from whether a
+     * conversation-history file existed, which stops being answerable at all once history
+     * persistence is optional and the memories live on the owner's client — the server can see
+     * neither. A flag on the entity is true wherever either of those ends up living.
+     */
+    private boolean metOwner = false;
+
+    /**
      * Skin, tracked so the client can draw each companion differently.
      *
      * <p>The filename travels rather than the roster name: the client then needs only the PNG in its
@@ -175,11 +199,22 @@ public class CompanionEntity extends LivingEntity
             return;
         }
         this.rosterName = entry.name();
+        // The WHOLE identity, kept on the entity. It used to be re-resolved from the server's
+        // config by name on every load and every reload, which was fine while the operator owned
+        // the roster — and is exactly wrong now that the player does: the moment its owner logs off,
+        // a lookup in the server's file finds nothing, or worse finds the operator's companion of
+        // the same name and quietly swaps identities.
+        this.identity = entry;
         this.setCustomName(Text.literal(entry.name()));
         this.setCustomNameVisible(true);
         this.dataTracker.set(SKIN_FILE, entry.skinFile() == null ? "" : entry.skinFile());
         this.dataTracker.set(SKIN_SLIM, entry.skinSlim());
         applyUsernameSkin(entry);
+    }
+
+    /** This companion's own identity, or null for one saved before identity was persisted. */
+    public CompanionConfig.RosterEntry identity() {
+        return this.identity;
     }
 
     /**
@@ -294,11 +329,37 @@ public class CompanionEntity extends LivingEntity
         if (tag.containsUuid("Owner")) {
             this.ownerUuid = tag.getUuid("Owner");
         }
-        // Restore identity from the roster if the name is still configured. A companion saved before
-        // the roster existed has no RosterName; it keeps its custom name and the default skin, which
-        // is exactly what it looked like before.
         this.rosterName = tag.getString("RosterName");
-        CompanionConfig.find(this.rosterName).ifPresent(this::applyRosterEntry);
+        this.metOwner = tag.getBoolean("MetOwner");
+        // Identity from the entity itself, not from whatever config happens to be loaded. A
+        // companion saved before identities were persisted has no Identity tag, so it falls back to
+        // the old name lookup — which is exactly what it did before, and the only case where the
+        // server's roster still gets a say in who somebody else's companion is.
+        if (tag.contains("Identity", 10)) {
+            applyRosterEntry(readIdentity(tag.getCompound("Identity")));
+        } else {
+            CompanionConfig.find(this.rosterName).ifPresent(this::applyRosterEntry);
+        }
+    }
+
+    /** One roster entry as NBT, so a companion carries its own identity through a save. */
+    private static NbtCompound writeIdentity(CompanionConfig.RosterEntry entry) {
+        NbtCompound tag = new NbtCompound();
+        tag.putString("name", entry.name() == null ? "" : entry.name());
+        tag.putString("description", entry.description() == null ? "" : entry.description());
+        tag.putString("persona", entry.persona() == null ? "" : entry.persona());
+        tag.putString("skinFile", entry.skinFile() == null ? "" : entry.skinFile());
+        tag.putString("skinUsername", entry.skinUsername() == null ? "" : entry.skinUsername());
+        tag.putBoolean("skinSlim", entry.skinSlim());
+        tag.putString("voice", entry.voice() == null ? "" : entry.voice());
+        return tag;
+    }
+
+    private static CompanionConfig.RosterEntry readIdentity(NbtCompound tag) {
+        return new CompanionConfig.RosterEntry(
+                tag.getString("name"), tag.getString("description"), tag.getString("persona"),
+                tag.getString("skinFile"), tag.getString("skinUsername"),
+                tag.getBoolean("skinSlim"), tag.getString("voice"));
     }
 
     @Override
@@ -311,6 +372,17 @@ public class CompanionEntity extends LivingEntity
             tag.putUuid("Owner", this.ownerUuid);
         }
         tag.putString("RosterName", this.rosterName == null ? "" : this.rosterName);
+        if (this.identity != null) {
+            tag.put("Identity", writeIdentity(this.identity));
+        }
+        // Read back off the brain when there is one: onGreeting flips it there, and the entity is
+        // what outlives the brain. Without this the flag would reset on every restart and the
+        // companion would introduce itself to its owner forever.
+        AltoClefController ctrl = this.controller;
+        boolean met = this.metOwner
+                || (ctrl != null && ctrl.getAIPersistantData() != null
+                        && ctrl.getAIPersistantData().hasMetOwner());
+        tag.putBoolean("MetOwner", met);
     }
 
     /** Consecutive AI updates that ended in an exception. Reset by any tick that completes. */
@@ -482,7 +554,7 @@ public class CompanionEntity extends LivingEntity
                 if (this.controller != null) {
                     // Full agent: AltoClef tasks + Automatone nav + (on chat) the llama.cpp brain.
                     this.controller.serverTick();
-                } else {
+                } else if (needsBrainlessTick()) {
                     // Before a brain is attached, still drive Baritone so /companion goto works.
                     IBaritone.KEY.get(this).serverTick();
                 }
@@ -567,6 +639,18 @@ public class CompanionEntity extends LivingEntity
         ServerPlayerEntity owner = server.getPlayerManager().getPlayer(this.ownerUuid);
         if (owner == null) {
             return; // owner offline — nobody to show a HUD to
+        }
+        // ⚠️ Say nothing when the owner is paying for their own turns. These counters are static and
+        // therefore per-JVM: with llm.clientBrain on, the call is made on the owner's machine and
+        // this side stays at zero for the whole session. Sending it anyway does not merely add
+        // nothing — the client's HUD takes each packet as the truth and overwrites the real figures
+        // it already has, so a session that spent 101,101 tokens showed zero throughout.
+        //
+        // The client feeds its own panel in that case (CompanionTokenHud#selfUpdate). When it cannot
+        // think and this side answers instead, this side is the one paying and the packet is right
+        // again — which is why the test is "who is thinking" rather than a config flag.
+        if (adris.altoclef.player2api.brain.NetworkBrainTransport.canThink(this.ownerUuid)) {
+            return;
         }
         Player2APIService.UsageSnapshot usage = Player2APIService.usageSnapshot();
         PacketByteBuf buf = PacketByteBufs.create();
@@ -741,11 +825,52 @@ public class CompanionEntity extends LivingEntity
         return this.getWorld() instanceof ServerWorld serverWorld && !serverWorld.getPlayers().isEmpty();
     }
 
+    /**
+     * Whether a brainless companion is worth ticking Baritone for.
+     *
+     * <p>A companion whose owner is offline keeps no brain — {@code maintainBrain} refuses to attach
+     * one rather than adopt whoever is nearby — so it falls into the brainless branch and stays there
+     * for as long as that player is away. Which is for ever, in practice: companions are entities in
+     * the world save, so one spawned months ago and forgotten is still here, still ticking.
+     *
+     * <p>That tick is not free. {@code InventoryBehavior.onTickServer} walks the companion's
+     * inventory looking for a throwaway block and the best pickaxe <em>every tick</em>, and
+     * {@code PathingBehavior} does its own bookkeeping, all so that a companion nobody can currently
+     * command is ready to receive a path. Twenty abandoned companions is twenty of those, twenty
+     * times a second, on the server thread.
+     *
+     * <p>⚠️ It is not simply "skip when the owner is offline", because an operator <em>can</em> still
+     * command someone else's companion, and a goal set that way has to execute. So the test is
+     * whether it is actually going anywhere: an idle one is skipped, one with a path or a goal keeps
+     * ticking until it arrives.
+     */
+    private boolean needsBrainlessTick() {
+        if (this.ownerUuid == null) {
+            return true; // console-spawned and ownerless: nothing else will ever drive it
+        }
+        MinecraftServer server = this.getWorld().getServer();
+        if (server != null && server.getPlayerManager().getPlayer(this.ownerUuid) != null) {
+            return true; // owner is here — a brain is moments away, keep it responsive
+        }
+        try {
+            var pathing = IBaritone.KEY.get(this).getPathingBehavior();
+            return pathing.isPathing() || pathing.getGoal() != null;
+        } catch (Throwable e) {
+            // Never let a liveness optimisation be the thing that freezes a companion.
+            return true;
+        }
+    }
+
     /** Attach the agent brain (AltoClef controller) to this companion, owned by {@code owner}. */
     public void initBrain(Character character, PlayerEntity owner) {
         this.controller = new AltoClefController(IBaritone.KEY.get(this), character, "aicompanion");
         this.controller.setOwner(owner);
         this.ownerUuid = owner.getUuid();
+        // The brain is rebuilt on every load; whether they have met is not. Push it in here, or the
+        // companion greets its owner as a stranger every time the chunk reloads.
+        if (this.controller.getAIPersistantData() != null) {
+            this.controller.getAIPersistantData().setMetOwner(this.metOwner);
+        }
     }
 
     /**
@@ -827,8 +952,13 @@ public class CompanionEntity extends LivingEntity
         return ActionResult.CONSUME;
     }
 
-    /** The owner's name for a refusal message, or "someone else" if they are offline. */
-    private String ownerName() {
+    /**
+     * The owner's name for a refusal message, or "someone else" if they are offline.
+     *
+     * <p>Public so {@code /companion} refuses in the same words the inventory screen does. Two
+     * wordings for one rule is how a player learns that one of them means something different.
+     */
+    public String ownerName() {
         MinecraftServer server = this.getWorld().getServer();
         if (server == null || this.ownerUuid == null) {
             return "someone else";

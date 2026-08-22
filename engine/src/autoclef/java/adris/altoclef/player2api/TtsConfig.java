@@ -9,9 +9,12 @@ package adris.altoclef.player2api;
  * and repoint the audio source at a local, OpenAI-compatible <b>Kokoro</b> endpoint. See {@code tts/}
  * for the docker-compose stack that serves it.
  *
- * <p>These values are read server-side and pushed to the client in the {@code playerengine:stream_tts}
- * packet, so the client needs no config of its own. Overridable via system properties or environment
- * variables, and fed from the consumer mod's JSON config ({@code tts.*}):
+ * <p>{@code voice}, {@code model} and {@code speed} belong to the companion, so they are read
+ * server-side and pushed to the client in the {@code playerengine:stream_tts} packet.
+ * {@code endpoint} does not: it names a host the <em>client</em> has to reach, so the client reads
+ * its own (see {@code PlayerEngineClient}) and the packet's copy is only a fallback for a blank
+ * one. Overridable via system properties or environment variables, and fed from the consumer mod's
+ * JSON config ({@code tts.*}):
  * <ul>
  *   <li>{@code -Daicompanion.tts.enabled=true} or {@code AICOMPANION_TTS_ENABLED}</li>
  *   <li>{@code -Daicompanion.tts.endpoint=...} or {@code AICOMPANION_TTS_ENDPOINT}</li>
@@ -33,7 +36,13 @@ public final class TtsConfig {
     public static volatile boolean enabled =
             Boolean.parseBoolean(resolve("aicompanion.tts.enabled", "AICOMPANION_TTS_ENABLED", "true"));
 
-    /** Base URL of the Kokoro server. {@code /v1/audio/speech} is appended. Must be reachable from the CLIENT. */
+    /**
+     * Base URL of the Kokoro server. {@code /v1/audio/speech} is appended.
+     *
+     * <p>Read on the CLIENT, from the client's own file, because the client is what opens the
+     * connection. The server's copy used to be the one that shipped, which made the default
+     * {@code localhost:8880} unoverridable from the machine that had to reach it.
+     */
     public static volatile String endpoint =
             resolve("aicompanion.tts.endpoint", "AICOMPANION_TTS_ENDPOINT", "http://localhost:8880");
 

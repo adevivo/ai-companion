@@ -39,9 +39,17 @@ import org.apache.logging.log4j.Logger;
  *
  * <h2>Threading</h2>
  *
- * {@link #recall} runs on the <b>server thread</b> and normally makes no network call there:
- * {@link #prefetch} starts the embedding when the message is queued, at least a tick earlier, and
- * recall collects the finished vector. The bounded wait is a fallback, not the path.
+ * {@link #recall} has two callers with opposite constraints, and the budget is what separates them.
+ *
+ * <p>On the <b>server thread</b> it normally makes no network call at all: {@link #prefetch} starts
+ * the embedding when the message is queued, at least a tick earlier, and recall collects the finished
+ * vector. The bounded wait is a fallback, not the path, and it is tight (250 ms) because a longer one
+ * is a hitch every player in the world can feel.
+ *
+ * <p>On a <b>client</b> doing its own thinking, none of that holds: the work runs on a pool thread
+ * with no tick to miss, and prefetch is deliberately skipped. That caller takes the {@code budgetMs}
+ * overload and passes the embedder's own timeout. Handing it the tick-loop budget instead is not
+ * caution, it is silent data loss — see that overload for the measurement.
  *
  * <p>{@link #remember} embeds and writes files, so it must not be called on the server thread.
  */
@@ -427,9 +435,41 @@ public final class CompanionMemory {
      *
      * <p>Never throws. Every failure degrades to "no memories", which is exactly how the companion
      * behaves with the feature switched off.
+     *
+     * <p>Uses {@link MemoryConfig#embedBudgetMs}, which is the <b>server tick loop's</b> budget. A
+     * caller that is not on the tick loop wants {@link #recall(String, String, UUID, String, int)}.
      */
     public static List<String> recall(String turnText, String companionId, UUID player,
             String worldId) {
+        return recall(turnText, companionId, player, worldId, MemoryConfig.embedBudgetMs);
+    }
+
+    /**
+     * As above, with an explicit ceiling on how long the query embedding may take.
+     *
+     * <p><b>The budget is a property of the caller, not of memory.</b> {@code embedBudgetMs} is 250 ms
+     * because {@code AgentConversationData.process()} runs on the server thread, where a longer wait
+     * is a visible hitch for every player in the world. Nothing else about recall wants a ceiling
+     * that tight.
+     *
+     * <p>⚠️ Applying it off the tick loop is pure loss, and was measured as such. On 2026-08-20 a
+     * client-side session lost 2 of the 7 recalls that reached the embedder to
+     * {@code TimeoutException after 255 ms (budget 250 ms)} — both on a cold embedder, one on the
+     * session's first turn and one after a four-minute idle gap. Warm recalls in the same session
+     * took 45–56 ms. The cost is worse than the count suggests: the turns lost are the first question
+     * after a pause, which is exactly when a player is asking whether it remembers.
+     *
+     * <p>It compounds with prefetch. {@code NetworkBrainTransport} deliberately does not prefetch
+     * when the owning client is thinking — correctly, since a client is not racing a tick — so every
+     * client-side recall embeds cold inside a budget whose whole design assumed prefetch had already
+     * paid that cost.
+     *
+     * @param budgetMs ceiling on the embedding wait. A client passes
+     *                 {@link EmbeddingsConfig#timeoutMs}, which is the bound that actually matters
+     *                 there: the embedder being wedged, rather than a tick being late.
+     */
+    public static List<String> recall(String turnText, String companionId, UUID player,
+            String worldId, int budgetMs) {
         if (!MemoryConfig.enabled || player == null || turnText == null || turnText.isBlank()) {
             return List.of();
         }
@@ -461,7 +501,7 @@ public final class CompanionMemory {
             if (future == null) {
                 future = EmbeddingsService.embedAsync(turnText);
             }
-            float[] query = future.get(MemoryConfig.embedBudgetMs, TimeUnit.MILLISECONDS);
+            float[] query = future.get(budgetMs, TimeUnit.MILLISECONDS);
 
             // Bound to the save: a world memory from another world is unreachable here rather than
             // merely ranked low. See RetrievalScope.admits().
@@ -522,7 +562,7 @@ public final class CompanionMemory {
             }
             LOGGER.info("Memory: no recall — {} after {} ms (budget {} ms)",
                     e.getClass().getSimpleName(),
-                    (System.nanoTime() - startedAt) / 1_000_000L, MemoryConfig.embedBudgetMs);
+                    (System.nanoTime() - startedAt) / 1_000_000L, budgetMs);
             return List.of();
         }
     }

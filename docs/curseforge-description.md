@@ -47,7 +47,7 @@ Plus: **Minecraft 1.20.1**, **Fabric Loader**, and **Fabric API**. The pathfindi
 
 > Voice output (companions speaking aloud) is **optional** and needs a small local [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) TTS container. Everything you need ships with the mod: on first launch it writes `config/aicompanion/tts/` containing `docker-compose.yml` and a full `README.md`. Install [Docker](https://docs.docker.com/get-docker/), run `docker compose up -d` in that folder, then enable TTS in the config. See Configuration below.
 >
-> **Client/server split:** audio is fetched and played **client-side** — the server only sends your game the text and the endpoint to fetch it from. So the container belongs on the **player's** machine, not the server's, and with the default `http://localhost:8880` each player who wants voice runs their own. (One shared container works too: run it anywhere both reachable and set `tts.endpoint` to its LAN address instead of `localhost`.) The switch itself is server-side — `tts.enabled`, `endpoint`, `model`, `voice` and `speed` are read from the **server's** `config/aicompanion.json` and pushed to the client, so editing them on your own machine while connected to a dedicated server changes nothing.
+> **Client/server split:** audio is fetched and played **client-side** — the server only sends your game the text and the endpoint to fetch it from. So the container belongs on the **player's** machine, not the server's, and with the default `http://localhost:8880` each player who wants voice runs their own. (One shared container works too: run it anywhere both reachable and set `tts.endpoint` to its LAN address instead of `localhost`.) `tts.endpoint` is **yours** — it names a host your machine has to reach, so it is read from your own `config/aicompanion.json` (or the in-game config screen) even on a dedicated server. `tts.enabled`, `model`, `voice` and `speed` belong to the companion and come from the **server's** copy, so editing those on your own machine while connected to a dedicated server changes nothing.
 
 ## Features
 
@@ -103,7 +103,7 @@ Beyond commands, just **talk to them in chat** — that's the primary way you di
 On first launch the mod writes `config/aicompanion.json` with documented defaults. You can edit it two ways: the **in-game screen** (`/companion config`, or the Mod Menu gear button) which applies changes live, or the JSON file by hand followed by `/companion reload`. Key settings:
 
 - **Companions:** a `companions` list — each entry has `name`, `description`, `systemPrompt` (persona), `skin` (`file` + `username` + `slim`) and `voice`. Two ways to give one a face: set `skin.username` to any Minecraft player's name and every client draws that skin with nothing to install, or drop a 64×64 PNG into `config/aicompanion/skins/` and name it in `skin.file` (which wins if you set both, and needs a copy on each machine).
-- **LLM:** `endpoint` (default `http://localhost:3030`), `model`, `temperature`, `maxTokens` (default `1000`), `timeoutMs`, `useGrammar`.
+- **LLM:** `endpoint` (default `http://localhost:3030`), `model`, `temperature`, `maxTokens` (default `2000`), `timeoutMs`, `useGrammar`.
 - **Cloud/frontier:** set `endpoint` to a hosted API and supply the key via the **`AICOMPANION_LLM_APIKEY` environment variable** (preferred) or the `apiKey` field. Worked example for xAI/Grok:
 
 ```json
@@ -111,7 +111,7 @@ On first launch the mod writes `config/aicompanion.json` with documented default
   "endpoint": "https://api.x.ai",
   "model": "grok-4-1-fast-non-reasoning",
   "temperature": 0.7,
-  "maxTokens": 1000,
+  "maxTokens": 2000,
   "apiKey": "xai-your-key-here"
 }
 ```

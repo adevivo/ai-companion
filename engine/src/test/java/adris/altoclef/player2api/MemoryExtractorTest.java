@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
  */
 class MemoryExtractorTest {
 
-    private static final String OWNER = "Dauk808";
+    private static final String OWNER = "Alex";
 
     private static List<MemoryExtractor.Candidate> plan(String json) {
         return MemoryExtractor.plan(MemoryExtractor.parse(json), OWNER);
@@ -152,8 +152,8 @@ class MemoryExtractorTest {
             // and the scope table already follows it.
             List<MemoryExtractor.Candidate> out = MemoryExtractor.plan(
                     List.of(new MemoryExtractor.ExtractedFact(
-                            "user", "related_to", "a dog named duke", "user")),
-                    "Dauk808", "I have a dog named Duke");
+                            "user", "related_to", "a parrot named sprocket", "user")),
+                    "Alex", "I have a parrot named Sprocket");
             assertEquals(1, out.size());
             assertEquals(MemoryScope.PERSON, out.get(0).scope());
         }
@@ -167,7 +167,7 @@ class MemoryExtractorTest {
             List<MemoryExtractor.Candidate> out = MemoryExtractor.plan(
                     List.of(new MemoryExtractor.ExtractedFact(
                             "user", "owns", "a diamond pickaxe", "user")),
-                    "Dauk808", "I have a diamond pickaxe now");
+                    "Alex", "I have a diamond pickaxe now");
             assertEquals(1, out.size());
             assertEquals(MemoryScope.WORLD, out.get(0).scope());
         }
@@ -177,7 +177,7 @@ class MemoryExtractorTest {
         void promptCarriesTheRule() {
             // The correction lives in the prompt, so the prompt is where it can be lost. Nothing
             // else in this suite would notice if that guidance were edited away.
-            String prompt = MemoryExtractor.systemPrompt("Dauk808");
+            String prompt = MemoryExtractor.systemPrompt("Alex");
             assertTrue(prompt.contains("related_to"), prompt);
             assertTrue(prompt.toLowerCase().contains("pet"), "prompt no longer mentions pets");
         }
@@ -344,28 +344,28 @@ class MemoryExtractorTest {
         void firstPersonSubjectsBecomeTheOwnersName() {
             List<MemoryExtractor.Candidate> got = plan("{\"facts\":[{\"subject\":\"i\","
                     + "\"predicate\":\"prefers\",\"value\":\"oak wood\",\"about\":\"user\"}]}");
-            assertEquals("Dauk808 prefers oak wood", got.get(0).text());
+            assertEquals("Alex prefers oak wood", got.get(0).text());
             assertFalse(got.get(0).text().toLowerCase().startsWith("i "),
                     "composed text must not open in the first person");
         }
 
         @Test
         void readsAsEnglishForEveryPredicate() {
-            assertEquals("Dauk808 is working on a bridge",
-                    MemoryExtractor.compose("Dauk808", "works_on", "a bridge"));
-            assertEquals("Dauk808 is skilled in redstone",
-                    MemoryExtractor.compose("Dauk808", "skilled_in", "redstone"));
-            assertEquals("Dauk808 is patient",
-                    MemoryExtractor.compose("Dauk808", "has_trait", "patient"));
-            assertEquals("Dauk808 dislikes caves",
-                    MemoryExtractor.compose("Dauk808", "dislikes", "caves"));
+            assertEquals("Alex is working on a bridge",
+                    MemoryExtractor.compose("Alex", "works_on", "a bridge"));
+            assertEquals("Alex is skilled in redstone",
+                    MemoryExtractor.compose("Alex", "skilled_in", "redstone"));
+            assertEquals("Alex is patient",
+                    MemoryExtractor.compose("Alex", "has_trait", "patient"));
+            assertEquals("Alex dislikes caves",
+                    MemoryExtractor.compose("Alex", "dislikes", "caves"));
         }
 
         /** No predicate may compose into text containing an underscore — it would be embedded as one. */
         @Test
         void noPredicateLeaksItsUnderscoreIntoStoredText() {
             for (String predicate : MemoryExtractor.PREDICATES) {
-                String text = MemoryExtractor.compose("Dauk808", predicate, "oak");
+                String text = MemoryExtractor.compose("Alex", predicate, "oak");
                 assertFalse(text.contains("_"), predicate + " composed with an underscore: " + text);
             }
         }
@@ -394,7 +394,7 @@ class MemoryExtractorTest {
                     + "\"predicate\":\"works_on\",\"value\":\"a bridge near the ravine\","
                     + "\"about\":\"user\"}]}");
             assertEquals(1, got.size());
-            assertEquals("Dauk808 is working on a bridge near the ravine", got.get(0).text());
+            assertEquals("Alex is working on a bridge near the ravine", got.get(0).text());
             assertEquals(MemoryScope.WORLD, got.get(0).scope());
         }
 
@@ -412,7 +412,7 @@ class MemoryExtractorTest {
                     + "{\"subject\":\"Luna\",\"predicate\":\"has_trait\",\"value\":\"cheerful\",\"about\":\"companion\"},"
                     + "{\"subject\":\"user\",\"predicate\":\"wants\",\"value\":\"diamonds\",\"about\":\"user\"}]}");
             assertEquals(1, got.size(), "only the in-vocabulary, non-policy-dropped, owner fact survives");
-            assertEquals("Dauk808 prefers oak wood", got.get(0).text());
+            assertEquals("Alex prefers oak wood", got.get(0).text());
         }
 
         /** A player fact and a world fact from one exchange get different scopes, as they must. */
@@ -453,14 +453,14 @@ class MemoryExtractorTest {
                     "a question states nothing; the only source of 'spruce' was the companion's reply");
         }
 
-        /** The other real one: "duke" is in the player's words, so the pet fact stands. */
+        /** The other real one: "sprocket" is in the player's words, so the pet fact stands. */
         @Test
         void keepsThePetFactFromTheTurnThatStatedIt() {
             List<MemoryExtractor.ExtractedFact> facts = MemoryExtractor.parse(
                     "{\"facts\":[{\"subject\":\"user\",\"predicate\":\"related_to\","
-                            + "\"value\":\"dog named duke\",\"about\":\"user\"}]}");
+                            + "\"value\":\"parrot named sprocket\",\"about\":\"user\"}]}");
             assertEquals(1, MemoryExtractor.plan(facts, OWNER,
-                    "if we train a wolf we should name it duke because that's my dogs name IRL").size());
+                    "if we tame a parrot we should call it sprocket, same as the one I have at home").size());
         }
 
         @Test
