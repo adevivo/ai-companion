@@ -1,6 +1,7 @@
 package com.player2.playerengine.trackers;
 
 import com.player2.playerengine.util.Debug;
+import adris.altoclef.mixins.PersistentProjectileEntityAccessor;
 import com.player2.playerengine.eventbus.EventBus;
 import com.player2.playerengine.eventbus.events.PlayerCollidedWithEntityEvent;
 import com.player2.playerengine.trackers.blacklisting.EntityLocateBlacklist;
@@ -40,24 +41,22 @@ public class EntityTracker extends Tracker {
    private final HashMap<String, Player> playerMap = new HashMap<>();
    private final HashMap<String, Vec3> playerLastCoordinates = new HashMap<>();
    private final EntityLocateBlacklist entityBlacklist = new EntityLocateBlacklist();
+   /**
+    * Nothing populates these in this fork. Upstream filled them from a {@code Player.touch()} mixin
+    * that only fired for the client's own {@code LocalPlayer}, which crashed a dedicated server and
+    * could never have matched anyway: our agent is a {@code CompanionEntity extends LivingEntity},
+    * not a {@code Player}, so it was never a key in these maps. The mixin is gone; the queries below
+    * are kept as tracker API and simply report no collisions.
+    */
    private final HashMap<LivingEntity, List<Entity>> entitiesCollidingWithPlayerAccumulator = new HashMap<>();
    private final HashMap<LivingEntity, HashSet<Entity>> entitiesCollidingWithPlayer = new HashMap<>();
 
    public EntityTracker(TrackerManager manager) {
       super(manager);
-      EventBus.subscribe(PlayerCollidedWithEntityEvent.class, evt -> this.registerPlayerCollision(evt.player, evt.other));
    }
 
    private static Class squashType(Class<?> type) {
       return Player.class.isAssignableFrom(type) ? Player.class : type;
-   }
-
-   private void registerPlayerCollision(LivingEntity player, Entity entity) {
-      if (!this.entitiesCollidingWithPlayerAccumulator.containsKey(player)) {
-         this.entitiesCollidingWithPlayerAccumulator.put(player, new ArrayList<>());
-      }
-
-      this.entitiesCollidingWithPlayerAccumulator.get(player).add(entity);
    }
 
    public boolean isCollidingWithPlayer(LivingEntity player, Entity entity) {
@@ -258,8 +257,32 @@ public class EntityTracker extends Tracker {
    public boolean isPlayerLoaded(String name) {
       this.ensureUpdated();
       synchronized (BaritoneHelper.MINECRAFT_LOCK) {
-         return this.playerMap.containsKey(name);
+         return resolveUsername(name) != null;
       }
+   }
+
+   /**
+    * The loaded player whose name matches {@code name} ignoring case, or null.
+    *
+    * <p>Matching used to be exact, and the agent does not reliably reproduce capitalisation: asked to
+    * follow an owner whose name carries capitals it issued the lower-cased form, found nobody, and
+    * {@code FollowPlayerTask} sat in "doing nothing until player loads into render distance" while
+    * the companion cheerfully reported that it was following. Minecraft usernames are unique
+    * case-insensitively, so there is nothing to disambiguate.
+    */
+   private String resolveUsername(String name) {
+      if (name == null) {
+         return null;
+      }
+      if (this.playerMap.containsKey(name)) {
+         return name;
+      }
+      for (String loaded : this.playerMap.keySet()) {
+         if (loaded.equalsIgnoreCase(name)) {
+            return loaded;
+         }
+      }
+      return null;
    }
 
    public List<String> getAllLoadedPlayerUsernames() {
@@ -271,17 +294,21 @@ public class EntityTracker extends Tracker {
    public Optional<Vec3> getPlayerMostRecentPosition(String name) {
       this.ensureUpdated();
       synchronized (BaritoneHelper.MINECRAFT_LOCK) {
-         return Optional.ofNullable(this.playerLastCoordinates.getOrDefault(name, null));
+         // Case-insensitive for the same reason as resolveUsername: the name comes from the model.
+         for (java.util.Map.Entry<String, Vec3> entry : this.playerLastCoordinates.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name)) {
+               return Optional.ofNullable(entry.getValue());
+            }
+         }
+         return Optional.empty();
       }
    }
 
    public Optional<Player> getPlayerEntity(String name) {
-      if (this.isPlayerLoaded(name)) {
-         synchronized (BaritoneHelper.MINECRAFT_LOCK) {
-            return Optional.of(this.playerMap.get(name));
-         }
-      } else {
-         return Optional.empty();
+      this.ensureUpdated();
+      synchronized (BaritoneHelper.MINECRAFT_LOCK) {
+         String resolved = resolveUsername(name);
+         return resolved == null ? Optional.empty() : Optional.ofNullable(this.playerMap.get(resolved));
       }
    }
 

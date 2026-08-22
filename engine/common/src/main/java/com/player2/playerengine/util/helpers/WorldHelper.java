@@ -41,6 +41,7 @@ import net.minecraft.world.level.block.SpawnerBlock;
 import net.minecraft.world.level.block.entity.SpawnerBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -144,6 +145,83 @@ public interface WorldHelper {
       } else {
          return null;
       }
+   }
+
+   /**
+    * Y of the topmost solid ground block in a column — the block you would stand on top of.
+    *
+    * <p>Backed by the chunk heightmap, so this is O(1) per column. Prefer it to
+    * {@link #getGroundHeight(PlayerEngineController, int, int)}, which walks the whole column down from
+    * the build limit (~384 block lookups) and reports the topmost redstone conductor, meaning a tree
+    * or an overhang above the site answers with the log height instead of the ground.
+    *
+    * <p>{@code MOTION_BLOCKING_NO_LEAVES} rather than {@code WORLD_SURFACE}: the latter counts any
+    * non-air block, so grass and flowers read one block high. The {@code _WG} variants are worldgen
+    * only ({@code Heightmap.Types#keepAfterWorldgen}) and are not maintained on a loaded chunk.
+    *
+    * <p>The {@code - 1} is not slack: {@code ChunkAccess#getHeight} returns {@code getFirstAvailable()
+    * - 1} (the topmost matching block) and {@code Level#getHeight} adds one back, so the level-level
+    * call yields the first FREE position above the ground — a standing entity's feet, not the ground.
+    * Verified against 1.20.1 bytecode.
+    *
+    * @return the ground block's Y, or {@code level.getMinBuildHeight() - 1} if the chunk is unloaded
+    */
+   static int surfaceY(PlayerEngineController controller, int x, int z) {
+      Level world = controller.getWorld();
+      return world.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
+   }
+
+   /**
+    * How far below the sky surface a reference point has to be before it counts as underground.
+    *
+    * <p>Kept equal to {@code BuildPlacement.MAX_LIFT} on purpose: everything within that distance of
+    * the surface is a case the ground check already handles correctly (at the surface, above it, or
+    * buried shallowly enough to be lifted onto it), so those must keep the sky-heightmap answer
+    * unchanged. Only offsets bigger than this reach the local-floor search — and those are refused
+    * outright today, so the search can only ever turn a refusal into a build.
+    */
+   int UNDERGROUND_THRESHOLD = 3;
+
+   /** How far {@link #groundYNear} will walk down looking for a floor before giving up. */
+   int LOCAL_FLOOR_SEARCH_DEPTH = 64;
+
+   /**
+    * Ground Y at {@code (x, z)} as seen from {@code refY}: the sky surface when {@code refY} is at or
+    * near it, and the floor of the enclosed space {@code refY} sits in when it is far below.
+    *
+    * <p>{@link #surfaceY} answers with the top of the column as seen from the sky, which is the wrong
+    * question inside a cave: standing on a cave floor at y=41 under 28 blocks of stone it reports the
+    * terrain overhead, so a build aimed correctly at the companion's own feet measured as 28 blocks
+    * underground and was refused. Every build underground was refused at every Y, and the same number
+    * reached the model as {@code groundLevel} while the prompt promised it was the block being stood on.
+    *
+    * <p>Deliberately gated rather than always searching. Above ground the sky heightmap is right and
+    * is what the placement work in 0.1.9/0.2.0 was tuned against, so {@code UNDERGROUND_THRESHOLD}
+    * short-circuits every ordinary column — including water, farmland and tree columns, where the
+    * per-block solidity tests below disagree with the heightmap.
+    *
+    * <p>The floor test is "solid with open space above" rather than merely "solid" so that a Y
+    * hallucinated deep inside rock finds nothing, falls back, and stays refused instead of quietly
+    * burying the build. Solidity is {@link BlockState#blocksMotion()} to match what the heightmap
+    * counts; {@link #isSolidBlock} is {@code isRedstoneConductor}, which is false for water and for
+    * farmland (not a full collision box).
+    *
+    * @param refY the Y the caller is reasoning from — the entity's feet, or a build plan's base layer
+    */
+   static int groundYNear(PlayerEngineController controller, int x, int z, int refY) {
+      int surface = surfaceY(controller, x, z);
+      if (surface - refY <= UNDERGROUND_THRESHOLD) {
+         return surface;
+      }
+      Level world = controller.getWorld();
+      int floor = Math.max(world.getMinBuildHeight(), refY - LOCAL_FLOOR_SEARCH_DEPTH);
+      for (int y = refY; y >= floor; y--) {
+         if (world.getBlockState(new BlockPos(x, y, z)).blocksMotion()
+               && !world.getBlockState(new BlockPos(x, y + 1, z)).blocksMotion()) {
+            return y;
+         }
+      }
+      return surface;
    }
 
    static int getGroundHeight(PlayerEngineController controller, int x, int z) {

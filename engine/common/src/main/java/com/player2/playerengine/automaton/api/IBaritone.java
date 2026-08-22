@@ -88,14 +88,14 @@ public interface IBaritone {
          Arrays.asList(components).forEach(component::append);
          ((Player)entity).displayClientMessage(component, false);
       } else {
+         // Route the companion's status/feedback to every player, not just creative-mode ones.
+         // The old isCreative() filter meant survival players saw no command feedback at all.
          for (ServerPlayer p : entity.level().getServer().getPlayerList().getPlayers()) {
-            if (p.isCreative()) {
-               MutableComponent component = Component.literal("");
-               component.append(BaritoneAPI.getPrefix());
-               component.append(Component.literal(" "));
-               Arrays.asList(components).forEach(component::append);
-               p.displayClientMessage(component, false);
-            }
+            MutableComponent component = Component.literal("");
+            component.append(BaritoneAPI.getPrefix());
+            component.append(Component.literal(" "));
+            Arrays.asList(components).forEach(component::append);
+            p.displayClientMessage(component, false);
          }
       }
    }

@@ -60,6 +60,17 @@ public class EventBus {
       return sub;
    }
 
+   /**
+    * Drop every subscription. Must be called when a world stops: subscriptions are static, so without
+    * this a second world load in the same game process dispatches events to handlers still bound to
+    * the previous session's entities and unloaded level.
+    */
+   public static void clear() {
+      topics.clear();
+      toAdd.clear();
+      lock = false;
+   }
+
    public static <T> void unsubscribe(Subscription<T> subscription) {
       if (subscription != null) {
          subscription.delete();

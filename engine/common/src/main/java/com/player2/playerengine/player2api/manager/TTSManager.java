@@ -70,7 +70,7 @@ public class TTSManager {
             UUID speaker) {
         // Voice is opt-in on the endpoint being reachable from the CLIENT, which is the one thing
         // this side cannot check. Off => stay silent and, importantly, never take the lock below.
-        if (!adris.altoclef.player2api.TtsConfig.enabled) {
+        if (!com.neovetta.aicompanion.core.TtsConfig.enabled) {
             return;
         }
         // Arm the backstop before dispatching: the ack can land before this method returns, so

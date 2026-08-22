@@ -46,7 +46,7 @@ import org.apache.logging.log4j.Logger;
  *   <li>A client that <b>announced and then failed</b> has its own brain and its own key; it is
  *       simply broken. Answering costs the <em>operator</em> for a guest's misconfiguration, every
  *       turn, for as long as it stays broken, and neither of them can see it happening. Refuse by
- *       default and tell the owner — see {@link adris.altoclef.player2api.ServerPolicy#serverAnswersWhenClientFails}.</li>
+ *       default and tell the owner — see {@link com.neovetta.aicompanion.core.ServerPolicy#serverAnswersWhenClientFails}.</li>
  * </ul>
  *
  * <p>The capability handshake is what separates the two, which is a second job for a mechanism that

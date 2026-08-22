@@ -93,6 +93,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.material.MapColor;
 
 public class TaskCatalogue {
+   private static final org.apache.logging.log4j.Logger LOGGER = org.apache.logging.log4j.LogManager.getLogger();
    private static final HashMap<String, Item[]> nameToItemMatches = new HashMap<>();
    private static final HashMap<String, TaskCatalogue.CataloguedResource> nameToResourceTask = new HashMap<>();
    private static final HashMap<Item, TaskCatalogue.CataloguedResource> itemToResourceTask = new HashMap<>();
@@ -353,7 +354,15 @@ public class TaskCatalogue {
       BiFunction<ItemHelper.WoodItems, Integer, ResourceTask> getTask,
       boolean requireNetherForNetherStuff
    ) {
-      return woodTasks(woodItem -> woodItem.prefix + "_" + woodItem.prefix, getMatch, getTask, requireNetherForNetherStuff);
+      // baseName used to be dropped on the floor here in favour of prefix + "_" + prefix, so every
+      // per-wood resource catalogued itself as "oak_oak" / "birch_birch". The first caller (logs)
+      // claimed those names and put() silently early-returns on a duplicate name, so planks, doors,
+      // stairs, slabs, fences and trapdoors reached neither map: `get oak_planks` did not exist, and
+      // build_structure's auto-gather skipped every one of them as unobtainable.
+      // Note some baseNames compose to non-vanilla ids ("stripped_logs" -> "oak_stripped_logs").
+      // Catalogue names are internal identifiers, so that is cosmetic; the item mapping is what the
+      // build path looks up.
+      return woodTasks(woodItem -> woodItem.prefix + "_" + baseName, getMatch, getTask, requireNetherForNetherStuff);
    }
 
    private static TaskCatalogue.CataloguedResource[] woodTasks(
@@ -378,6 +387,22 @@ public class TaskCatalogue {
       shapedRecipe3x3(armorMaterialName + "_chestplate", chestplateItem, 1, material, o, material, material, material, material, material, material, material);
       shapedRecipe3x3(armorMaterialName + "_leggings", leggingsItem, 1, material, material, material, material, o, material, material, o, material);
       shapedRecipe3x3(armorMaterialName + "_boots", bootsItem, 1, o, o, o, material, o, material, material, o, material);
+   }
+
+   /**
+    * Make a family of resources always be crafted rather than dug up when one happens to be nearby.
+    *
+    * <p>{@link #put} turns {@code mineIfPresent} on for anything whose item maps to a block, which is
+    * right for ore and stone and wrong for everything craftable: the world's existing copies belong to
+    * somebody. Varargs so it takes either a single {@link #simple} registration or the array a
+    * {@link #woodTasks} family returns.
+    */
+   private static void craftedNotMined(TaskCatalogue.CataloguedResource... resources) {
+      for (TaskCatalogue.CataloguedResource resource : resources) {
+         if (resource != null) {
+            resource.dontMineIfPresent();
+         }
+      }
    }
 
    private static void alias(String newName, String original) {
@@ -888,28 +913,34 @@ public class TaskCatalogue {
       shapedRecipe3x3("lodestone", Items.LODESTONE, 1, c, c, c, c, "netherite_ingot", c, c, c, c);
       shapedRecipe3x3("lightning_rod", Items.LIGHTNING_ROD, 1, o, "copper_ingot", o, o, "copper_ingot", o, o, "copper_ingot", o);
       shapedRecipe3x3("tinted_glass", Items.TINTED_GLASS, 2, o, "amethyst_shard", o, "amethyst_shard", "glass", "amethyst_shard", o, "amethyst_shard", o);
-      simple("wooden_stairs", ItemHelper.WOOD_STAIRS, CollectWoodenStairsTask::new);
-      woodTasks(
+      // Every one of these is craftable from planks and every one is also a placeable block, so put()
+      // switches mineIfPresent on for it by default — and mining a slab that already exists beats
+      // crafting one. In a village the slabs that already exist are somebody's roof, so asking for
+      // 200 oak_slab sent the companion off to dismantle houses while carrying the planks to make
+      // them. Planks and stripped logs were given this same treatment already (see above); the
+      // products were missed.
+      craftedNotMined(simple("wooden_stairs", ItemHelper.WOOD_STAIRS, CollectWoodenStairsTask::new));
+      craftedNotMined(woodTasks(
          "stairs", woodItems -> woodItems.stairs, (woodItems, count) -> new CollectWoodenStairsTask(woodItems.stairs, woodItems.prefix + "_planks", count)
-      );
-      simple("wooden_slab", ItemHelper.WOOD_SLAB, CollectWoodenSlabTask::new);
-      woodTasks("slab", woodItems -> woodItems.slab, (woodItems, count) -> new CollectWoodenSlabTask(woodItems.slab, woodItems.prefix + "_planks", count));
-      simple("wooden_door", ItemHelper.WOOD_DOOR, CollectWoodenDoorTask::new);
-      woodTasks("door", woodItems -> woodItems.door, (woodItems, count) -> new CollectWoodenDoorTask(woodItems.door, woodItems.prefix + "_planks", count));
-      simple("wooden_trapdoor", ItemHelper.WOOD_TRAPDOOR, CollectWoodenTrapDoorTask::new);
-      woodTasks(
+      ));
+      craftedNotMined(simple("wooden_slab", ItemHelper.WOOD_SLAB, CollectWoodenSlabTask::new));
+      craftedNotMined(woodTasks("slab", woodItems -> woodItems.slab, (woodItems, count) -> new CollectWoodenSlabTask(woodItems.slab, woodItems.prefix + "_planks", count)));
+      craftedNotMined(simple("wooden_door", ItemHelper.WOOD_DOOR, CollectWoodenDoorTask::new));
+      craftedNotMined(woodTasks("door", woodItems -> woodItems.door, (woodItems, count) -> new CollectWoodenDoorTask(woodItems.door, woodItems.prefix + "_planks", count)));
+      craftedNotMined(simple("wooden_trapdoor", ItemHelper.WOOD_TRAPDOOR, CollectWoodenTrapDoorTask::new));
+      craftedNotMined(woodTasks(
          "trapdoor",
          woodItems -> woodItems.trapdoor,
          (woodItems, count) -> new CollectWoodenTrapDoorTask(woodItems.trapdoor, woodItems.prefix + "_planks", count)
-      );
-      simple("wooden_fence", ItemHelper.WOOD_FENCE, CollectFenceTask::new);
-      woodTasks("fence", woodItems -> woodItems.fence, (woodItems, count) -> new CollectFenceTask(woodItems.fence, woodItems.prefix + "_planks", count));
-      simple("wooden_fence_gate", ItemHelper.WOOD_FENCE_GATE, CollectFenceGateTask::new);
-      woodTasks(
+      ));
+      craftedNotMined(simple("wooden_fence", ItemHelper.WOOD_FENCE, CollectFenceTask::new));
+      craftedNotMined(woodTasks("fence", woodItems -> woodItems.fence, (woodItems, count) -> new CollectFenceTask(woodItems.fence, woodItems.prefix + "_planks", count)));
+      craftedNotMined(simple("wooden_fence_gate", ItemHelper.WOOD_FENCE_GATE, CollectFenceGateTask::new));
+      craftedNotMined(woodTasks(
          "fence_gate",
          woodItems -> woodItems.fenceGate,
          (woodItems, count) -> new CollectFenceGateTask(woodItems.fenceGate, woodItems.prefix + "_planks", count)
-      );
+      ));
       String r = "wooden_slab";
       shapedRecipe3x3("chiseled_bookshelf", Items.CHISELED_BOOKSHELF, 1, p, p, p, r, r, r, p, p, p).dontMineIfPresent();
       shapedRecipe3x3("barrel", Items.BARREL, 1, p, r, p, p, o, p, p, r, p);
@@ -977,6 +1008,12 @@ public class TaskCatalogue {
       shapedRecipe3x3("rabbit_stew", Items.RABBIT_STEW, 1, o, "cooked_rabbit", o, "carrot", "baked_potato", "mushroom", o, "bowl", o);
       String b = "beetroot";
       shapedRecipe3x3("beetroot_soup", Items.BEETROOT_SOUP, 1, b, b, b, b, b, b, o, "bowl", o);
+      // Cataloguing runs in a static initialiser, so a duplicate single-item registration throws
+      // before anything else in the engine loads. Logging the totals makes both a healthy init and a
+      // failed one obvious in the log rather than something to infer from a missing feature.
+      // Log4j directly, not Debug.logInternal: that gates on canLog(0), a level rejected under every
+      // setting, so the first version of this line never reached the log at all.
+      LOGGER.info("TaskCatalogue: {} resources, {} item mappings", nameToResourceTask.size(), itemToResourceTask.size());
    }
 
    private static class CataloguedResource {

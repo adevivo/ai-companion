@@ -11,6 +11,7 @@ import java.util.List;
 
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -61,7 +62,21 @@ public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
       }
    }
 
+   /**
+    * Put the best weapon in hand. Returns true when it is busy doing so, which the caller reads as
+    * "not ready to swing this tick".
+    *
+    * <p>Yields while a mouthful is in progress. Eating is a 32-tick commitment during which the food
+    * has to stay in hand, so a combat path re-equipping a sword every tick does not merely thrash the
+    * hotbar — it cancels the bite outright, every time, and the companion never actually eats. Same
+    * stand-down {@code PreEquipItemChain} already does. Returning true here also stops it swinging with
+    * a lamb chop, and the weapon comes back the moment the bite finishes.
+    */
    public static boolean equipWeapon(PlayerEngineController mod) {
+      if (mod.getFoodChain() != null && mod.getFoodChain().isTryingToEat()) {
+         return true;
+      }
+
       Item bestWeapon = bestWeapon(mod);
       Item equipedWeapon = StorageHelper.getItemStackInSlot(PlayerSlot.getEquipSlot(mod.getInventory())).getItem();
       if (bestWeapon != null && bestWeapon != equipedWeapon) {
@@ -85,8 +100,27 @@ public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
       return null;
    }
 
+   /**
+    * Ticks between full-strength swings, from the entity's {@code ATTACK_SPEED} attribute — the same
+    * formula vanilla uses in {@code Player#getCurrentItemAttackStrengthDelay}, and the same fix
+    * already applied in {@link com.player2.playerengine.control.KillAura#getAttackCooldownProgressPerTick}.
+    *
+    * <p>This used to return a flat 5.0F: four full-damage swings a second regardless of what was
+    * being held, against the 1.6 a diamond sword actually allows. Because {@link
+    * #getAttackCooldownProgress} gates on this, the melee kill task was swinging at roughly 2.5x a
+    * player's rate with the same weapon — every one of them at full charge, since the gate only
+    * passes once the (too-short) cooldown has elapsed.
+    *
+    * <p>Keeps the old constant as a fallback for entities without the attribute registered, so a
+    * mis-registered attribute degrades to the previous behaviour rather than throwing inside a tick.
+    */
    public float getAttackCooldownProgressPerTick(LivingEntity entity) {
-      return 5.0F;
+      if (entity == null || !entity.getAttributes().hasAttribute(Attributes.ATTACK_SPEED)) {
+         return 5.0F;
+      }
+
+      double attackSpeed = entity.getAttributeValue(Attributes.ATTACK_SPEED);
+      return attackSpeed <= 0.0 ? 5.0F : (float)(1.0 / attackSpeed * 20.0);
    }
 
    public float getAttackCooldownProgress(LivingEntity entity, float baseTime) {

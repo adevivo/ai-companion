@@ -415,7 +415,7 @@ public class ConversationManager {
         }
         char boundary = rest.charAt(0);
         if (boundary != ',' && boundary != ':'
-                // java.lang.Character spelled out: this file imports adris.altoclef.player2api.Character.
+                // java.lang.Character spelled out: this file imports com.player2.playerengine.player2api.Character.
                 && (requireSeparator || !java.lang.Character.isWhitespace(boundary))) {
             return null;
         }

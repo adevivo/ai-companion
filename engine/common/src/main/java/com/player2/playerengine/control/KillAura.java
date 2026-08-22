@@ -1,10 +1,13 @@
 package com.player2.playerengine.control;
 
+import com.neovetta.aicompanion.core.BehaviorConfig;
 import com.player2.playerengine.PlayerEngineController;
 import com.player2.playerengine.chains.MobDefenseChain;
 import com.player2.playerengine.mixins.LivingEntityMixin;
 import com.player2.playerengine.multiversion.item.ItemVer;
+import com.neovetta.aicompanion.core.BehaviorConfig;
 import com.player2.playerengine.util.helpers.LookHelper;
+import com.player2.playerengine.util.helpers.ShieldHelper;
 import com.player2.playerengine.util.helpers.StlHelper;
 import com.player2.playerengine.util.helpers.StorageHelper;
 import com.player2.playerengine.util.helpers.WorldHelper;
@@ -18,6 +21,7 @@ import java.util.Optional;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Zoglin;
@@ -52,6 +56,19 @@ public class KillAura {
       this.attackedLastTick = false;
    }
 
+   /**
+    * Add an entity to this tick's target list.
+    *
+    * <p>A ghast fireball additionally becomes {@link #forceHit}, which is the one thing attacked
+    * without waiting for the weapon cooldown — see the two call sites in {@link #tickEnd} and
+    * {@link #performDelayedAttack}. That exemption is deliberate and should stay: batting a fireball
+    * back has no damage-charge component, a player does it by spam-clicking, and the window is short
+    * enough that waiting out a cooldown means eating the fireball instead. Gating it would make the
+    * companion strictly worse at this than the person standing next to it.
+    *
+    * <p>Note this is the <em>only</em> assignment to {@code forceHit}, and {@link #tickStart} clears
+    * it every tick — so it is always a fireball and can never go stale across ticks.
+    */
    public void applyAura(Entity entity) {
       this.targets.add(entity);
       if (entity instanceof LargeFireball) {
@@ -82,6 +99,7 @@ public class KillAura {
             && entities.get().getClass() != Zoglin.class
             && entities.get().getClass() != Warden.class
             && entities.get().getClass() != WitherBoss.class
+            && BehaviorConfig.defenseUseShield
             && (mod.getItemStorage().hasItem(Items.SHIELD) || mod.getItemStorage().hasItemInOffhand(mod, Items.SHIELD))
             && mod.getBaritone().getPathingBehavior().isSafeToCancel()) {
             LookHelper.lookAt(mod, entities.get().getEyePosition());
@@ -106,6 +124,7 @@ public class KillAura {
             this.performDelayedAttack(mod);
             break;
          case SMART:
+            // Uncooled by design — forceHit is only ever a ghast fireball. See applyAura.
             if (this.forceHit != null) {
                this.attack(mod, this.forceHit, true);
             } else if (!mod.getFoodChain().needsToEat()
@@ -122,6 +141,7 @@ public class KillAura {
          && !mod.getMLGBucketChain().isFalling(mod)
          && mod.getMLGBucketChain().doneMLG()
          && !mod.getMLGBucketChain().isChorusFruiting()) {
+         // Uncooled by design — forceHit is only ever a ghast fireball. See applyAura.
          if (this.forceHit != null) {
             this.attack(mod, this.forceHit, true);
          }
@@ -139,19 +159,52 @@ public class KillAura {
       }
    }
 
+   /**
+    * Ticks between full-strength swings, from the entity's {@code ATTACK_SPEED} attribute — the same
+    * formula vanilla uses in {@code Player#getCurrentItemAttackStrengthDelay}.
+    *
+    * <p>This used to return a flat 5.0F, which meant four full-damage swings a second no matter what
+    * the companion was holding: roughly 2.5x a player's rate with the same diamond sword. Reading the
+    * attribute picks up the held weapon's attack-speed modifier automatically.
+    *
+    * <p>Keeps the old constant as a fallback for entities without the attribute registered, so a
+    * mis-registered attribute degrades to the previous behaviour rather than throwing inside a tick.
+    */
    public float getAttackCooldownProgressPerTick(LivingEntity entity) {
-      return 5.0F;
+      if (entity == null || !entity.getAttributes().hasAttribute(Attributes.ATTACK_SPEED)) {
+         return 5.0F;
+      }
+
+      double attackSpeed = entity.getAttributeValue(Attributes.ATTACK_SPEED);
+      return attackSpeed <= 0.0 ? 5.0F : (float)(1.0 / attackSpeed * 20.0);
    }
 
    public float getAttackCooldownProgress(LivingEntity entity, float baseTime) {
       return Mth.clamp((((LivingEntityMixin)entity).getLastAttackedTicks() + baseTime) / this.getAttackCooldownProgressPerTick(entity), 0.0F, 1.0F);
    }
 
+   /**
+    * Hit every target in range, on the weapon's cooldown.
+    *
+    * <p>This used to swing at every target on every tick with no cooldown check at all — twenty
+    * attacks a second per target, each landing at roughly a fifth of the weapon's damage because the
+    * charge never got a chance to build. The damage was not the problem; knockback applies on every
+    * swing, so anything it engaged was stunlocked and never got to act. That is a speedrunning-bot
+    * affordance, not something a companion should be capable of.
+    *
+    * <p>What still separates {@code FASTEST} from {@code DELAY} is breadth, not rate: this hits
+    * everything in range where {@code DELAY} picks only the nearest. Reachable only by setting the
+    * strategy deliberately — the default is {@code SMART} ({@code Settings#forceFieldStrategy}).
+    */
    private void performFastestAttack(PlayerEngineController mod) {
       if (!mod.getFoodChain().needsToEat()
          && !mod.getMLGBucketChain().isFalling(mod)
          && mod.getMLGBucketChain().doneMLG()
          && !mod.getMLGBucketChain().isChorusFruiting()) {
+         if (mod.getPlayer() == null || this.getAttackCooldownProgress(mod.getPlayer(), 0.0F) < 1.0F) {
+            return;
+         }
+
          for (Entity entity : this.targets) {
             this.attack(mod, entity);
          }
@@ -163,6 +216,14 @@ public class KillAura {
    }
 
    private void attack(PlayerEngineController mod, Entity entity, boolean equipWeapon) {
+      // Stand down for the length of a mouthful. Eating holds the food in hand for 32 ticks, so
+      // swinging through it re-equips a weapon and cancels the bite before it ever completes — the
+      // reason a companion could sit on a full pack and still starve. A second of not attacking is the
+      // same trade a player makes when they eat mid-fight, and the aura picks straight back up after.
+      if (mod.getFoodChain() != null && mod.getFoodChain().isTryingToEat()) {
+         return;
+      }
+
       if (entity != null) {
          if (!(entity instanceof LargeFireball)) {
             double xAim = entity.getX();
@@ -194,30 +255,15 @@ public class KillAura {
       }
    }
 
+   /** Block a melee attacker. Commits only if the shield went up — see {@code MobDefenseChain}'s twin. */
    public void startShielding(PlayerEngineController mod) {
+      if (!ShieldHelper.raiseShield(mod)) {
+         return;
+      }
       this.shielding = true;
       ((PathingBehavior)mod.getBaritone().getPathingBehavior()).requestPause();
       mod.getExtraBaritoneSettings().setInteractionPaused(true);
-      if (!mod.getPlayer().isBlocking()) {
-         ItemStack handItem = StorageHelper.getItemStackInSlot(PlayerSlot.getEquipSlot(mod.getInventory()));
-         if (ItemVer.isFood(handItem)) {
-            List<ItemStack> spaceSlots = mod.getItemStorage().getItemStacksPlayerInventory(false);
-            if (!spaceSlots.isEmpty()) {
-               for (ItemStack spaceSlot : spaceSlots) {
-                  if (spaceSlot.isEmpty()) {
-                     mod.getSlotHandler().clickSlot(PlayerSlot.getEquipSlot(mod.getInventory()), 0, ClickType.QUICK_MOVE);
-                     return;
-                  }
-               }
-            }
-
-            Optional<Slot> garbage = StorageHelper.getGarbageSlot(mod);
-            garbage.ifPresent(slot -> mod.getSlotHandler().forceEquipItem(StorageHelper.getItemStackInSlot(slot).getItem()));
-         }
-      }
-
       mod.getInputControls().hold(Input.SNEAK);
-      mod.getInputControls().hold(Input.CLICK_RIGHT);
    }
 
    public void stopShielding(PlayerEngineController mod) {
@@ -232,7 +278,7 @@ public class KillAura {
          }
 
          mod.getInputControls().release(Input.SNEAK);
-         mod.getInputControls().release(Input.CLICK_RIGHT);
+         ShieldHelper.lowerShield(mod);
          mod.getInputControls().release(Input.JUMP);
          mod.getExtraBaritoneSettings().setInteractionPaused(false);
          this.shielding = false;

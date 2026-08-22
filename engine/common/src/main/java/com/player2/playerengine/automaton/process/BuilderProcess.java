@@ -43,6 +43,7 @@ import com.player2.playerengine.automaton.pathing.movement.Movement;
 import com.player2.playerengine.automaton.pathing.movement.MovementHelper;
 import com.player2.playerengine.automaton.utils.BaritoneProcessHelper;
 import com.player2.playerengine.automaton.utils.BlockStateInterface;
+import com.player2.playerengine.automaton.utils.EntityPlaceContext;
 import com.player2.playerengine.automaton.utils.PathingCommandContext;
 import com.player2.playerengine.automaton.utils.schematic.MapArtSchematic;
 import com.player2.playerengine.automaton.utils.schematic.SchematicSystem;
@@ -308,12 +309,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                float originalPitch = var12.getXRot();
                var12.setYRot(rot.getYaw());
                var12.setXRot(rot.getPitch());
-               BlockPlaceContext meme = new BlockPlaceContext(
-                  new UseOnContext(this.ctx.world(), null, InteractionHand.MAIN_HAND, stack, (BlockHitResult)result) {
-                     public boolean isSecondaryUseActive() {
-                        return false;
-                     }
-                  }
+               // The yaw/pitch set either side of this call only mean anything now that the context
+               // reads the entity: with the player nulled out, this was rotating the bot to influence
+               // a decision that could not see it.
+               BlockPlaceContext meme = new EntityPlaceContext(
+                  var12, this.ctx.world(), InteractionHand.MAIN_HAND, stack, (BlockHitResult)result
                );
                BlockState wouldBePlaced = ((BlockItem)stack.getItem()).getBlock().getStateForPlacement(meme);
                var12.setYRot(originalYaw);
@@ -733,23 +733,20 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
       for (int i = 0; i < size; i++) {
          ItemStack stack = (ItemStack)((IInventoryProvider)this.ctx.entity()).getLivingInventory().main.get(i);
          if (!stack.isEmpty() && stack.getItem() instanceof BlockItem) {
+            // Entity-backed: a null player here crashed the server outright the first time the bot
+            // held an orientable block (52 oak stairs), because StairBlock asks the placer which way
+            // it is looking. See EntityPlaceContext.
             BlockState placementState = ((BlockItem)stack.getItem())
                .getBlock()
                .getStateForPlacement(
-                  new BlockPlaceContext(
-                     new UseOnContext(
-                        this.ctx.world(),
-                        null,
-                        InteractionHand.MAIN_HAND,
-                        stack,
-                        new BlockHitResult(
-                           new Vec3(this.ctx.entity().getX(), this.ctx.entity().getY(), this.ctx.entity().getZ()), Direction.UP, this.ctx.feetPos(), false
-                        )
-                     ) {
-                        public boolean isSecondaryUseActive() {
-                           return false;
-                        }
-                     }
+                  new EntityPlaceContext(
+                     this.ctx.entity(),
+                     this.ctx.world(),
+                     InteractionHand.MAIN_HAND,
+                     stack,
+                     new BlockHitResult(
+                        new Vec3(this.ctx.entity().getX(), this.ctx.entity().getY(), this.ctx.entity().getZ()), Direction.UP, this.ctx.feetPos(), false
+                     )
                   )
                );
             if (placementState != null) {

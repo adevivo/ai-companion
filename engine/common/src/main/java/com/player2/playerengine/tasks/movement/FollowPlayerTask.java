@@ -21,8 +21,23 @@ public class FollowPlayerTask extends Task {
       this(playerName, 2.0);
    }
 
+   /**
+    * When the task started, so a player who is never found becomes a report rather than silence.
+    *
+    * <p>Standing in "doing nothing until player loads" is indistinguishable from following, and the
+    * agent will happily say it is following while it happens — observed with a name whose case did
+    * not match. The case matching is fixed at the tracker, but a wrong name is still possible and
+    * must not fail quietly.
+    */
+   private long startedAtNanos = 0L;
+   private boolean reportedMissing = false;
+
+   private static final long MISSING_PLAYER_GRACE_NANOS = 10_000_000_000L;
+
    @Override
    protected void onStart() {
+      this.startedAtNanos = System.nanoTime();
+      this.reportedMissing = false;
    }
 
    @Override
@@ -31,6 +46,15 @@ public class FollowPlayerTask extends Task {
       Optional<Vec3> lastPos = mod.getEntityTracker().getPlayerMostRecentPosition(this.playerName);
       if (lastPos.isEmpty()) {
          this.setDebugState("No player found/detected. Doing nothing until player loads into render distance.");
+         if (!this.reportedMissing && System.nanoTime() - this.startedAtNanos > MISSING_PLAYER_GRACE_NANOS) {
+            this.reportedMissing = true;
+            String known = String.join(", ", mod.getEntityTracker().getAllLoadedPlayerUsernames());
+            mod.logAgentInfo(String.format(
+                  "Cannot follow \"%s\" — no player by that name is anywhere near. %s Do not claim to be "
+                        + "following them; say you cannot find them and ask which player you should follow.",
+                  this.playerName,
+                  known.isBlank() ? "No players are loaded at all." : "Players nearby: " + known + "."));
+         }
          return null;
       } else {
          Vec3 target = lastPos.get();

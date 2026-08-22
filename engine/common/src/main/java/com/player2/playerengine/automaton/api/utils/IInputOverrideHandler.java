@@ -19,6 +19,8 @@ package com.player2.playerengine.automaton.api.utils;
 
 import com.player2.playerengine.automaton.api.behavior.IBehavior;
 import com.player2.playerengine.automaton.api.utils.input.Input;
+import net.minecraft.core.BlockPos;
+import org.jetbrains.annotations.Nullable;
 
 public interface IInputOverrideHandler extends IBehavior {
    boolean isInputForcedDown(Input var1);
@@ -26,4 +28,8 @@ public interface IInputOverrideHandler extends IBehavior {
    void setInputForceState(Input var1, boolean var2);
 
    void clearAllKeys();
+
+   /** The block this entity is currently mining, or {@code null} when it is not mining. */
+   @Nullable
+   BlockPos getBreakingBlockPos();
 }

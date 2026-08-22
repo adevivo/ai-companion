@@ -4,7 +4,12 @@ import com.player2.playerengine.commands.AttackPlayerOrMobCommand;
 import com.player2.playerengine.commands.BodyLanguageCommand;
 import com.player2.playerengine.commands.BuildStructureCommand;
 import com.player2.playerengine.commands.DepositCommand;
+import com.player2.playerengine.commands.DigCommand;
 import com.player2.playerengine.commands.EquipCommand;
+import com.player2.playerengine.commands.FarmCommand;
+import com.player2.playerengine.commands.FishCommand;
+import com.player2.playerengine.commands.FollowCommand;
+import com.player2.playerengine.commands.EatCommand;
 import com.player2.playerengine.commands.FarmCommand;
 import com.player2.playerengine.commands.FishCommand;
 import com.player2.playerengine.commands.FollowCommand;
@@ -20,6 +25,7 @@ import com.player2.playerengine.commands.MeatCommand;
 import com.player2.playerengine.commands.ReloadSettingsCommand;
 import com.player2.playerengine.commands.ResetMemoryCommand;
 import com.player2.playerengine.commands.SetAIBridgeEnabledCommand;
+import com.player2.playerengine.commands.StandGroundCommand;
 import com.player2.playerengine.commands.StopCommand;
 import com.player2.playerengine.commands.random.ScanCommand;
 import com.player2.playerengine.commands.base.CommandException;
@@ -34,11 +40,13 @@ public class PlayerEngineCommands {
                   new BodyLanguageCommand(),
                   new DepositCommand(),
                   new GotoCommand(),
+                  new DigCommand(),
                   new IdleCommand(),
                   new HeroCommand(),
                   new LocateStructureCommand(),
                   new StopCommand(),
                   new FoodCommand(),
+                  new EatCommand(),
                   new MeatCommand(),
                   new ReloadSettingsCommand(),
                   new ResetMemoryCommand(),
@@ -49,6 +57,7 @@ public class PlayerEngineCommands {
                   new AttackPlayerOrMobCommand(),
                   new SetAIBridgeEnabledCommand(),
                   new FarmCommand(),
-                  new FishCommand());
+                  new FishCommand(),
+                  new StandGroundCommand());
    }
 }

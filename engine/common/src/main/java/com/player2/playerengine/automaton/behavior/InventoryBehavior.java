@@ -20,6 +20,7 @@ package com.player2.playerengine.automaton.behavior;
 import com.player2.playerengine.automaton.Baritone;
 import com.player2.playerengine.automaton.api.entity.IInventoryProvider;
 import com.player2.playerengine.automaton.api.entity.LivingEntityInventory;
+import com.player2.playerengine.automaton.utils.EntityPlaceContext;
 import com.player2.playerengine.automaton.utils.ToolSet;
 import java.util.ArrayList;
 import java.util.OptionalInt;
@@ -153,23 +154,19 @@ public final class InventoryBehavior extends Behavior {
                   ((BlockItem)stack.getItem())
                      .getBlock()
                      .getStateForPlacement(
-                        new BlockPlaceContext(
-                           new UseOnContext(
-                              this.ctx.world(),
-                              null,
-                              InteractionHand.MAIN_HAND,
-                              stack,
-                              new BlockHitResult(
-                                 new Vec3(this.ctx.entity().getX(), this.ctx.entity().getY(), this.ctx.entity().getZ()),
-                                 Direction.UP,
-                                 this.ctx.feetPos(),
-                                 false
-                              )
-                           ) {
-                              public boolean isSecondaryUseActive() {
-                                 return false;
-                              }
-                           }
+                        // Entity-backed; a null player here would NPE on any orientable block, the
+                        // same way it did in BuilderProcess.approxPlaceable.
+                        new EntityPlaceContext(
+                           this.ctx.entity(),
+                           this.ctx.world(),
+                           InteractionHand.MAIN_HAND,
+                           stack,
+                           new BlockHitResult(
+                              new Vec3(this.ctx.entity().getX(), this.ctx.entity().getY(), this.ctx.entity().getZ()),
+                              Direction.UP,
+                              this.ctx.feetPos(),
+                              false
+                           )
                         )
                      )
                )
@@ -210,6 +207,43 @@ public final class InventoryBehavior extends Behavior {
 
                   return true;
                }
+            }
+         }
+
+         return false;
+      }
+   }
+
+   /**
+    * Like {@link #throwaway}, but also searches the 27 backpack slots, swapping a match into the
+    * hotbar when it finds one there.
+    *
+    * <p>{@code throwaway} only ever looks at slots 0-8. That is the right question for "can I
+    * pillar right now", and the wrong one for "do I own any seeds": a companion carrying 418
+    * wheat_seeds in its backpack reported {@code hasSeeds=false} and replanted nothing for a whole
+    * session. Widening the search alone would not fix it — using an item requires it in hand — so a
+    * backpack match is swapped forward via {@link LivingEntityInventory#swapSlotWithHotbar}.
+    *
+    * <p>Deliberately a separate method rather than a widening of {@code throwaway}: that one also
+    * backs baritone's pillaring and {@link #selectThrowawayForLocation}, and {@code
+    * BuildStructureTask}'s protected-item guard rails are tuned against its hotbar-only reach.
+    * Nothing outside farming should change behaviour because of this fix.
+    */
+   public boolean selectFromWholeInventory(boolean select, Predicate<? super ItemStack> desired) {
+      if (this.throwaway(select, desired)) {
+         return true;
+      } else if (!(this.ctx.entity() instanceof IInventoryProvider p)) {
+         return false;
+      } else {
+         LivingEntityInventory inv = p.getLivingInventory();
+
+         for (int i = 9; i < inv.main.size(); i++) {
+            if (desired.test((ItemStack)inv.main.get(i))) {
+               if (select) {
+                  inv.swapSlotWithHotbar(i);
+               }
+
+               return true;
             }
          }
 

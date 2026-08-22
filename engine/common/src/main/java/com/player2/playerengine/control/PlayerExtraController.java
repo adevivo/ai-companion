@@ -1,9 +1,6 @@
 package com.player2.playerengine.control;
 
 import com.player2.playerengine.PlayerEngineController;
-import com.player2.playerengine.eventbus.EventBus;
-import com.player2.playerengine.eventbus.events.BlockBreakingCancelEvent;
-import com.player2.playerengine.eventbus.events.BlockBreakingEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
@@ -11,28 +8,31 @@ import net.minecraft.world.entity.Entity;
 
 public class PlayerExtraController {
    private final PlayerEngineController mod;
-   private BlockPos blockBreakPos;
 
    public PlayerExtraController(PlayerEngineController mod) {
       this.mod = mod;
-      EventBus.subscribe(BlockBreakingEvent.class, evt -> this.onBlockBreak(evt.blockPos));
-      EventBus.subscribe(BlockBreakingCancelEvent.class, evt -> this.onBlockStopBreaking());
    }
 
-   private void onBlockBreak(BlockPos pos) {
-      this.blockBreakPos = pos;
-   }
-
-   private void onBlockStopBreaking() {
-      this.blockBreakPos = null;
-   }
-
+   /**
+    * Ask the movement layer what this companion is mining, rather than tracking it here.
+    *
+    * <p>This used to be a field fed by a {@code BlockBreakingEvent}/{@code BlockBreakingCancelEvent}
+    * pair, and it was wrong twice over. The events were published from a mixin on
+    * {@code MultiPlayerGameMode} — the <em>human client's</em> mining — which a server-side companion
+    * never goes through, so the position belonged to the owner, not the companion. And the cancel
+    * event fired exactly once per game process (its guard decremented a counter that started at zero
+    * and was never reset), so after the owner's first block break the state never cleared again.
+    *
+    * <p>The combination left {@link #isBreakingBlock()} stuck true for the rest of the session, which
+    * ran {@code PlayerInteractionFixChain}'s auto-tool swap every tick against a stale position — 822
+    * equip swaps in an eight-minute session, fighting whatever the running task had in hand.
+    */
    public BlockPos getBreakingBlockPos() {
-      return this.blockBreakPos;
+      return this.mod.getBaritone().getInputOverrideHandler().getBreakingBlockPos();
    }
 
    public boolean isBreakingBlock() {
-      return this.blockBreakPos != null;
+      return this.getBreakingBlockPos() != null;
    }
 
    public boolean inRange(Entity entity) {

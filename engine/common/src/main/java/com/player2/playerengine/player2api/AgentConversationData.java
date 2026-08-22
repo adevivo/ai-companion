@@ -123,7 +123,7 @@ public class AgentConversationData {
         }
         // Wait for this companion's own sentence to finish before composing the next one. Only its
         // own: another companion talking is no reason for this one to stop thinking.
-        if (adris.altoclef.player2api.manager.TTSManager.isSpeaking(getUUID())) {
+        if (com.player2.playerengine.player2api.manager.TTSManager.isSpeaking(getUUID())) {
             return 0;
         }
         long sinceLast = System.nanoTime() - lastProcessTime;
@@ -204,7 +204,7 @@ public class AgentConversationData {
 
         // Whose key pays and whose memories are read — see BrainTransport. Local today; the seam is
         // what lets that become the owning client without touching this loop.
-        final adris.altoclef.player2api.brain.BrainTransport brain = mod.getBrainTransport();
+        final com.player2.playerengine.player2api.brain.BrainTransport brain = mod.getBrainTransport();
         java.util.List<String> memories = brain.recall(brainCtx);
 
         // Say out loud when memory has stopped working. Every failure in that path degrades to "no
