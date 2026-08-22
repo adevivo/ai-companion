@@ -43,7 +43,15 @@ with its own model.
   what you actually said.
 - **It says so in chat when memory breaks.** Every failure degrades to "no memories", so an outage
   was invisible and left the companion denying facts it held. Five distinct problems now report once
-  each.
+  each, and every turn memory declines to act on now leaves a reason in the log — a refused turn used
+  to log at DEBUG against a server running at INFO, so it left no trace at any prefix and read as
+  "ran and found nothing", which wants the opposite fix.
+- **A pet is not pinned to one save.** Possessions belong to a world — a pickaxe, a stack of bones —
+  so `owns` is world-scoped, and the model was reaching for it to describe a dog. Pets and people are
+  now described with `related_to` instead, which travels with you.
+- ⚠️ **The world id was never written to disk.** Registering it did not mark it dirty, so it was
+  minted fresh on every load and no file ever appeared. Memories attached to the previous id become
+  unreachable — if you ran an earlier 0.3.0 build, world-scoped memories from it may not come back.
 
 ### Setting memory up
 
@@ -73,6 +81,10 @@ llama.cpp is the one that cannot do the embedder's half — one model per proces
 prompt; your client recalls from *its* corpus, builds the prompt, calls *your* model with *your* key,
 and returns only what the companion says and does. Your memories never reach the server and the
 server's token bill is untouched. A vanilla client is never asked, and one that goes quiet times out.
+The server also stops loading corpora it will never read: its copy freezes the moment the switch is
+flipped while the client's moves on, so answering from it later reads as "it forgot the last month"
+rather than "it is reading the wrong file". A player whose client cannot think still gets a store,
+loaded on demand.
 
 > ⚠️ **Commands coming back from a client are not yet validated.** This is why it defaults off. Don't
 > enable it on a server whose clients you don't control.
@@ -189,6 +201,15 @@ only those that can be asked for JSON. Every reply must be a JSON object, and a 
 2026-08-22: 85% of all 421 models advertise `response_format` and only **7 of the 18 free ones** do.
 Keep the `:free` suffix or you are billed.
 
+**Qwen2.5-14B-Instruct-Q4_K_M is the recommended local default.** It was carried as a floor and
+described as "not very capable" at strict command output; extended testing says it holds the format
+reliably on consumer hardware. Instruction-following matters more than parameter count here. The
+llama.cpp launch flags come down with it — `-c 262144` to `-c 8192`, and `--mlock` dropped, because a
+256k context reserves gigabytes of KV cache before generating a token and the companion sends small
+situation packets. The readme gains a section on the failure that follows from getting this wrong:
+a local model and Minecraft compete for the same VRAM, shader packs make it far likelier, and what
+goes down is usually the whole machine.
+
 **`llm.maxTokens` now ships at 2000.** It was 1000 — also the floor the mod warns below — so the
 default had no headroom, and both ways of exhausting it turned up in one morning: a reasoning model
 spends the budget on hidden thinking before writing a word, and a small model that fails to emit a
@@ -208,7 +229,9 @@ Two diagnostics that used to mislead:
   repeated character.
 - **The client's reload line reported the wrong brain**, printing `brain=server` on the machine
   running every turn, because it read the local `llm.clientBrain` — a wish on a dedicated server,
-  where the server's copy decides. It now reports what has actually been observed.
+  where the server's copy decides. It now reports what has actually been observed. The server names
+  its brain too, on the `config loaded` line that prints at boot rather than only on reload — a
+  server that boots and is never reloaded, which is every server, used to print nothing.
 
 ### Building
 
@@ -233,6 +256,9 @@ Two diagnostics that used to mislead:
 - **Your companion can wear a real face.** A roster entry takes `skin.username` as well as
   `skin.file`. The name resolves once on the server through the same path player heads use and rides
   to clients as tracked data, so nothing needs installing per machine. An explicit `skin.file` wins.
+- **`behavior.cannedFallback` is gone.** It was in the example config with three sample values and
+  had never had a single line of Java reading it — anyone who set it was editing a dead string. A
+  dead brain wants a diagnostic, not a persona line saying everything is fine.
 - **`/companion remember` stopped writing to the wrong machine.** With `clientBrain` on,
   conversational memories went to your client while `remember` wrote to the server — split across two
   machines, and asking about one recalled nothing, silently.
