@@ -348,6 +348,10 @@ companion before committing to a provider. Two things specific to it:
 
 - **Keep the `:free` suffix.** `z-ai/glm-5.2` and `z-ai/glm-5.2:free` are different model ids and
   only one of them is free. Dropping it is a billing mistake, not an error message.
+- **Free models are capped at 50 requests per day** without credits (`X-RateLimit-Limit: 50`,
+  resetting at 00:00 UTC), and adding 10 credits raises that to 1000. A companion spends one request
+  per turn, plus another per turn if `memory.extractionEnabled` is on — so 50 is roughly twenty
+  minutes of conversation. Measured 2026-08-22, when a session ran dry mid-build.
 - **Most free models cannot be asked for JSON, and that breaks the companion.** Every reply has to be
   a JSON object; a model that ignores `response_format` answers in prose, so no command runs and the
   companion talks without acting. As of 2026-08-22, 85% of all models on OpenRouter advertise

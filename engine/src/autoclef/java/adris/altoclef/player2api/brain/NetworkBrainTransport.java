@@ -67,6 +67,51 @@ import org.apache.logging.log4j.Logger;
  * latch that prevents it.
  */
 public final class NetworkBrainTransport implements BrainTransport {
+
+    /**
+     * What the owner should actually do about their client's failure.
+     *
+     * <p>⚠️ This used to be one fixed sentence — "could not reach your model. Check llm.endpoint"
+     * — sent whatever had gone wrong. Observed 2026-08-22: a companion hit OpenRouter's free
+     * daily cap ({@code HTTP 429 … "free-models-per-day"}, {@code X-RateLimit-Limit: 50}) and its
+     * owner was told to go and check an endpoint that was working perfectly. Naming the wrong
+     * cause is worse than naming none: it sends someone to debug the one thing that is fine.
+     *
+     * <p>The client already sends its exception text back, so the answer is available and was
+     * simply being dropped on the way to the player.
+     */
+    static String adviseOn(String clientError) {
+        String e = clientError == null ? "" : clientError.toLowerCase(java.util.Locale.ROOT);
+        if (e.contains("429") || e.contains("rate limit") || e.contains("too many requests")) {
+            return "your model provider is rate-limiting you. Free tiers cap requests per DAY — "
+                    + "OpenRouter's is 50 without credits — and a companion spends one per turn, "
+                    + "plus another per turn if memory extraction is on. Wait for the reset, add "
+                    + "credits, or point llm.endpoint at a local model.";
+        }
+        if (e.contains("401") || e.contains("403") || e.contains("unauthorized")
+                || e.contains("invalid api key") || e.contains("no auth")) {
+            return "your model provider refused the key. Check llm.apiKey in your own config, or "
+                    + "the AICOMPANION_LLM_APIKEY environment variable if you set it there.";
+        }
+        if (e.contains("402") || e.contains("insufficient") || e.contains("credit")
+                || e.contains("quota") || e.contains("billing")) {
+            return "your model provider says the account is out of credit. Top it up, or point "
+                    + "llm.endpoint at a local model.";
+        }
+        if (e.contains("connection refused") || e.contains("unknownhost")
+                || e.contains("no route to host") || e.contains("timed out")
+                || e.contains("timeout") || e.contains("connect")) {
+            return "nothing answered at your endpoint. Check llm.endpoint in your own config and "
+                    + "that the model server is running and reachable from your machine.";
+        }
+        if (e.isBlank()) {
+            return "your client did not say why. Check llm.endpoint in your own config.";
+        }
+        // Say what happened rather than guessing at it — an unclassified failure is still a
+        // better clue in the player's own words than a wrong diagnosis.
+        return "your model returned an error — " + clientError;
+    }
+
     private static final Logger LOGGER = LogManager.getLogger();
 
     /** Players whose client announced it can think. Cleared when they disconnect. */
@@ -269,7 +314,7 @@ public final class NetworkBrainTransport implements BrainTransport {
             cancelTimeout();
             if (error != null && !error.isBlank()) {
                 LOGGER.warn("Brain: the client could not think ({}).", error);
-                runOnServer();
+                runOnServer(error);
                 return;
             }
             try {
@@ -281,7 +326,7 @@ public final class NetworkBrainTransport implements BrainTransport {
                 // the honest response rather than feeding garbage into the conversation.
                 LOGGER.warn("Brain: unparseable result from the client; thinking on the server "
                         + "instead. Raw was <<{}>>", replyJson, e);
-                runOnServer();
+                runOnServer(null);
             }
         }
 
@@ -292,7 +337,7 @@ public final class NetworkBrainTransport implements BrainTransport {
             }
             cancelTimeout();
             LOGGER.warn("Brain: {}.", why);
-            runOnServer();
+            runOnServer(null);
         }
 
         /**
@@ -308,7 +353,7 @@ public final class NetworkBrainTransport implements BrainTransport {
          * directly, in words they can act on, and the turn is completed as an error so the
          * conversation does not sit in {@code isProcessing} for ever.
          */
-        private void runOnServer() {
+        private void runOnServer(String clientError) {
             if (!ServerPolicy.serverAnswersWhenClientFails) {
                 String who = ctx.companionName() == null || ctx.companionName().isBlank()
                         ? "Your companion" : ctx.companionName();
@@ -316,8 +361,7 @@ public final class NetworkBrainTransport implements BrainTransport {
                         + "guests (server.serverAnswersWhenClientFails=false). Turn abandoned.",
                         who, owner);
                 try {
-                    transport.mod.tellOwner(who + " could not reach your model. Check llm.endpoint "
-                            + "in your own config — this server does not think for you.", true);
+                    transport.mod.tellOwner(who + " could not think: " + adviseOn(clientError), true);
                 } catch (Throwable ignored) {
                     // Owner offline, or mid-teardown. The error below still frees the conversation.
                 }

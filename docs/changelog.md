@@ -5,6 +5,74 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.3.1 — A silent turn no longer crashes the world
+
+Bundles PlayerEngine 1.1.18. One bug, in two places, and it is the kind worth shipping on its own.
+
+### A companion that acted without speaking took the server down
+
+A build issues dozens of turns that carry a command and no chat line — the companion is working, not
+talking. The reply for one of those has a `command` and no `message`, and the guard that decides
+whether to record it is an OR, so it recorded the missing message as a null. Gson does not skip a null
+here: `addProperty("content", null)` stores a JSON null, and reading one as text throws.
+
+Nothing failed at that point. The next turn logged the conversation history, `toString()` read that
+stored null, and `UnsupportedOperationException: JsonNull` came out of a logging call **inside the
+server tick loop** — so the world went down on a turn where nothing was wrong, because of one stored
+on a turn that also looked fine. Observed 2026-08-22 in singleplayer, immediately after
+`Ran out of birch_planks partway through building`.
+
+Fixed in three places, because any one of them alone would have prevented it and a future writer that
+forgets should not be able to bring it back:
+
+- A command-only turn now stores an empty message. A companion that acted without speaking is an
+  ordinary turn, not a missing one, and the role stays in the transcript.
+- No adder can write a JSON null into history at all. Besides crashing readers, it goes out on the
+  wire as `"content": null`, which some OpenAI-compatible providers reject.
+- `toString()` tolerates one anyway. It is a logging helper on the server thread; a dump of the
+  history is never worth a crash.
+
+### And the same null, already saved, stopped a companion from starting at all
+
+The record does reach disk — conversation history is a `.txt` transcript, one JSON object per line —
+so a companion that took a command-only turn under 0.3.0 has a
+`{"role":"assistant","content":null}` line in its file. Loading it read that null as text and threw,
+and because the throw escapes the brain's constructor the companion never finished starting: it
+retried on the next tick, and the next, at one error per second indefinitely. Observed 2026-08-22 as
+`Luna's AI threw during tick; skipping this update`, repeating for as long as the world was open,
+with that companion unable to answer.
+
+The loader now repairs the line rather than choking on it — that turn was a companion acting without
+speaking, and an empty message is what it always meant, so discarding the line would quietly rewrite
+the transcript. **Your existing history files heal themselves on the next load; there is nothing to
+delete.**
+
+A corrupt transcript also no longer costs more than a transcript. The loader caught `IOException`
+only, so anything else escaped and took the companion with it; it now catches everything, says which
+file and why, and starts with an empty history. Losing a transcript is recoverable — a companion that
+cannot exist is not.
+
+Eight regression tests cover both halves, verified to fail against the old code.
+
+### A rate limit is no longer reported as a broken endpoint
+
+Every client-brain failure sent the owner the same sentence — *"could not reach your model. Check
+llm.endpoint in your own config"* — whatever had actually gone wrong. A companion that hit
+OpenRouter's free daily cap therefore told its owner to go and debug an endpoint that was working
+perfectly. Naming the wrong cause is worse than naming none: it sends someone to fix the one thing
+that is fine.
+
+The client already sends its error text back; it was being dropped on the way to the player. Rate
+limits, refused keys, exhausted credit and unreachable endpoints now each say what they are and what
+to do, and an unrecognised failure is quoted rather than guessed at.
+
+⚠️ **OpenRouter's free models allow 50 requests per day** without credits, resetting at 00:00 UTC;
+10 credits raises it to 1000. A companion spends one per turn and a second per turn when memory
+extraction is on, so 50 is about twenty minutes of conversation. The Model tooltip and the readme now
+say so.
+
+---
+
 ## 0.3.0 — It remembers, it thinks on your machine, and it works for everyone on the server
 
 Bundles PlayerEngine 1.1.16. Self-contained jar as always — don't install a standalone engine

@@ -3,6 +3,7 @@ package adris.altoclef.player2api;
 import adris.altoclef.player2api.status.ObjectStatus;
 import adris.altoclef.player2api.utils.Utils;
 import baritone.utils.DirUtil;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -209,13 +210,7 @@ public class ConversationHistory {
          try {
             String line;
             while ((line = reader.readLine()) != null) {
-               JsonObject obj = Utils.parseCleanedJson(line);
-               if (obj.has("content")) {
-                  String content = obj.get("content").getAsString();
-                  if (content.length() > 500) {
-                     obj.addProperty("content", content.substring(0, 500));
-                  }
-               }
+               JsonObject obj = repairLoadedLine(Utils.parseCleanedJson(line));
 
                loaded.add(obj);
                if (loaded.size() > 64) {
@@ -239,27 +234,77 @@ public class ConversationHistory {
 
             throw var7;
          }
-      } catch (IOException var8) {
-         var8.printStackTrace();
+      } catch (Throwable var8) {
+         // Throwable, not IOException. A corrupt or half-written history must cost the history and
+         // nothing else — this runs inside the AltoClefController constructor, so anything escaping
+         // here means the brain never finishes building and the entity retries every tick instead of
+         // simply starting fresh. Losing a transcript is recoverable; a companion that cannot exist
+         // is not.
+         LOGGER.warn("Could not read conversation history from {} ({}) — starting with an empty "
+               + "transcript rather than refusing to start.", this.historyFile, var8.toString());
          this.conversationHistory.clear();
       }
+   }
+
+   /**
+    * Make one line off disk safe to keep, in place.
+    *
+    * <p>⚠️ {@code has("content")} is true for a stored null and {@code getAsString()} throws on it. A
+    * single {@code {"role":"assistant","content":null}} line, written by a build before
+    * {@code safeContent} existed, made this throw on <b>every</b> load — and the throw escapes
+    * {@code initBrain}, so the companion never finished starting and retried once per tick for ever.
+    * Observed 2026-08-22: {@code Luna's AI threw during tick} at one line per second, indefinitely.
+    *
+    * <p>Repaired rather than dropped. That turn was a companion acting without speaking, and an empty
+    * message is what it always meant; discarding the line would silently rewrite the transcript.
+    *
+    * <p>Extracted so it can be tested without a Fabric config directory — the loader around it cannot.
+    */
+   static JsonObject repairLoadedLine(JsonObject obj) {
+      if (obj == null) {
+         return null;
+      }
+      String content = str(obj, "content", null);
+      if (content == null) {
+         obj.addProperty("content", "");
+      } else if (content.length() > 500) {
+         obj.addProperty("content", content.substring(0, 500));
+      }
+      return obj;
+   }
+
+   /**
+    * Content that is safe to store, because a null one is not.
+    *
+    * <p>⚠️ {@code JsonObject.addProperty(key, (String) null)} does not skip the key — it writes
+    * {@link com.google.gson.JsonNull}, and {@code JsonNull.getAsString()} throws. So a single null
+    * reply poisons the history: it is stored on one turn and thrown by whoever reads it on a LATER
+    * turn, which is how this presented — a crash in the server tick loop with nothing wrong in the
+    * turn that crashed. It also goes out on the wire as {@code "content": null}, which some
+    * OpenAI-compatible providers reject outright.
+    *
+    * <p>Empty rather than dropped: the role still belongs in the transcript. A command-only turn is
+    * a companion that acted without speaking, not a companion that said nothing at all.
+    */
+   private static String safeContent(String text) {
+      return text == null ? "" : text;
    }
 
    public void addUserMessage(String userText, Player2APIService player2apiService) {
       JsonObject objectToAdd = new JsonObject();
       objectToAdd.addProperty("role", "user");
-      objectToAdd.addProperty("content", userText);
+      objectToAdd.addProperty("content", safeContent(userText));
       this.addHistory(objectToAdd, false, player2apiService);
    }
 
    public void setBaseSystemPrompt(String newPrompt) {
       if (!this.conversationHistory.isEmpty()
             && "system".equals(this.conversationHistory.get(0).get("role").getAsString())) {
-         this.conversationHistory.get(0).addProperty("content", newPrompt);
+         this.conversationHistory.get(0).addProperty("content", safeContent(newPrompt));
       } else {
          JsonObject systemMessage = new JsonObject();
          systemMessage.addProperty("role", "system");
-         systemMessage.addProperty("content", newPrompt);
+         systemMessage.addProperty("content", safeContent(newPrompt));
          this.conversationHistory.add(0, systemMessage);
       }
    }
@@ -267,14 +312,14 @@ public class ConversationHistory {
    public void addSystemMessage(String systemText, Player2APIService player2apiService) {
       JsonObject objectToAdd = new JsonObject();
       objectToAdd.addProperty("role", "system");
-      objectToAdd.addProperty("content", systemText);
+      objectToAdd.addProperty("content", safeContent(systemText));
       this.addHistory(objectToAdd, false, player2apiService);
    }
 
    public void addAssistantMessage(String messageText, Player2APIService player2apiService) {
       JsonObject objectToAdd = new JsonObject();
       objectToAdd.addProperty("role", "assistant");
-      objectToAdd.addProperty("content", messageText);
+      objectToAdd.addProperty("content", safeContent(messageText));
       this.addHistory(objectToAdd, true, player2apiService);
    }
 
@@ -461,13 +506,25 @@ public class ConversationHistory {
       sb.append("ConversationHistory {\n");
 
       for (JsonObject message : this.conversationHistory) {
-         String role = message.has("role") ? message.get("role").getAsString() : "unknown";
-         String content = message.has("content") ? message.get("content").getAsString() : "";
-         sb.append("  [").append(role).append("] ").append(content).append("\n");
+         // has() is true for a key whose value is JsonNull, and getAsString() throws on it — see
+         // safeContent. This runs inside a LOGGER.info on the server thread, so reading it
+         // unsafely turned a diagnostic into "Exception in server tick loop" and took the world
+         // down. A dump of the history is never worth a crash; unreadable parts say so instead.
+         sb.append("  [").append(str(message, "role", "unknown")).append("] ")
+               .append(str(message, "content", "")).append("\n");
       }
 
       sb.append("}");
       return sb.toString();
+   }
+
+   /** A field as text, tolerating absent, null, and non-string values alike. For logging only. */
+   private static String str(JsonObject obj, String key, String fallback) {
+      if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
+         return fallback;
+      }
+      JsonElement value = obj.get(key);
+      return value.isJsonPrimitive() ? value.getAsString() : value.toString();
    }
 
    public void clear() {
