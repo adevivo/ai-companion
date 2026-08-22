@@ -149,6 +149,11 @@ public class AltoClefController {
       ConversationManager.getOrCreateEventQueueData(this);
       this.aiPersistantData = new AIPersistantData(this, character);
       this.player2apiService = new Player2APIService(this, player2GameId);
+
+      // Build the memory index in the background, once per server. Done here rather than at mod
+      // init so a player who never spawns a companion never touches the embedder at all. The call
+      // is idempotent and returns immediately, so running it per companion costs nothing.
+      adris.altoclef.player2api.CompanionMemory.warm(this.getWorld());
    }
 
    public void serverTick() {
@@ -395,14 +400,46 @@ public class AltoClefController {
       }
    }
 
+   /**
+    * Where this companion's thinking happens, and whose key and memories it uses.
+    *
+    * <p>Local for now — the game server does the work, as it always has. The seam exists so that
+    * moving it to the owning client is a change of implementation rather than a change to the
+    * conversation loop. Per companion rather than static, because the whole point of the move is
+    * that two companions with two different owners must not share a credential.
+    */
+   private final adris.altoclef.player2api.brain.BrainTransport brainTransport =
+         new adris.altoclef.player2api.brain.NetworkBrainTransport(
+               this, new adris.altoclef.player2api.brain.LocalBrainTransport(this));
+
+   /** @see adris.altoclef.player2api.brain.BrainTransport */
+   public adris.altoclef.player2api.brain.BrainTransport getBrainTransport() {
+      return this.brainTransport;
+   }
+
    /** Puts a line in the owner's chat, so failures are visible in-game and not only in the log. */
    public void tellOwner(String message) {
+      tellOwner(message, true);
+   }
+
+   /**
+    * As above, for a notice that is not bad news.
+    *
+    * <p>Everything here used to be red, which is right for a failure and wrong for the message that
+    * says the failure is over — a green "memory is back" is the confirmation someone gets after going
+    * away to fix something, and rendering it in the same red as the complaint reads as a second
+    * complaint.
+    *
+    * @param problem whether this reports something broken, rather than something recovered
+    */
+   public void tellOwner(String message, boolean problem) {
       if (message == null || message.isBlank()) {
          return;
       }
       try {
          if (this.owner instanceof ServerPlayer serverOwner) {
-            serverOwner.sendSystemMessage(Component.literal(message).withStyle(ChatFormatting.RED));
+            serverOwner.sendSystemMessage(Component.literal(message)
+                  .withStyle(problem ? ChatFormatting.RED : ChatFormatting.GREEN));
          }
       } catch (Exception e) {
          Debug.logWarning("Could not deliver notice to the owner: " + e);
@@ -467,7 +504,21 @@ public class AltoClefController {
    }
 
    public boolean isOwner(UUID playerToCheck) {
-      return playerToCheck.equals(owner.getUUID());
+      UUID ownerUuid = getOwnerUuid();
+      return ownerUuid != null && ownerUuid.equals(playerToCheck);
+   }
+
+   /**
+    * Who this companion belongs to, or null.
+    *
+    * <p>Null-safe where {@code getOwner().getUUID()} was not, because this is now consulted on the
+    * chat path for every companion on the server: one restored from a save whose owner is offline
+    * has no {@code owner} reference until the brain re-attaches, and asking "is this message yours"
+    * has to answer no rather than throw.
+    */
+   public UUID getOwnerUuid() {
+      Player o = getOwner();
+      return o == null ? null : o.getUUID();
    }
 
    public adris.altoclef.player2api.AIPersistantData getAIPersistantData() {

@@ -15,6 +15,7 @@ import com.google.gson.JsonObject;
 import adris.altoclef.AltoClefController;
 import adris.altoclef.player2api.AgentSideEffects.CommandExecutionStopReason;
 import adris.altoclef.player2api.Event.InfoMessage;
+import adris.altoclef.player2api.brain.BrainTurnContext;
 import adris.altoclef.player2api.status.AgentStatus;
 import adris.altoclef.player2api.status.StatusUtils;
 import adris.altoclef.player2api.status.WorldStatus;
@@ -172,9 +173,51 @@ public class AgentConversationData {
         String agentStatus = AgentStatus.fromMod(this.mod).toString();
         String worldStatus = WorldStatus.fromMod(this.mod).toString();
         String altoClefDebugMsgs = this.altoClefMsgBuffer.dumpAndGetString();
+
+        // Everything the brain needs that is not the prompt, resolved HERE on the server thread
+        // because most of it cannot be read anywhere else: WorldIdentity touches SavedData, and the
+        // owner reference goes stale the moment a player reconnects. onLLMResponse below runs on a
+        // completion thread and must not reach for any of it.
+        String turnWorldId = mod.getOwner() == null ? null : WorldIdentity.idOf(mod.getWorld());
+        final BrainTurnContext brainCtx = new BrainTurnContext(
+                getUUID(),
+                mod.getOwner() == null ? null : mod.getOwner().getUUID(),
+                mod.getAIPersistantData().getCharacter().name(),
+                mod.getOwnerUsername(),
+                // Null on a self-prompted turn, which is what makes both memory paths skip it.
+                this.autonomousTurnInFlight || lastEvent == null ? null : lastEvent.message(),
+                turnWorldId,
+                this.autonomousTurnInFlight,
+                // Ingredients rather than a prompt. The local path ignores these and uses the
+                // assembled history below; a client uses them to assemble its own, which is what
+                // keeps its memories off the wire.
+                mod.getAIPersistantData().rawHistory(),
+                worldStatus,
+                agentStatus,
+                altoClefDebugMsgs,
+                reminderString.orElse(null));
+
+        // Whose key pays and whose memories are read — see BrainTransport. Local today; the seam is
+        // what lets that become the owning client without touching this loop.
+        final adris.altoclef.player2api.brain.BrainTransport brain = mod.getBrainTransport();
+        java.util.List<String> memories = brain.recall(brainCtx);
+
+        // Say out loud when memory has stopped working. Every failure in that path degrades to "no
+        // memories" so that a dead embedder can never break a turn — which also makes an outage
+        // completely invisible from the player's seat, and leaves the companion DENYING knowledge of
+        // something it has stored. That reads as a broken feature rather than a broken endpoint, and
+        // the only place it was ever reported was latest.log.
+        //
+        // Drained here because this is the server thread and the owner is resolved: MemoryHealth is
+        // reported into from pool threads that have neither. At most one line per distinct problem
+        // for as long as it lasts, so this is silent on essentially every turn.
+        for (MemoryHealth.Notice notice : MemoryHealth.drain()) {
+            mod.tellOwner(notice.text(), notice.problem());
+        }
+
         ConversationHistory historyWithWrappedStatus = mod.getAIPersistantData()
                 .getConversationHistoryWrappedWithStatus(worldStatus, agentStatus, altoClefDebugMsgs,
-                        mod.getPlayer2APIService(), reminderString);
+                        mod.getPlayer2APIService(), reminderString, memories);
 
         LOGGER.info("[AICommandBridge/processChatWithAPI]: Calling LLM: history={}",
                 new Object[] { historyWithWrappedStatus.toString() });
@@ -200,6 +243,10 @@ public class AgentConversationData {
                 if (llmMessage != null || command != null) {
                     mod.getAIPersistantData().addAssistantMessage(llmMessage, mod.getPlayer2APIService());
                     onCharacterEvent.accept(new Event.CharacterMessage(llmMessage, command, this));
+                    // Learn from the exchange only after the player has their answer, so a slow or dead
+                    // extractor can never delay a reply. Returns immediately and does its own work
+                    // async; no-op unless memory.extractionEnabled is on.
+                    brain.learn(brainCtx, llmMessage);
                 } else {
                     LOGGER.warn(
                             "[AICommandBridge/processChatWithAPI/onLLMResponse]: Generated null llm message and command");
@@ -214,7 +261,7 @@ public class AgentConversationData {
                 requeueAfterMalformedReply(jsonResp, replied);
             }
         };
-        completer.processToJson(mod.getPlayer2APIService(), historyWithWrappedStatus, onLLMResponse, onErrMsg);
+        brain.submit(brainCtx, historyWithWrappedStatus, completer, onLLMResponse, onErrMsg);
     }
 
     /**
@@ -285,6 +332,18 @@ public class AgentConversationData {
         }
         LOGGER.info("queue for UUID={} name={} adding event={} ", getUUID(), getName(), event);
         eventQueue.add(event);
+
+        // Start embedding now rather than when the turn dispatches. The event waits here for at
+        // least a tick, and recall() runs on the SERVER THREAD — so this is what keeps a network
+        // call off the tick loop. No-op unless memory is on and the gate accepts the turn.
+        //
+        // The owner goes in because the gate consults what they have stored, and it must reach the
+        // same verdict here as recall() does later — otherwise the turn is admitted with no vector
+        // waiting and pays the full embed against embedBudgetMs.
+        if (event instanceof Event.UserMessage msg) {
+            mod.getBrainTransport().prefetch(msg.message(),
+                    mod.getOwner() == null ? null : mod.getOwner().getUUID());
+        }
     }
 
     private Optional<String> getReminderStringFromLastEvent(Event lastEvent) {
@@ -348,6 +407,11 @@ public class AgentConversationData {
         shouldIgnoreGreetingDance = true;
         // queue up greeting
         addEventToQueue(mod.getAIPersistantData().getGreetingEvent());
+        // Read the flag, then set it: they have met now, so the next greeting is a welcome back.
+        // Recorded at the moment of greeting rather than when the reply lands, because a greeting
+        // whose turn failed is still a meeting — and re-introducing itself on every restart until
+        // one succeeds is the worse failure of the two.
+        mod.getAIPersistantData().setMetOwner(true);
     }
 
     public void onCommandFinish(AgentSideEffects.CommandExecutionStopReason stopReason) {

@@ -20,6 +20,8 @@ import adris.altoclef.player2api.LlmConfig;
 import adris.altoclef.player2api.Player2APIService;
 import adris.altoclef.player2api.Event;
 import adris.altoclef.player2api.LLMCompleter;
+import adris.altoclef.player2api.PlayerPreferences;
+import adris.altoclef.player2api.ServerPolicy;
 import adris.altoclef.player2api.AgentConversationData;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -49,12 +51,19 @@ public class ConversationManager {
                 // behavior.triggerPrefix: when set, only prefixed messages reach the brain (and the
                 // prefix is stripped). Blank = respond to all nearby chat. This is the cheapest cost
                 // control there is — an unaddressed message costs nothing.
-                String message = BehaviorConfig.applyTriggerPrefix(evt.signedContent());
+                //
+                // The SPEAKER's prefix, not the server's. It is a client-owned setting, and with
+                // the brain on the client it is the speaker who pays for every turn it lets
+                // through — so it is their call whether ambient chatter costs them anything. Falls
+                // back to the server-wide value for a client that announced nothing.
+                String message = PlayerPreferences.applyTriggerPrefix(
+                        senderEntity.getUUID(), evt.signedContent());
                 if (message == null) {
                     return;
                 }
                 String sender = senderEntity.getName().getString();
-                for (Component notice : ConversationManager.onUserChatMessage(new UserMessage(message, sender))) {
+                for (Component notice : ConversationManager.onUserChatMessage(
+                        new UserMessage(message, sender, false, senderEntity.getUUID()))) {
                     senderEntity.sendSystemMessage(notice);
                 }
             });
@@ -118,6 +127,21 @@ public class ConversationManager {
      */
     public static void onServerStopping() {
         int dropped = queueData.size();
+        // Before anything is cleared: the periodic save bounds what a crash can lose, but an orderly
+        // quit should lose nothing, and quitting to the title screen stops the server every time. A
+        // failure here must not stop the rest of the shutdown from running.
+        int flushed = 0;
+        for (AgentConversationData data : queueData.values()) {
+            try {
+                if (data.getMod() != null && data.getMod().getAIPersistantData() != null) {
+                    data.getMod().getAIPersistantData().flushHistory();
+                    flushed++;
+                }
+            } catch (Throwable e) {
+                LOGGER.warn("ConversationManager/onServerStopping: could not save history for {} ({})",
+                        data.getName(), e.toString());
+            }
+        }
         queueData.clear();
         lastEarshotNotice.clear();
         // The pool is static, so an in-flight request at shutdown would otherwise leave a slot
@@ -126,8 +150,8 @@ public class ConversationManager {
         TTSManager.reset();
         Player2APIService.resetSessionCounters();
         EventBus.clear();
-        LOGGER.info("ConversationManager/onServerStopping: cleared {} conversation(s), released locks, "
-                + "reset session counters and event subscriptions", dropped);
+        LOGGER.info("ConversationManager/onServerStopping: saved history for {} of {} conversation(s), "
+                + "released locks, reset session counters and event subscriptions", flushed, dropped);
     }
 
     /**
@@ -147,6 +171,34 @@ public class ConversationManager {
 
     private static Stream<AgentConversationData> getCloseDataByUUID(UUID sender) {
         return filterQueueData(data -> data.getDistance(sender) < messagePassingMaxDistance);
+    }
+
+    /**
+     * Whether this speaker is allowed to drive this companion at all.
+     *
+     * <p>Routing used to be pure proximity, which is fine in singleplayer and wrong the moment a
+     * second person is on the server: any player within 64 blocks could give any companion an
+     * instruction. What made that more than a nuisance is who pays. The turn is billed to the
+     * companion's <b>owner</b> — with {@code llm.clientBrain} on, to the owner's own machine — and
+     * the sentence the stranger typed is then handed to the extractor with the <em>owner's</em> UUID
+     * and username attached, so it is learned as something the owner said. Neither is visible from
+     * anybody's seat until the bill or the corpus is inspected.
+     *
+     * <p>An ownerless companion (spawned from the console, never bound to a player) answers nobody
+     * here. It is still reachable through {@code /companion}, which has an operator path; chat has
+     * none, and guessing an owner is how one gets adopted by whoever walks past.
+     *
+     * <p>{@link ServerPolicy#companionsAnswerAnyone} restores the old behaviour for a server where
+     * everyone is trusted.
+     */
+    private static boolean mayAddress(AgentConversationData data, UUID speaker) {
+        if (ServerPolicy.companionsAnswerAnyone) {
+            return true;
+        }
+        if (speaker == null || data == null || data.getMod() == null) {
+            return false;
+        }
+        return data.getMod().isOwner(speaker);
     }
 
     // ## Callbacks (need to register these externally)
@@ -192,8 +244,15 @@ public class ConversationManager {
         for (AgentConversationData data : queueData.values()) {
             float distance = StatusUtils.getDistanceToUsername(data.getMod(), msg.userName());
             boolean close = distance < messagePassingMaxDistance;
-            diagnostics.append(String.format("[%s distance=%.1f withinRange=%s %s] ",
-                    data.getName(), distance, close, describeWorldBinding(data)));
+            boolean mine = mayAddress(data, msg.speakerUuid());
+            diagnostics.append(String.format("[%s distance=%.1f withinRange=%s yours=%s %s] ",
+                    data.getName(), distance, close, mine, describeWorldBinding(data)));
+            // Someone else's companion is not merely out of range — it is not a candidate at all,
+            // for the name match or the nearest-wins fallback. Skipped after the diagnostics line so
+            // "why did nothing answer me" is still answerable from the log.
+            if (!mine) {
+                continue;
+            }
             if (distance < nearest) {
                 nearest = distance;
                 nearestData = data;
@@ -223,7 +282,9 @@ public class ConversationManager {
         float targetDistance = addressed ? addressedDistance : nearest;
         boolean delivered = target != null && targetDistance < messagePassingMaxDistance;
         if (delivered) {
-            target.onEvent(addressed ? new UserMessage(addressedBody, msg.userName()) : msg);
+            target.onEvent(addressed
+                    ? new UserMessage(addressedBody, msg.userName(), false, msg.speakerUuid())
+                    : msg);
         }
         if (delivered) {
             // Deliberately every message and deliberately not throttled: at a too-low cap the reply
@@ -281,7 +342,11 @@ public class ConversationManager {
                     .withStyle(ChatFormatting.GRAY));
         }
 
+        // "all" means all of YOURS. Fanning a broadcast out to every companion in range would be the
+        // most expensive form of the ownership hole: one line, one reply billed to each owner it
+        // reached, and a stranger's sentence learned into every one of their corpora.
         List<AgentConversationData> heard = queueData.values().stream()
+                .filter(data -> mayAddress(data, msg.speakerUuid()))
                 .filter(data -> isCloseToPlayer(data, msg.userName()))
                 .toList();
         if (heard.isEmpty()) {
@@ -293,7 +358,7 @@ public class ConversationManager {
         }
 
         for (AgentConversationData data : heard) {
-            data.onEvent(new UserMessage(body, msg.userName(), true));
+            data.onEvent(new UserMessage(body, msg.userName(), true, msg.speakerUuid()));
         }
         LOGGER.info("ConversationManager: broadcast from {} delivered to {}", msg.userName(),
                 heard.stream().map(AgentConversationData::getName).collect(Collectors.joining(", ")));
@@ -378,12 +443,39 @@ public class ConversationManager {
             return; // companions do not overhear each other — see BehaviorConfig#aiCrossTalk
         }
         UUID sendingUUID = msg.sendingCharacterData().getUUID();
-        getCloseDataByUUID(sendingUUID).filter(data -> !(data.getUUID().equals(senderId)))
+        // Only between companions with the SAME owner, unless the operator has opened chat up. Every
+        // forwarded line is a full turn on the receiving companion, billed to its owner, and each
+        // reply prompts another — so across owners this is one player's companion spending another
+        // player's tokens, indefinitely and with nobody typing. The javadoc on
+        // BehaviorConfig#aiCrossTalk records a session that logged 382 of these with a single owner.
+        getCloseDataByUUID(sendingUUID)
+                .filter(data -> !(data.getUUID().equals(senderId)))
+                .filter(data -> sharesOwner(data, msg.sendingCharacterData()))
                 .forEach(data -> {
                     LOGGER.info("onCharMsg/ msg={}, sender={}, running onCharMsg for ={}", msg.message(), senderId,
                             data.getName());
                     data.onAICharacterMessage(msg);
                 });
+    }
+
+    /**
+     * Whether two companions belong to the same player, for the cross-talk fan-out.
+     *
+     * <p>Separate from {@link #mayAddress} because the question is different: that one asks whether a
+     * <em>person</em> may drive a companion, this asks whether two companions are part of the same
+     * household. Two ownerless companions are not treated as a household — no owner is not an
+     * identity they share.
+     */
+    private static boolean sharesOwner(AgentConversationData listener, AgentConversationData speaker) {
+        if (ServerPolicy.companionsAnswerAnyone) {
+            return true;
+        }
+        if (listener == null || speaker == null
+                || listener.getMod() == null || speaker.getMod() == null) {
+            return false;
+        }
+        UUID speakerOwner = speaker.getMod().getOwnerUuid();
+        return speakerOwner != null && listener.getMod().isOwner(speakerOwner);
     }
 
     /**

@@ -5,6 +5,285 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.3.0 — It remembers, it thinks on your machine, and it works for everyone on the server
+
+Bundles PlayerEngine 1.1.16. Self-contained jar as always — don't install a standalone engine
+alongside it.
+
+The largest release so far, in three pieces: the companion gained a memory, that memory and the
+thinking behind it can run on your own machine, and the mod stopped being operator-only.
+
+**After updating, an operator should read the new `server` block in `config/aicompanion.json`.** Your
+existing values are moved into it automatically and the old file is kept as `aicompanion.json.bak`.
+**Memory and extraction are both off by default.**
+
+### It remembers things you tell it
+
+The headline. A companion can hold facts about you across sessions, look up the ones relevant to what
+you just said, and put them in front of the model without being asked to.
+
+**`memory.enabled`, off by default**, and it needs an embedder — `embeddings.endpoint`, its own block
+with its own model.
+
+- **`/companion remember <fact>`** stores something true of you everywhere; **`rememberhere`** stores
+  something true only in this world. Getting scope wrong is invisible: "I prefer cobblestone" is the
+  first, "my base is in the taiga" the second, and storing the second as the first asserts it in
+  every save.
+- **`rememberhere` captures where you stood.** Asked "where's our home?" against a placeless memory
+  whose whole text was "home", a companion once answered "near our original spawn at (0, 65, 0)" — a
+  real coordinate, taken from the world spawn sitting elsewhere in the same packet.
+- **Restating a fact confirms it; moving it supersedes it.** Re-running `rememberhere home` from a new
+  position used to keep the old record and discard the new coordinates, while printing the position
+  it had just thrown away.
+- **`memory.extractionEnabled`, off by default**, learns from conversation: after a reply goes out,
+  one JSON call reads the exchange and reports what was stated. About $0.00013 a turn on your own
+  key, which is why it is opt-in.
+- **It cannot cite itself.** Asked what wood you liked, a companion answered "Spruce! You always pick
+  spruce" and recorded its own answer as evidence. A stored fact must now share a content word with
+  what you actually said.
+- **It says so in chat when memory breaks.** Every failure degrades to "no memories", so an outage
+  was invisible and left the companion denying facts it held. Five distinct problems now report once
+  each, and every turn memory declines to act on now leaves a reason in the log — a refused turn used
+  to log at DEBUG against a server running at INFO, so it left no trace at any prefix and read as
+  "ran and found nothing", which wants the opposite fix.
+- **A pet is not pinned to one save.** Possessions belong to a world — a pickaxe, a stack of bones —
+  so `owns` is world-scoped, and the model was reaching for it to describe a dog. Pets and people are
+  now described with `related_to` instead, which travels with you.
+- ⚠️ **The world id was never written to disk.** Registering it did not mark it dirty, so it was
+  minted fresh on every load and no file ever appeared. Memories attached to the previous id become
+  unreachable — if you ran an earlier 0.3.0 build, world-scoped memories from it may not come back.
+
+### Setting memory up
+
+An embedder turns a sentence into a vector so the right memory can be found again — a second thing to
+run. **Ollama serves both it and the brain from one process:**
+
+```bash
+ollama pull qwen2.5:14b          # the brain
+ollama pull nomic-embed-text     # the embedder, ~275 MB
+export OLLAMA_MAX_LOADED_MODELS=2   # keep both resident
+export OLLAMA_KEEP_ALIVE=-1         # don't unload them
+ollama serve
+```
+
+Point `llm.endpoint` and `embeddings.endpoint` at `http://localhost:11434` — the same address twice
+is correct. Those environment variables are not polish: at `MAX_LOADED_MODELS=1` Ollama evicts the
+brain to embed and reloads it to answer on every turn, and without `KEEP_ALIVE` the embedder unloads
+while you play.
+
+The mod talks plain OpenAI, so LM Studio, vLLM and hosted providers work the same way. A plain
+llama.cpp is the one that cannot do the embedder's half — one model per process, and it answers `501`
+— so pair it with Ollama.
+
+### It can think on your machine, with your key
+
+**`llm.clientBrain`, off by default, needs `llm.localMode`.** The server sends the ingredients of a
+prompt; your client recalls from *its* corpus, builds the prompt, calls *your* model with *your* key,
+and returns only what the companion says and does. Your memories never reach the server and the
+server's token bill is untouched. A vanilla client is never asked, and one that goes quiet times out.
+The server also stops loading corpora it will never read: its copy freezes the moment the switch is
+flipped while the client's moves on, so answering from it later reads as "it forgot the last month"
+rather than "it is reading the wrong file". A player whose client cannot think still gets a store,
+loaded on demand.
+
+> ⚠️ **Commands coming back from a client are not yet validated.** This is why it defaults off. Don't
+> enable it on a server whose clients you don't control.
+
+### It costs a fraction of what it did
+
+91% of every request was one system prompt — 14,684 characters, byte-identical on every call of a
+measured session. Providers bill a repeated prefix at a steep discount and it was going unclaimed,
+because cache entries are per server and nothing pinned a companion to one. A chat turn went from
+~5,000 uncached input tokens to **633**, with the cache covering 85–88% in steady state.
+
+**`llm.maxPromptChars` was below its own floor** — 16,000 could not fit the system prompt plus one
+turn, so every turn silently discarded all history and was still over budget. Now 20,000. And history
+was not being saved at all: the save interval was a coincidence check a message count could step
+over, so a four-exchange session wrote nothing. **Existing configs keep their own values — check
+yours.**
+
+### The mod works for everyone on the server, not just the operator
+
+`/companion` was gated on being an operator, so nobody else could use the mod at all. Permissions are
+now per-subcommand at level 0 — spawn, come, where, stats, list, remember, the HUD toggles — while
+`reload` and `skills reset` stay operator-only. LuckPerms nodes work by group
+(`aicompanion.command.spawn`, `aicompanion.admin`); with no permissions mod everything falls back to
+the vanilla operator level, so a family LAN sees no change. `server.allowPlayerCommands: false` closes
+it again.
+
+**Your companions are yours.** Identity, model, API key, memories, voice and `behavior.triggerPrefix`
+are read from **your own** config on whatever server you play. Your client announces your roster and
+prefix on join, and they spawn as yours — two players can both have a Vetta. The config screen no
+longer opens on a server saying in red that it can change nothing; what the operator controls is on a
+read-only **Server** tab showing that server's real values.
+
+**And only yours.** Every targeting command matched on display name and enforced no ownership, so
+`/companion despawn Vetta` from a stranger worked — the owner was recorded at spawn and simply never
+checked. Chat routing was pure proximity too: anyone within 64 blocks drove any companion, and the
+turn was billed to the *owner*, whose memories then learned the stranger's sentence under the owner's
+name. Being an operator used to widen the *default* target, so a bare `/companion despawn` picked the
+nearest companion belonging to anyone; unnamed commands now always mean your own. Reaching someone
+else's still works by naming it, and says so:
+
+```
+Ava belongs to Alex — acting on it as an operator.
+```
+
+Caps: `server.maxCompanionsPerPlayer` (2) and `server.globalCompanionCap` (20) — nothing bounded this
+before, and each companion is a pathfinder on the server thread.
+`server.companionsAnswerAnyone: true` restores open chat for a LAN where that is the point. In
+singleplayer and as LAN host, whoever opened the world keeps operator access without "Allow Cheats";
+guests don't inherit it.
+
+### A guest's broken endpoint no longer spends the operator's key
+
+If a client announced it could think and then couldn't reach its model, the server quietly answered
+for it — on the **operator's** key, every turn. Measured 2026-08-21: a guest pointed at a llama.cpp
+that wasn't running produced `Connection refused` seven times and the server answered all of them,
+25,144 tokens. She saw normal replies; the operator saw a bill with no cause.
+
+A client that **never announced** is still answered — that was always the server's job. One that
+announced and then failed is not; its owner is told instead, with the endpoint named.
+`server.serverAnswersWhenClientFails: true` restores the old behaviour.
+
+### Companions are put away while you are offline
+
+Left alone, a companion is an entity in the world save — one spawned months ago is still standing
+there, drawn as default Steve, answering nobody, holding a slot in the cap. Yours are now stored to
+disk on disconnect and brought back where you left them. `server.parkWhenOwnerOffline: false` turns it
+off.
+
+⚠️ **A companion is never removed unless its file was written *and read back* first.** One that fails
+to park is left standing and tries again — much the better failure than somebody's fully-kitted
+companion vanishing with its inventory.
+
+### Settings you could edit but nothing would read
+
+Four bugs, one shape: the value was saved, and then never reached the thing that needed it.
+
+- **`tts.endpoint` was the server's, not yours.** Your client fetches and plays the audio, but the URL
+  came from the *server's* config — so a dedicated server shipped its own `http://localhost:8880` to
+  everybody and `TTS playback failed (http://localhost:8880)` no matter what you typed. Now read from
+  **your** file. `model`, `voice` and `speed` still come from the server; those describe the
+  companion, not your network.
+- **The config screen saved without applying on a remote server.** Save looked for a local server to
+  hand the file to, and on a dedicated server there isn't one — so the values in force stayed the ones
+  read at JVM startup, and changing `llm.endpoint` genuinely required quitting the game.
+- **`/companion reload` was operator-only.** Right about the server's half, wrong about everyone's
+  own. Reload is now open to all and does the half belonging to the caller, saying which ran; the
+  server's half still needs permission. It also re-announces your roster — **a companion added while
+  connected previously could not be spawned until you reconnected**, because the roster is announced
+  on join, not read on demand.
+- **Memory failures were silent on the machine that had them.** `MemoryHealth` puts problems in your
+  chat, but the only thing draining it ran on the server. With `clientBrain` on, the corpus and
+  embedder are both on your machine, so an unreachable embedder warned where nothing read it. Your
+  client now reports its own.
+
+### Memory was working and looked broken
+
+The `memory` help text and the Memory tab both still described a prototype — "nothing is stored,
+nothing is learned, and nothing you say is remembered", untrue for two releases and exactly the wrong
+thing to read while working out why memory looks inert. Worse, `memory.extractionEnabled` wasn't on
+that tab at all, so the one switch that makes a companion learn could only be reached by hand-editing
+JSON. There is now a **Learn From Conversation** toggle beside Enabled, and both texts say what
+actually gates it: enabling memory stores nothing on its own, the `memories/` folder is created by the
+first write rather than by the setting, and `llm.clientBrain` **on the server** decides which machine
+holds the corpus.
+
+Help text shipped in `aicompanion.json` no longer quotes real phrases or player names from testing.
+
+### Choosing a model, and what tells you when it's wrong
+
+`https://openrouter.ai/api` was in the endpoint list with no model suggestions — on a provider with
+hundreds of ids, the same as no support. The Model box now suggests OpenRouter's **free** models, but
+only those that can be asked for JSON. Every reply must be a JSON object, and a model that ignores
+`response_format` answers in prose, so nothing it decides runs. From OpenRouter's live model API on
+2026-08-22: 85% of all 421 models advertise `response_format` and only **7 of the 18 free ones** do.
+Keep the `:free` suffix or you are billed.
+
+**Qwen2.5-14B-Instruct-Q4_K_M is the recommended local default.** It was carried as a floor and
+described as "not very capable" at strict command output; extended testing says it holds the format
+reliably on consumer hardware. Instruction-following matters more than parameter count here. The
+llama.cpp launch flags come down with it — `-c 262144` to `-c 8192`, and `--mlock` dropped, because a
+256k context reserves gigabytes of KV cache before generating a token and the companion sends small
+situation packets. The readme gains a section on the failure that follows from getting this wrong:
+a local model and Minecraft compete for the same VRAM, shader packs make it far likelier, and what
+goes down is usually the whole machine.
+
+**`llm.maxTokens` now ships at 2000.** It was 1000 — also the floor the mod warns below — so the
+default had no headroom, and both ways of exhausting it turned up in one morning: a reasoning model
+spends the budget on hidden thinking before writing a word, and a small model that fails to emit a
+stop token runs to the cap and gets retried. It's a cap, not a budget; a higher ceiling costs nothing
+on short replies. **Existing configs keep 1000.** Two README examples were shipping `200`, below the
+floor that same README warns about.
+
+Two diagnostics that used to mislead:
+
+- **"Not valid JSON" never said whether JSON had been asked for.** A model that ignores the envelope
+  and an endpoint that drops `response_format` log identically and want opposite fixes. The failure
+  now names which, and notes that a backend honouring constrained decoding *cannot* return prose.
+- **"Cut off by the token limit" advised raising the cap, which is wrong half the time.** A free 9B
+  model produced a complete, correct reply and then several hundred blank lines and `</</</…` until it
+  hit the cap — the closing brace never arrived. It hadn't run out of room; it failed to *stop*.
+  Raising the cap buys more garbage, and bills you for it. The message now checks the tail for a
+  repeated character.
+- **The client's reload line reported the wrong brain**, printing `brain=server` on the machine
+  running every turn, because it read the local `llm.clientBrain` — a wish on a dedicated server,
+  where the server's copy decides. It now reports what has actually been observed. The server names
+  its brain too, on the `config loaded` line that prints at boot rather than only on reload — a
+  server that boots and is never reloaded, which is every server, used to print nothing.
+
+### Building
+
+- **It builds the part of the house it can afford.** A 728-cell house billed at 486 planks, 180 stairs
+  and 34 glass doesn't fit an inventory, so the pre-flight refused it — and kept refusing, for
+  twenty-three minutes. It now starts whenever it can pay for some of what's left, stops when
+  materials run out, and resumes on the same description.
+- **It builds with the wood you have.** Carrying 193 birch logs and no oak, it refused a "small wooden
+  home" until told birch would do. Naming a species still wins.
+- **It crafts slabs instead of taking apart a village.** Asked for 200 oak slabs while carrying the
+  planks to make them, it walked to the nearest village and started removing roofs.
+- **Two build livelocks fixed** — one where it stood in the cell it was trying to fill and deferred it
+  forever, one where a stalled station couldn't time out because the counter measured walking rather
+  than progress.
+
+### Smaller things
+
+- **Fetching a companion that went too far.** Minecraft stops ticking an entity outside simulation
+  distance, so a companion 198 blocks away couldn't run a task, couldn't walk, and wouldn't come back
+  — four `/companion come` commands over nineteen minutes moved one less than two blocks. `come` now
+  teleports when the companion isn't ticking.
+- **Your companion can wear a real face.** A roster entry takes `skin.username` as well as
+  `skin.file`. The name resolves once on the server through the same path player heads use and rides
+  to clients as tracked data, so nothing needs installing per machine. An explicit `skin.file` wins.
+- **`behavior.cannedFallback` is gone.** It was in the example config with three sample values and
+  had never had a single line of Java reading it — anyone who set it was editing a dead string. A
+  dead brain wants a diagnostic, not a persona line saying everything is fine.
+- **`/companion remember` stopped writing to the wrong machine.** With `clientBrain` on,
+  conversational memories went to your client while `remember` wrote to the server — split across two
+  machines, and asking about one recalled nothing, silently.
+- **The token HUD read zero all session.** Server counters are per-process, so with `clientBrain` on
+  they stay at zero while your machine spends; each packet overwrote the real figures your client
+  had, and a session that spent 101,101 tokens showed nothing. The client now counts its own, and the
+  server stays quiet when it isn't paying.
+- **Recall silently dropped memories on a cold embedder.** The 250 ms budget exists because recall
+  normally runs on the server tick loop. On a client there's no tick to miss and no prefetch, so every
+  recall embeds cold inside a ceiling built for the opposite case — two of seven recalls lost, the
+  session's first turn and the first after a four-minute gap, which is exactly when you ask whether it
+  remembers. Warm recalls took 45–56 ms. The client now uses the embedder's own timeout.
+
+### Conversation history
+
+- Two players whose companions shared a name shared **one history file**, reading and overwriting each
+  other's conversations. History is now filed per owner.
+- `server.persistHistory` (default on) can stop history surviving restarts. It overlaps the memory
+  corpus and does the cross-session job worse — a companion re-reads its own paraphrases and comes to
+  cite them as fact. Leave it on until you've confirmed the same details are landing in memory.
+- The 64-message summary is written as a system note rather than as something the companion said.
+- "Welcome back" is decided by whether the companion has met you, not by whether a file exists.
+
+---
+
 ## 0.2.9 — Unfinished builds, part 2: it remembers where
 
 Bundles PlayerEngine 1.0.79. Self-contained jar as always — don't install a standalone engine

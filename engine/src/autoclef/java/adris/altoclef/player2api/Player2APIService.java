@@ -44,16 +44,100 @@ public class Player2APIService {
          new java.util.concurrent.atomic.AtomicLong(0);
    private static final java.util.concurrent.atomic.AtomicLong totalTokens =
          new java.util.concurrent.atomic.AtomicLong(0);
+   /**
+    * Input tokens the provider served from its prompt cache, when it says so.
+    *
+    * <p>Tracked because the cost of this mod is dominated by a system prompt that is byte-identical
+    * on every request — measured 2026-08-19 at 14,684 chars, 91% of everything sent — and providers
+    * bill a repeated prefix at a steep discount (xAI: $0.50/M cached against $2.00/M). Without this
+    * number the total alone cannot distinguish "the prefix is being cached" from "it is being paid
+    * for in full every turn", and those differ by roughly a factor of three on the bill.
+    */
+   private static final java.util.concurrent.atomic.AtomicLong cachedPromptTokens =
+         new java.util.concurrent.atomic.AtomicLong(0);
    /** Highest {@code totalTokens / usageReportEveryTokens} milestone already reported. */
    private static final java.util.concurrent.atomic.AtomicLong reportedMilestone =
          new java.util.concurrent.atomic.AtomicLong(0);
 
+   /**
+    * xAI's cache-routing header. Prompt cache entries live <b>per server</b>, so without this a
+    * request goes wherever the balancer sends it and a hit is luck — which is why a byte-identical
+    * 14.7k system prompt was still being billed at the uncached rate. The value is opaque to the
+    * provider; all it has to be is stable for the conversation it names.
+    *
+    * <p>Harmless everywhere else: llama.cpp and the Player2 API ignore headers they do not know.
+    */
+   private static final String CONV_ID_HEADER = "x-grok-conv-id";
+
    private String clientId;
    private AltoClefController controller;
+
+   /**
+    * Stable conversation id for cache routing, resolved once and kept.
+    *
+    * <p>Derived from the companion's own entity id so two companions do not share a route: their
+    * personas differ, so their prompt prefixes differ, and pinning both to one server would have
+    * them evicting each other's cache. Resolved lazily because the entity is not necessarily
+    * attached when this service is constructed, and it falls back to a random id rather than
+    * failing — an unroutable request still works, it just pays full price.
+    */
+   private volatile String convId;
 
    public Player2APIService(AltoClefController controller, String clientId) {
       this.clientId = clientId;
       this.controller = controller;
+   }
+
+   /**
+    * A service with no companion behind it, for a client doing its own thinking.
+    *
+    * <p>Reuses this class rather than growing a second client that would drift: the retry, salvage
+    * and truncation handling here is scar tissue from observed model failures, and a parallel
+    * implementation would have to relearn all of it. Only the chat-completion path is supported —
+    * TTS, STT and health all genuinely need a companion and its owner.
+    *
+    * <p>⚠️ Requires {@link LlmConfig#localMode}. The hosted Player2 path authenticates per player
+    * against a token the server holds; there is no client-side equivalent.
+    */
+   public Player2APIService(String clientId) {
+      this(null, clientId);
+   }
+
+   private String conversationId() {
+      String id = convId;
+      if (id != null) {
+         return id;
+      }
+      synchronized (this) {
+         if (convId == null) {
+            String derived = null;
+            try {
+               if (controller != null && controller.getPlayer() != null) {
+                  derived = controller.getPlayer().getUUID().toString();
+               }
+            } catch (Throwable ignored) {
+               // Never let cache routing be the thing that breaks a conversation.
+            }
+            convId = "aicompanion-" + (derived != null ? derived : UUID.randomUUID().toString());
+         }
+         return convId;
+      }
+   }
+
+   /**
+    * One chat-completion round trip, with cache routing and usage accounting applied.
+    *
+    * <p>Every LLM call in this class goes through here so that neither can be forgotten at a new
+    * call site — the header is worthless if only two of the three paths send it, since the third
+    * would keep landing on other servers and evicting nothing useful.
+    */
+   private Map<String, JsonElement> chatCompletion(JsonObject requestBody) throws Exception {
+      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(
+            controller == null ? null : controller.getOwner(), clientId,
+            "/v1/chat/completions", true, requestBody,
+            java.util.Collections.singletonMap(CONV_ID_HEADER, conversationId()));
+      recordUsage(responseMap);
+      return responseMap;
    }
 
    /**
@@ -89,11 +173,13 @@ public class Player2APIService {
       promptTokens.set(0);
       completionTokens.set(0);
       totalTokens.set(0);
+      cachedPromptTokens.set(0);
       reportedMilestone.set(0);
    }
 
    /** Immutable view of this session's LLM spend. */
-   public record UsageSnapshot(long promptTokens, long completionTokens, long totalTokens, int requests) {}
+   public record UsageSnapshot(long promptTokens, long completionTokens, long totalTokens,
+         long cachedPromptTokens, int requests) {}
 
    /**
     * Read the session counters for display. The four values are read independently, so a snapshot
@@ -102,7 +188,7 @@ public class Player2APIService {
     */
    public static UsageSnapshot usageSnapshot() {
       return new UsageSnapshot(promptTokens.get(), completionTokens.get(), totalTokens.get(),
-            requestCount.get());
+            cachedPromptTokens.get(), requestCount.get());
    }
 
    /**
@@ -122,7 +208,9 @@ public class Player2APIService {
          long out = usage.has("completion_tokens") ? usage.get("completion_tokens").getAsLong() : 0;
          // Prefer the server's own total; fall back to the parts when it isn't reported.
          long tot = usage.has("total_tokens") ? usage.get("total_tokens").getAsLong() : in + out;
+         long cached = cachedPromptTokensOf(usage);
 
+         cachedPromptTokens.addAndGet(cached);
          promptTokens.addAndGet(in);
          completionTokens.addAndGet(out);
          long runningTotal = totalTokens.addAndGet(tot);
@@ -143,10 +231,41 @@ public class Player2APIService {
       }
    }
 
+   /**
+    * Prompt tokens served from cache, read from whichever shape the provider uses.
+    *
+    * <p>Two spellings on purpose. xAI names it {@code cached_prompt_text_tokens} at the top of the
+    * usage object; the OpenAI-compatible convention nests {@code cached_tokens} under
+    * {@code prompt_tokens_details}, and several proxies follow that instead. Reading only one would
+    * report a flat zero against a provider that was in fact caching perfectly, which is worse than
+    * not reporting at all — it is a number that argues for changes nobody needs to make.
+    */
+   private static long cachedPromptTokensOf(JsonObject usage) {
+      if (usage.has("cached_prompt_text_tokens")) {
+         return usage.get("cached_prompt_text_tokens").getAsLong();
+      }
+      JsonElement details = usage.get("prompt_tokens_details");
+      if (details != null && details.isJsonObject()) {
+         JsonObject d = details.getAsJsonObject();
+         if (d.has("cached_tokens")) {
+            return d.get("cached_tokens").getAsLong();
+         }
+      }
+      return 0;
+   }
+
    private void reportUsage(long runningTotal) {
+      long in = promptTokens.get();
+      long cached = cachedPromptTokens.get();
+      // The cache share is the actionable half of this line: input is the overwhelming majority of
+      // spend here, and a low percentage against a prompt whose prefix never changes means the
+      // discount is being missed rather than that there is nothing to cache.
+      String cacheNote = cached > 0
+            ? String.format(" %,d of the input was cached (%.0f%%).", cached, 100.0 * cached / Math.max(1, in))
+            : " None of the input was reported as cached.";
       String summary = String.format(
-            "LLM usage this session: %,d tokens (%,d in / %,d out) over %,d requests.",
-            runningTotal, promptTokens.get(), completionTokens.get(), requestCount.get());
+            "LLM usage this session: %,d tokens (%,d in / %,d out) over %,d requests.%s",
+            runningTotal, in, completionTokens.get(), requestCount.get(), cacheNote);
       LOGGER.info(summary);
       if (controller != null && controller.getOwner() instanceof ServerPlayer owner) {
          owner.displayClientMessage(Component.literal("[companion] " + summary), false);
@@ -163,6 +282,17 @@ public class Player2APIService {
     * really is a JSON object, may pass true.
     */
    private static void applyLlmParams(JsonObject requestBody, boolean jsonMode) {
+      applyLlmParams(requestBody, jsonMode, null);
+   }
+
+   /**
+    * @param temperatureOverride a temperature for this call alone, or null to use
+    *        {@link LlmConfig#temperature}. For side tasks that want determinism rather than
+    *        conversational variety. An endpoint that locks temperature still wins — overriding it there
+    *        is a 400, not a warmer reply.
+    */
+   private static void applyLlmParams(JsonObject requestBody, boolean jsonMode,
+         Double temperatureOverride) {
       String model = LlmConfig.model;
       boolean openAi = LlmConfig.baseUrl != null && LlmConfig.baseUrl.contains("api.openai.com");
       // OpenAI's gpt-5.x and o-series lock temperature to the default and 400 on any override;
@@ -172,8 +302,9 @@ public class Player2APIService {
       if (model != null && !model.isBlank()) {
          requestBody.addProperty("model", model);
       }
-      if (LlmConfig.temperature >= 0 && !fixedTemperature) {
-         requestBody.addProperty("temperature", LlmConfig.temperature);
+      double temperature = temperatureOverride == null ? LlmConfig.temperature : temperatureOverride;
+      if (temperature >= 0 && !fixedTemperature) {
+         requestBody.addProperty("temperature", temperature);
       }
       if (LlmConfig.maxTokens > 0) {
          // OpenAI retired max_tokens on newer models ("use max_completion_tokens instead") but
@@ -188,6 +319,85 @@ public class Player2APIService {
          responseFormat.addProperty("type", "json_object");
          requestBody.add("response_format", responseFormat);
       }
+   }
+
+   /**
+    * Why a reply hit the token cap, and therefore whether raising the cap is the fix.
+    *
+    * <p>⚠️ "Raise llm.maxTokens" is the right advice for a reply that was genuinely too long, and the
+    * <b>wrong</b> advice for a model that produced its answer and then failed to stop. Observed
+    * 2026-08-22 on a free 9B model: it emitted a complete, correct {@code {reason, command, message}}
+    * and then several hundred blank lines followed by {@code </</</</…} until the cap ended it. The
+    * closing brace never arrived, so the object could not be parsed. Raising the cap there does not
+    * rescue the turn — it buys more garbage, and on a paid endpoint it is billed.
+    *
+    * <p>The tell is cheap and reliable: a long run of one repeated character at the tail. Small and
+    * heavily-quantised models are where this shows up, which is exactly what a free tier is made of.
+    */
+   private static String truncationNote(String content) {
+      if (looksDegenerate(content)) {
+         return "The tail is a repeated character, so the model did not run out of room — it failed to "
+               + "STOP. Raising llm.maxTokens buys more of the same (and costs more on a paid "
+               + "endpoint); use a larger or less quantised model instead.";
+      }
+      return "Raise llm.maxTokens to at least " + LlmConfig.MIN_USEFUL_MAX_TOKENS + ".";
+   }
+
+   /** A tail of one character repeated far past anything a real reply ends with. */
+   private static boolean looksDegenerate(String content) {
+      if (content == null) {
+         return false;
+      }
+      String tail = content.stripTrailing();
+      // Trailing whitespace is itself the commonest form of it, so measure before stripping too.
+      int trailingBlank = content.length() - tail.length();
+      if (trailingBlank >= 200) {
+         return true;
+      }
+      if (tail.isEmpty()) {
+         return false;
+      }
+      // Otherwise look for one character repeated at the end, ignoring whitespace between repeats.
+      String squeezed = tail.replaceAll("\s+", "");
+      if (squeezed.length() < 60) {
+         return false;
+      }
+      char last = squeezed.charAt(squeezed.length() - 1);
+      int run = 0;
+      for (int i = squeezed.length() - 1; i >= 0 && squeezed.charAt(i) == last; i--) {
+         run++;
+      }
+      if (run >= 40) {
+         return true;
+      }
+      // A repeated short motif rather than a single char — "</</</" is two characters, not one.
+      String motif = squeezed.substring(Math.max(0, squeezed.length() - 2));
+      int motifRun = 0;
+      for (int i = squeezed.length() - 2; i >= 0 && squeezed.startsWith(motif, i); i -= 2) {
+         motifRun++;
+      }
+      return motifRun >= 20;
+   }
+
+   /**
+    * Whether this call actually asked for JSON, said on the failure that cannot otherwise tell you.
+    *
+    * <p>"The model is bad at JSON" and "nothing ever asked it for JSON" produce an identical log line
+    * and want opposite fixes — one is a model or endpoint to replace, the other is a setting to turn
+    * back on. Worse, an endpoint that silently ignores {@code response_format} looks exactly like a
+    * model with a weak grasp of the envelope: it obeys the system prompt most turns and drifts into
+    * prose on the rest, which is the intermittent pattern that reads as "flaky model" and is not.
+    *
+    * <p>Constrained decoding cannot produce prose. So if this says JSON mode was requested and the
+    * reply is still prose, the endpoint is not honouring the field, and no amount of prompt work will
+    * fix it — llama.cpp and xAI honour it, several local OpenAI-compatible shims do not.
+    */
+   private static String jsonModeNote() {
+      return LlmConfig.useGrammar
+            ? "JSON mode WAS requested (response_format=json_object), so this endpoint is ignoring it "
+                  + "— a backend that honours it cannot return prose."
+            : "JSON mode is OFF (llm.useGrammar=false), so nothing asked the model for JSON — turn it "
+                  + "on before blaming the model.";
    }
 
    /**
@@ -223,11 +433,11 @@ public class Player2APIService {
          // well-formed object. The retry counts against llm.maxRequests, which is correct.
          boolean firstTruncated = lastReplyTruncated;
          if (firstTruncated) {
-            LOGGER.warn("LLM reply was cut off by the output token limit (llm.maxTokens={}); retrying once. Raw=<<{}>>",
-                  LlmConfig.maxTokens, content);
+            LOGGER.warn("LLM reply was cut off by the output token limit (llm.maxTokens={}); retrying once. {} Raw=<<{}>>",
+                  LlmConfig.maxTokens, truncationNote(content), content);
          } else {
-            LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. Raw=<<{}>>",
-                  first.getMessage(), content);
+            LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. {} Raw=<<{}>>",
+                  first.getMessage(), jsonModeNote(), content);
          }
          String retried = requestContent(requestBody, lastMessageForDebug);
          try {
@@ -238,11 +448,12 @@ public class Player2APIService {
                // Retrying cannot help: the cap is the same, so the second reply is cut off in the
                // same place. Say so once, plainly, rather than reporting it as malformed JSON.
                LOGGER.error("LLM reply was cut off by the output token limit again (llm.maxTokens={}). "
-                           + "Nothing ran. Raise llm.maxTokens to at least {}. Raw=<<{}>>",
-                     LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS, retried);
+                           + "Nothing ran. {} Raw=<<{}>>",
+                     LlmConfig.maxTokens, truncationNote(retried), retried);
             } else {
-               LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. Raw=<<{}>>",
-                     second.getMessage(), retried);
+               LOGGER.error("LLM response was not JSON after a retry ({}). Treating as plain message. "
+                           + "{} Raw=<<{}>>",
+                     second.getMessage(), jsonModeNote(), retried);
             }
             // Before giving up: a model that ignores the JSON envelope usually still answers the
             // right shape, just rendered as prose — "**Command:** `get coal_ore 29`". Throwing that
@@ -271,9 +482,7 @@ public class Player2APIService {
    private String requestContent(JsonObject requestBody, String lastMessageForDebug) throws Exception {
       enforceRequestCap();
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
-      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
-            "/v1/chat/completions", true, requestBody);
-      recordUsage(responseMap);
+      Map<String, JsonElement> responseMap = chatCompletion(requestBody);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
@@ -412,6 +621,51 @@ public class Player2APIService {
       return text.length() > 250 ? text.substring(0, 250).trim() : text;
    }
 
+   /**
+    * One deterministic JSON call for a side task, returning the raw assistant content unparsed.
+    *
+    * <p>Distinct from {@link #completeConversation} in what it does on failure: that method exists to
+    * protect a conversation turn, so it retries, salvages prose and finally fabricates a
+    * reason/command/message object rather than let the companion go mute. None of that is wanted here.
+    * A side task that cannot be parsed should simply produce nothing, and inventing an agent-contract
+    * object for a caller that is not the agent would be worse than an empty string.
+    *
+    * <p>Temperature 0 and JSON mode, because those are the conditions the extraction numbers were
+    * measured under: 970 turns produced 0 parse failures at those settings, and running with the
+    * conversational temperature instead would quietly be a different experiment from the one whose
+    * results justified building this.
+    *
+    * <p>Counts against {@link LlmConfig#maxRequests} like any other call — a per-turn side task is
+    * exactly the thing a spend cap exists to bound.
+    */
+   public String completeDeterministicJson(ConversationHistory conversationHistory) throws Exception {
+      enforceRequestCap();
+      JsonObject requestBody = new JsonObject();
+      JsonArray messagesArray = new JsonArray();
+      for (JsonObject msg : conversationHistory.getListJSONBounded(LlmConfig.maxPromptChars)) {
+         messagesArray.add(msg);
+      }
+      requestBody.add("messages", messagesArray);
+      applyLlmParams(requestBody, true, 0.0);
+      Map<String, JsonElement> responseMap = chatCompletion(requestBody);
+      if (responseMap.containsKey("choices")) {
+         JsonArray choices = responseMap.get("choices").getAsJsonArray();
+         if (choices.size() != 0) {
+            JsonObject messageObject = choices.get(0).getAsJsonObject().getAsJsonObject("message");
+            if (messageObject != null && messageObject.has("content")) {
+               if (wasTruncated(choices)) {
+                  LOGGER.warn("Deterministic JSON reply was cut off by the output token limit "
+                        + "(llm.maxTokens={}); it will not parse. Raise it to at least {}.",
+                        LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS);
+               }
+               return messageObject.get("content").getAsString();
+            }
+         }
+      }
+      LOGGER.warn("Deterministic JSON call returned no choices; treating as no result.");
+      return "";
+   }
+
    public String completeConversationToString(ConversationHistory conversationHistory) throws Exception {
       enforceRequestCap();
       JsonObject requestBody = new JsonObject();
@@ -427,9 +681,7 @@ public class Player2APIService {
       String lastMessageForDebug = conversationHistory.getListJSON().get(conversationHistory.getListJSON().size() - 1)
             .toString();
       LOGGER.info("Called complete conversation (string) HTTP request, last msg={}", lastMessageForDebug);
-      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(controller.getOwner(), clientId,
-            "/v1/chat/completions", true, requestBody);
-      recordUsage(responseMap);
+      Map<String, JsonElement> responseMap = chatCompletion(requestBody);
       if (responseMap.containsKey("choices")) {
          JsonArray choices = responseMap.get("choices").getAsJsonArray();
          if (choices.size() != 0) {
@@ -455,10 +707,14 @@ public class Player2APIService {
    /**
     * Ask the owner's client to speak {@code message}.
     *
-    * <p>Local-TTS path: we send the Kokoro endpoint/voice/speed rather than Player2 credentials, so no
-    * cloud auth token is needed (the old {@code awaitToken} call threw in local mode). The client does
-    * the synthesis request and playback — see {@code AudioUtils.streamAudio} — and answers on
+    * <p>Local-TTS path: we send the Kokoro voice/speed rather than Player2 credentials, so no cloud
+    * auth token is needed (the old {@code awaitToken} call threw in local mode). The client does the
+    * synthesis request and playback — see {@code AudioUtils.streamAudio} — and answers on
     * {@link TTSManager#ACK_CHANNEL} when the line is finished or could not be played.
+    *
+    * <p>The endpoint still goes out on the wire, but the client uses its OWN {@code tts.endpoint}
+    * and falls back to this only if that is blank. This value describes THIS machine's network,
+    * which on a dedicated server is not the network the audio has to be fetched over.
     *
     * @param speaker the companion entity speaking, echoed back in the ack so the right speech lock is
     *                released

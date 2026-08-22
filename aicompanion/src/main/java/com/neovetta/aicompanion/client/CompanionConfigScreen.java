@@ -44,9 +44,11 @@ import java.util.stream.Stream;
  * non-asterisked field live immediately; name/description/skin stay baked into the spawned entity,
  * hence the asterisk + despawn/spawn note.
  *
- * <p>Not in singleplayer (main menu, or connected to a remote server): the file still saves, but
- * there is no local server to apply it to — it takes effect on the next world load. A guest on a
- * LAN world edits their <em>own</em> file, not the host's; that client/server split is a known
+ * <p>Connected to a remote server there is no local server to walk, so save runs
+ * {@link CompanionConfig#reloadClientOwned} instead: the endpoints this machine calls — the brain,
+ * embeddings, and the Kokoro server audio is fetched from — go live immediately, while anything the
+ * server owns (caps, permissions, chat routing) still comes from the server's own file. A guest on
+ * a LAN world edits their <em>own</em> file, not the host's; that client/server split is a known
  * pre-1.0 limitation.
  */
 public final class CompanionConfigScreen {
@@ -91,7 +93,7 @@ public final class CompanionConfigScreen {
             "https://api.anthropic.com",    // Anthropic (OpenAI-compat layer)
             "https://api.mistral.ai",       // Mistral
             "https://api.groq.com/openai",  // Groq
-            "https://openrouter.ai/api",    // OpenRouter
+            "https://openrouter.ai/api",    // OpenRouter — one key, many models, and a free tier
             "https://api.x.ai");            // xAI
 
     /**
@@ -124,7 +126,43 @@ public final class CompanionConfigScreen {
                     "grok-4-1-fast-non-reasoning",  // dialogue wants fast, non-CoT replies
                     "grok-4-fast-non-reasoning",    // both fast tiers: $0.20/$0.50
                     "grok-4.3",                     // $1.25/$2.50
-                    "grok-4.5"));                   // $2/$6 — flagship
+                    "grok-4.5"),                    // $2/$6 — flagship
+            // OpenRouter's FREE tier (ids must keep the ':free' suffix — without it you are billed).
+            // Pulled from its live /api/v1/models on 2026-08-22, which reports supported_parameters
+            // per model, and filtered on ONE thing: response_format.
+            //
+            // ⚠️ That filter is not fussiness. A companion's every reply must be a JSON object, and
+            // a backend that cannot be asked for one answers in prose — which this project has now
+            // spent real sessions diagnosing, because it fails INTERMITTENTLY and reads as a flaky
+            // model rather than a missing capability. 85% of all 421 models on OpenRouter support
+            // response_format; only 7 of the 18 free ones do, so the free tier is exactly where
+            // picking by name goes wrong. Ordered by how much model there is to hold the contract.
+            //
+            // ⚠️ Advertising response_format is NECESSARY AND NOT SUFFICIENT, which cost a turn to
+            // learn. nemotron-nano-9b-v2:free advertises structured outputs and was suggested here on
+            // that basis; on its first real session it emitted a correct, complete reply and then
+            // several hundred blank lines and "</</</…" until it hit the token cap, never closing the
+            // brace — a wasted turn and a duplicate call. It is dropped along with the 2.6B, because
+            // a model too small to stop reliably is not made safe by what it advertises.
+            //
+            // Also deliberately absent, though free and larger: nemotron-3-ultra-550b, nemotron-3.5-
+            // lightning, inkling, laguna, north-mini-code. None advertises response_format. The box
+            // takes free text, so they remain usable — they are not RECOMMENDED, which is different.
+            "https://openrouter.ai/api", List.of(
+                    // 120B hybrid MoE, 12B active: big enough not to lose the envelope, cheap enough
+                    // to stay fast, and the only one here whose own description names multi-agent work.
+                    "nvidia/nemotron-3-super-120b-a12b:free", // structured outputs, 262k
+                    // Dense 30.7B with native function calling — that training is what makes a model
+                    // reliable at emitting a fixed object instead of talking about one.
+                    "google/gemma-4-31b-it:free",             // response_format, 262k
+                    "google/gemma-4-26b-a4b-it:free",         // response_format, 262k, MoE — faster
+                    "dots-studio/dots-3-note-preview:free",   // structured outputs, 512k, 16B active
+                    // LAST, and deliberately: Z.ai describe it as a reasoning model. It has the
+                    // strongest structured-output support of the five — and the only 'stop' support —
+                    // but it thinks before it answers and that thinking is billed against
+                    // llm.maxTokens, which is the exact shape of the overrun logged on 2026-08-22.
+                    // Raise maxTokens well past the 1000 floor before choosing it.
+                    "z-ai/glm-5.2:free"));                    // structured outputs + stop, 256k
 
     private CompanionConfigScreen() {}
 
@@ -160,10 +198,14 @@ public final class CompanionConfigScreen {
         ConfigCategory llm = builder.getOrCreateCategory(Text.literal("LLM"));
         ConfigCategory tts = builder.getOrCreateCategory(Text.literal("Voice (TTS)"));
         ConfigCategory behavior = builder.getOrCreateCategory(Text.literal("Behavior"));
+        ConfigCategory memory = builder.getOrCreateCategory(Text.literal("Memory"));
         ConfigCategory skills = builder.getOrCreateCategory(Text.literal("Skills"));
+        ConfigCategory server = builder.getOrCreateCategory(Text.literal("Server"));
 
-        // On every tab, because the warning form of this matters no matter where you land.
-        for (ConfigCategory cat : List.of(companions, llm, tts, behavior, skills)) {
+        // On every tab, because which config you are editing matters no matter where you land.
+        // The Server tab is deliberately excluded: it says who owns it in its own words, and the
+        // notice here is about YOUR file.
+        for (ConfigCategory cat : List.of(companions, llm, tts, behavior, memory, skills)) {
             addScopeNotice(cat, eb);
         }
 
@@ -171,19 +213,25 @@ public final class CompanionConfigScreen {
         buildLlm(llm, eb, config);
         buildTts(tts, eb, config);
         buildBehavior(behavior, eb, config);
+        buildMemory(memory, eb, config);
         buildSkills(skills, eb, config);
+        buildServer(server, eb, config);
 
         return builder.build();
     }
 
     /**
-     * Says which {@code aicompanion.json} this screen is editing.
+     * Says which {@code aicompanion.json} this screen is editing, and whether it takes effect.
      *
-     * <p>It always edits the local config directory. In singleplayer or as a LAN host that is the
-     * same file the server reads, so saving applies immediately. Connected to a remote server it is
-     * the <em>client's</em> copy, which nothing reads — the server has its own, and no packet carries
-     * edits to it. That case is silent otherwise: the screen opens, saves without complaint, and
-     * changes nothing, so it gets the loud version.
+     * <p>This used to be a red warning that on a multiplayer server the screen "CANNOT change its
+     * settings" — which was true, and was the whole problem. Identity, model, key, memory and voice
+     * came from the operator's file, so every player on a server got the operator's companion,
+     * spending the operator's tokens, and could change none of it.
+     *
+     * <p>Those are the player's own now: this file is read by this machine, and the roster is
+     * announced to the server at join. So the notice says what applies where instead of apologising
+     * for a screen that did nothing. What is still not yours lives on the Server tab, which says so
+     * itself.
      */
     private static void addScopeNotice(ConfigCategory cat, ConfigEntryBuilder eb) {
         if (MinecraftClient.getInstance().getServer() != null) {
@@ -193,11 +241,11 @@ public final class CompanionConfigScreen {
             return;
         }
         cat.addEntry(eb.startTextDescription(Text.literal(
-                        "You are on a multiplayer server, and this screen CANNOT change its settings. "
-                                + "It is editing your own client's config/aicompanion.json, which the server "
-                                + "never reads. To configure the companions here, edit "
-                                + "config/aicompanion.json on the server and run /companion reload.")
-                .formatted(Formatting.RED)).build());
+                        "These are YOUR settings and they apply on this server: your companions, "
+                                + "your model and key, your memories, your voice. Reconnect after "
+                                + "saving for a changed roster to reach the server. What the "
+                                + "operator controls is on the Server tab.")
+                .formatted(Formatting.GRAY)).build());
     }
 
     // ## Categories
@@ -258,9 +306,20 @@ public final class CompanionConfigScreen {
                             Text.literal("config/aicompanion/skins/ and reopen this screen."))
                     .setSaveConsumer(v -> skin.addProperty("file", DEFAULT_SKIN.equals(v) ? "" : String.valueOf(v)))
                     .build());
+            sub.add(eb.startStrField(Text.literal("Skin Username"), str(skin, "username", ""))
+                    .setDefaultValue("")
+                    .setTooltip(
+                            Text.literal("Borrow any Minecraft player's skin — type a Mojang username."),
+                            Text.literal("Nothing to install, and every client sees it, so this is the"),
+                            Text.literal("option that works on a LAN. The Skin file above wins if both"),
+                            Text.literal("are set. Needs the server to be online-mode with internet."))
+                    .setSaveConsumer(v -> skin.addProperty("username", v == null ? "" : v.strip()))
+                    .build());
             sub.add(eb.startBooleanToggle(Text.literal("Slim Arms"), bool(skin, "slim", false))
                     .setDefaultValue(false)
-                    .setTooltip(Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."))
+                    .setTooltip(
+                            Text.literal("ON for slim (3px, Alex-style) arm skins, OFF for classic (4px, Steve-style)."),
+                            Text.literal("Ignored when Skin Username is set — the account says which model it uses."))
                     .setSaveConsumer(v -> skin.addProperty("slim", v))
                     .build());
 
@@ -428,7 +487,11 @@ public final class CompanionConfigScreen {
                         Text.literal("Model sent with each request (llama.cpp ignores it)."),
                         Text.literal("Prefer a fast, non-reasoning model."),
                         Text.literal("Saved endpoint's models first, cheapest first;"),
-                        Text.literal("type to search, or enter any name freely."))
+                        Text.literal("type to search, or enter any name freely."),
+                        Text.literal("OpenRouter: keep the ':free' suffix or you get billed."),
+                        Text.literal("The suggested free ones are those that can be asked"),
+                        Text.literal("for JSON — most free models cannot, and a companion"),
+                        Text.literal("whose model answers in prose runs no commands."))
                 .setSaveConsumer(v -> llm.addProperty("model", String.valueOf(v)))
                 .build());
         cat.addEntry(eb.startDoubleField(Text.literal("Temperature"), dbl(llm, "temperature", 0.7))
@@ -438,17 +501,19 @@ public final class CompanionConfigScreen {
                         Text.literal("Negative = use the server's default."))
                 .setSaveConsumer(v -> llm.addProperty("temperature", v))
                 .build());
-        cat.addEntry(eb.startIntField(Text.literal("Max Tokens"), intVal(llm, "maxTokens", 1000))
-                .setDefaultValue(1000)
+        cat.addEntry(eb.startIntField(Text.literal("Max Tokens"), intVal(llm, "maxTokens", 2000))
+                .setDefaultValue(2000)
                 .setTooltip(
-                        Text.literal("Cap on tokens generated per reply. Do not go below 1000."),
+                        Text.literal("Cap on tokens generated per reply. Never below 1000."),
                         Text.literal("It is a cap, not a budget — you pay for what is"),
                         Text.literal("generated, so a high value costs nothing on short"),
                         Text.literal("replies. Too low and skill commands are cut off"),
                         Text.literal("mid-reply, so nothing runs at all."),
                         Text.literal("Zero or negative = server default."),
-                        Text.literal("Reasoning models (gpt-5.x, o-series) count hidden"),
-                        Text.literal("thinking here — give them 2000+."))
+                        Text.literal("Reasoning models (gpt-5.x, o-series, glm) count"),
+                        Text.literal("hidden thinking here, and a small model that fails"),
+                        Text.literal("to stop runs to the cap and is retried — which is"),
+                        Text.literal("why the default is 2000, not the 1000 floor."))
                 .setSaveConsumer(v -> llm.addProperty("maxTokens", v))
                 .build());
         if (envApiKeySet()) {
@@ -499,6 +564,120 @@ public final class CompanionConfigScreen {
                 .build());
     }
 
+    /**
+     * Long-term memory, and the loud version of what it currently is.
+     *
+     * <p>The warning is not boilerplate. The facts are hard-coded fiction about a player who does
+     * not exist, so a companion with this on will confidently refer to a bridge nobody built. Anyone
+     * turning it on without knowing that will read it as the mod being broken, and the tooltip is
+     * the only place they will find out.
+     */
+    private static void buildMemory(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
+        JsonObject memory = section(config, "memory");
+        JsonObject embeddings = section(config, "embeddings");
+
+        // ⚠️ This banner described the prototype for two releases after the prototype was gone —
+        // "nothing is stored, nothing is learned" on the same screen as the switch that stores and
+        // learns. Someone turning memory on read that, believed it, and went looking for a bug.
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                        "Off by default.\n\n"
+                                + "The companion looks up what it knows about you that fits what you "
+                                + "just said, and those facts go into its context automatically. It "
+                                + "never has to ask for them, so this works even on small local models.\n\n"
+                                + "TURNING THIS ON STORES NOTHING BY ITSELF. Facts are written by "
+                                + "/companion remember and /companion rememberhere, or automatically "
+                                + "by \"Learn From Conversation\" below — which is off, because it "
+                                + "spends an extra model call on every turn you talk.")
+                .formatted(Formatting.YELLOW)).build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Enabled"), bool(memory, "enabled", false))
+                .setDefaultValue(false)
+                .setTooltip(
+                        Text.literal("Turn on memory RECALL. Needs Embeddings below."),
+                        Text.literal("This alone stores nothing — see the note above."))
+                .setSaveConsumer(v -> memory.addProperty("enabled", v))
+                .build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Learn From Conversation"),
+                        bool(memory, "extractionEnabled", false))
+                .setDefaultValue(false)
+                .setTooltip(
+                        Text.literal("After a reply has gone out, one extra model call reads"),
+                        Text.literal("the exchange and stores what you stated about yourself."),
+                        Text.literal("Without this, memory only ever holds what you typed into"),
+                        Text.literal("/companion remember — telling a companion your dog's name"),
+                        Text.literal("in chat is not remembered."),
+                        Text.literal("Costs a call on every turn you talk (~$0.00013 on a"),
+                        Text.literal("hosted model, nothing on a local one), and needs a model"),
+                        Text.literal("that can return JSON on demand."))
+                .setSaveConsumer(v -> memory.addProperty("extractionEnabled", v))
+                .build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Skip Irrelevant Turns"),
+                        bool(memory, "gateEnabled", true))
+                .setDefaultValue(true)
+                .setTooltip(
+                        Text.literal("Decide whether a line is about you at all BEFORE looking"),
+                        Text.literal("anything up. Stops \"attack that zombie\" from dredging up"),
+                        Text.literal("a fact about your dog, and costs nothing when it skips."),
+                        Text.literal("Leave this on: without it there is no reliable way to tell"),
+                        Text.literal("a real question from small talk."))
+                .setSaveConsumer(v -> memory.addProperty("gateEnabled", v))
+                .build());
+
+        cat.addEntry(eb.startIntSlider(Text.literal("Max Memories Per Reply"),
+                        intVal(memory, "topK", 3), 1, 10)
+                .setDefaultValue(3)
+                .setTooltip(
+                        Text.literal("Upper limit on how many facts can reach one reply."),
+                        Text.literal("Usually only one or two actually clear the filters."),
+                        Text.literal("Every one costs tokens on every turn."))
+                .setSaveConsumer(v -> memory.addProperty("topK", v))
+                .build());
+
+        cat.addEntry(eb.startDoubleField(Text.literal("Minimum Relevance"),
+                        dbl(memory, "minCosine", 0.45))
+                .setDefaultValue(0.45)
+                .setTooltip(
+                        Text.literal("0 to 1. How closely a fact must match before it is used."),
+                        Text.literal("Raise it if the companion brings up unrelated things;"),
+                        Text.literal("lower it if it forgets things it obviously should know."),
+                        Text.literal("Raise to 0.50 if you turn off Skip Irrelevant Turns."))
+                .setSaveConsumer(v -> memory.addProperty("minCosine", v))
+                .build());
+
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                        "Embeddings — the lookup service memory needs. A SEPARATE server from the "
+                                + "one in the LLM tab: a normal llama.cpp cannot do this job, and "
+                                + "pointing this at it will not work. Run an embedding model of its "
+                                + "own: \"ollama pull nomic-embed-text\", then leave the endpoint below.")
+                .formatted(Formatting.GRAY)).build());
+
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Embeddings Enabled"),
+                        bool(embeddings, "enabled", false))
+                .setDefaultValue(false)
+                .setTooltip(Text.literal("Required for memory. Harmless on its own."))
+                .setSaveConsumer(v -> embeddings.addProperty("enabled", v))
+                .build());
+
+        cat.addEntry(eb.startStrField(Text.literal("Embeddings Endpoint"),
+                        str(embeddings, "endpoint", "http://localhost:11434"))
+                .setDefaultValue("http://localhost:11434")
+                .setTooltip(Text.literal("Ollama's default port. No trailing slash, no /v1."))
+                .setSaveConsumer(v -> embeddings.addProperty("endpoint", v))
+                .build());
+
+        cat.addEntry(eb.startStrField(Text.literal("Embeddings Model"),
+                        str(embeddings, "model", "nomic-embed-text"))
+                .setDefaultValue("nomic-embed-text")
+                .setTooltip(
+                        Text.literal("Changing this is not a preference — every setting on this"),
+                        Text.literal("tab was tuned for nomic-embed-text at 768 dimensions, and a"),
+                        Text.literal("model of a different width is refused rather than used."))
+                .setSaveConsumer(v -> embeddings.addProperty("model", v))
+                .build());
+    }
+
     private static void buildTts(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
         JsonObject tts = section(config, "tts");
         cat.addEntry(eb.startBooleanToggle(Text.literal("Enabled"), bool(tts, "enabled", false))
@@ -511,7 +690,11 @@ public final class CompanionConfigScreen {
                 .build());
         cat.addEntry(eb.startStrField(Text.literal("Endpoint"), str(tts, "endpoint", "http://localhost:8880"))
                 .setDefaultValue("http://localhost:8880")
-                .setTooltip(Text.literal("Kokoro (OpenAI-compatible) TTS server base URL."))
+                .setTooltip(
+                        Text.literal("Kokoro (OpenAI-compatible) TTS server base URL."),
+                        Text.literal("YOUR machine fetches the audio, so this is YOUR setting"),
+                        Text.literal("even on a dedicated server. Point it at a LAN address"),
+                        Text.literal("(http://192.168.1.5:8880) to share one container."))
                 .setSaveConsumer(v -> tts.addProperty("endpoint", v))
                 .build());
         cat.addEntry(eb.startStrField(Text.literal("Model"), str(tts, "model", "kokoro"))
@@ -542,15 +725,112 @@ public final class CompanionConfigScreen {
                         Text.literal("— fine in singleplayer, costly on a paid endpoint."))
                 .setSaveConsumer(v -> behavior.addProperty("triggerPrefix", v))
                 .build());
-        cat.addEntry(eb.startDoubleField(Text.literal("Think Throttle (seconds)"), dbl(behavior, "thinkThrottleSeconds", 0))
-                .setDefaultValue(0.0)
-                .setMin(0.0)
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                "Throttling, cross-talk, autonomy, building, defence and combat live on the Server "
+                        + "tab now. They change the world everyone shares or cost the server ticks, "
+                        + "so they are the operator's to set — and in singleplayer you are the "
+                        + "operator, so you can still edit them there.")
+                .formatted(Formatting.GRAY)).build());
+    }
+
+    /**
+     * The operator's settings: editable when you are the operator, read-only when you are a guest.
+     *
+     * <p>This tab is the visible half of the config split. Everything else on this screen is yours
+     * and applies wherever you play; these belong to whoever runs the server, and on someone else's
+     * server the values shown are <b>theirs</b>, pushed over the wire at join — not this machine's
+     * copy of the same keys, which nothing reads and which would be a convincing lie.
+     */
+    private static void buildServer(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
+        JsonObject remote = ClientConfigSync.serverPolicy();
+        if (remote != null) {
+            cat.addEntry(eb.startTextDescription(Text.literal(
+                    "These are THIS SERVER's settings, shown read-only. Ask the operator to change "
+                            + "them in config/aicompanion.json and run /companion reload.")
+                    .formatted(Formatting.GOLD)).build());
+            for (String key : new String[] {"maxCompanionsPerPlayer", "globalCompanionCap",
+                    "allowPlayerCommands", "companionsAnswerAnyone", "maxRosterEntries",
+                    "persistHistory", "thinkThrottleSeconds", "aiCrossTalk", "maxAutonomousTurns",
+                    "buildCostsMaterials", "buildGroundCheck", "buildPhysicalPlacement",
+                    "mobsTargetCompanion", "defenseFightBack", "defenseUseShield",
+                    "defenseFleeFromHostiles", "defenseBravery", "autoEquipArmor", "scavengeFood",
+                    "scavengeRadius", "attackDamageBase", "armorBase", "maxHealth", "followRange",
+                    "advertiseInPrompt"}) {
+                if (remote.has(key)) {
+                    cat.addEntry(eb.startTextDescription(Text.literal(
+                            "  " + key + ": " + remote.get(key).getAsString())
+                            .formatted(Formatting.GRAY)).build());
+                }
+            }
+            return;
+        }
+
+        JsonObject server = section(config, "server");
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                "You are the operator here, so these apply. On someone else's server this tab shows "
+                        + "their settings instead, read-only.").formatted(Formatting.GRAY)).build());
+        cat.addEntry(eb.startIntField(Text.literal("Max Companions Per Player"),
+                        intVal(server, "maxCompanionsPerPlayer", 2))
+                .setDefaultValue(2).setMin(0)
+                .setTooltip(
+                        Text.literal("How many companions ONE player may have out."),
+                        Text.literal("Each is a pathfinder on the server thread."),
+                        Text.literal("0 = unlimited."))
+                .setSaveConsumer(v -> server.addProperty("maxCompanionsPerPlayer", v))
+                .build());
+        cat.addEntry(eb.startIntField(Text.literal("Global Companion Cap"),
+                        intVal(server, "globalCompanionCap", 20))
+                .setDefaultValue(20).setMin(0)
+                .setTooltip(
+                        Text.literal("How many may exist on the whole server."),
+                        Text.literal("The TPS brake: 20 players at 2 each is 40"),
+                        Text.literal("pathfinders ticking. 0 = unlimited."))
+                .setSaveConsumer(v -> server.addProperty("globalCompanionCap", v))
+                .build());
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Allow Player Commands"),
+                        bool(server, "allowPlayerCommands", true))
+                .setDefaultValue(true)
+                .setTooltip(
+                        Text.literal("When off, /companion is operators only."),
+                        Text.literal("The way to shut the mod off without"),
+                        Text.literal("uninstalling it."))
+                .setSaveConsumer(v -> server.addProperty("allowPlayerCommands", v))
+                .build());
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Companions Answer Anyone"),
+                        bool(server, "companionsAnswerAnyone", false))
+                .setDefaultValue(false)
+                .setTooltip(
+                        Text.literal("When OFF (default), a companion answers only"),
+                        Text.literal("its owner. A turn is billed to the OWNER, and"),
+                        Text.literal("with clientBrain on, to the owner's machine —"),
+                        Text.literal("so on with strangers about means they spend"),
+                        Text.literal("your tokens and their words become your"),
+                        Text.literal("companion's memories of you."),
+                        Text.literal("On for a family LAN where that is the point."))
+                .setSaveConsumer(v -> server.addProperty("companionsAnswerAnyone", v))
+                .build());
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Persist Conversation History"),
+                        bool(server, "persistHistory", true))
+                .setDefaultValue(true)
+                .setTooltip(
+                        Text.literal("Whether conversation history survives a restart."),
+                        Text.literal("It overlaps the memory corpus and does the"),
+                        Text.literal("cross-session job worse — a companion re-reads"),
+                        Text.literal("its own paraphrases and cites them as fact."),
+                        Text.literal("Do NOT turn off until you have confirmed the"),
+                        Text.literal("same details are landing in memory."))
+                .setSaveConsumer(v -> server.addProperty("persistHistory", v))
+                .build());
+        cat.addEntry(eb.startDoubleField(Text.literal("Think Throttle (seconds)"),
+                        dbl(server, "thinkThrottleSeconds", 0))
+                .setDefaultValue(0.0).setMin(0.0)
                 .setTooltip(
                         Text.literal("Minimum seconds between LLM turns; messages inside"),
                         Text.literal("the window queue into the next turn. 0 = no limit."))
-                .setSaveConsumer(v -> behavior.addProperty("thinkThrottleSeconds", v))
+                .setSaveConsumer(v -> server.addProperty("thinkThrottleSeconds", v))
                 .build());
-        cat.addEntry(eb.startBooleanToggle(Text.literal("Companion Cross-Talk"), bool(behavior, "aiCrossTalk", false))
+        cat.addEntry(eb.startBooleanToggle(Text.literal("Companion Cross-Talk"),
+                        bool(server, "aiCrossTalk", false))
                 .setDefaultValue(false)
                 .setTooltip(
                         Text.literal("Whether companions overhear and answer EACH OTHER."),
@@ -559,19 +839,23 @@ public final class CompanionConfigScreen {
                         Text.literal("together run up requests with nobody talking to"),
                         Text.literal("them — and each reply prompts another. One"),
                         Text.literal("measured session logged 382 of these."),
-                        Text.literal("Turn on for the ambience where turns are free."))
-                .setSaveConsumer(v -> behavior.addProperty("aiCrossTalk", v))
+                        Text.literal("Only ever between one player's own companions."))
+                .setSaveConsumer(v -> server.addProperty("aiCrossTalk", v))
                 .build());
-        cat.addEntry(eb.startIntField(Text.literal("Max Autonomous Turns"), intVal(behavior, "maxAutonomousTurns", 2))
-                .setDefaultValue(2)
-                .setMin(0)
+        cat.addEntry(eb.startIntField(Text.literal("Max Autonomous Turns"),
+                        intVal(server, "maxAutonomousTurns", 2))
+                .setDefaultValue(2).setMin(0)
                 .setTooltip(
                         Text.literal("Actions the companion may take on its own after"),
                         Text.literal("finishing your request, before it waits to be"),
                         Text.literal("spoken to. Resets when anybody talks to it."),
                         Text.literal("0 = unlimited, and it will invent chores."))
-                .setSaveConsumer(v -> behavior.addProperty("maxAutonomousTurns", v))
+                .setSaveConsumer(v -> server.addProperty("maxAutonomousTurns", v))
                 .build());
+        cat.addEntry(eb.startTextDescription(Text.literal(
+                "Building, defence, scavenging and combat stats are in the \"server\" block of "
+                        + "config/aicompanion.json — every key is documented there.")
+                .formatted(Formatting.GRAY)).build());
     }
 
     /**
@@ -705,6 +989,11 @@ public final class CompanionConfigScreen {
                     AiCompanion.MOD_ID, path, e.toString());
             return;
         }
+        // Re-announce the roster before anything else: the server holds a COPY taken at join, so a
+        // companion added or renamed here does not exist for /companion spawn until it is sent
+        // again. No-ops when there is nobody to send to.
+        ClientConfigSync.announce();
+
         MinecraftServer server = MinecraftClient.getInstance().getServer();
         if (server != null) {
             // Singleplayer/LAN host: same process as the server, so apply immediately — on the
@@ -715,12 +1004,15 @@ public final class CompanionConfigScreen {
                         AiCompanion.MOD_ID, updated);
             });
         } else {
-            // Connected to a remote server: this is the client's own copy of the file and the server
-            // reads its own. Saying "applies on next world load" would be wrong — it never applies
-            // there at all.
-            AiCompanion.LOGGER.info("[{}] config screen: saved {} — this is the client's local config. "
-                            + "A multiplayer server reads its own copy; edit config/aicompanion.json there "
-                            + "and run /companion reload.",
+            // Connected to a remote server: there is no local server to hand the file to, but this
+            // JVM still runs the client-owned half — the brain's endpoint, the embeddings endpoint,
+            // the Kokoro endpoint audio is fetched from. Without this the file saved and nothing
+            // read it again until the game was relaunched, so editing an endpoint here looked like
+            // it did nothing.
+            CompanionConfig.reloadClientOwned();
+            AiCompanion.LOGGER.info("[{}] config screen: saved + applied {} — this is the client's local "
+                            + "config. The SERVER's rules (caps, permissions, chat routing) come from its "
+                            + "own copy; edit config/aicompanion.json there and run /companion reload.",
                     AiCompanion.MOD_ID, path);
         }
     }
@@ -737,13 +1029,14 @@ public final class CompanionConfigScreen {
 
     /**
      * Get or create {@code companion.skin} as an object. The file format also allows a plain string
-     * filename; normalize that to {@code { file, slim }} so the toggle has somewhere to live.
+     * filename; normalize that to {@code { file, username, slim }} so the fields have somewhere to live.
      */
     private static JsonObject skinSection(JsonObject companion) {
         if (companion.has("skin") && companion.get("skin").isJsonPrimitive()) {
             String file = companion.get("skin").getAsString();
             JsonObject obj = new JsonObject();
             obj.addProperty("file", file);
+            obj.addProperty("username", "");
             obj.addProperty("slim", false);
             companion.add("skin", obj);
         }

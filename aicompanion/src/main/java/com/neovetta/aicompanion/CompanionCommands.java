@@ -5,7 +5,9 @@ import adris.altoclef.player2api.AgentConversationData;
 import adris.altoclef.player2api.Event;
 import adris.altoclef.player2api.manager.ConversationManager;
 import adris.altoclef.player2api.status.StatusUtils;
+import adris.altoclef.player2api.ServerPolicy;
 import adris.altoclef.tasks.movement.GetToBlockTask;
+import me.lucko.fabric.api.permissions.v0.Permissions;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.neovetta.aicompanion.entity.CompanionEntity;
@@ -33,6 +35,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Dev/admin commands for the companion. Phase 1: {@code /companion spawn} drops a companion at the
@@ -43,20 +47,74 @@ public final class CompanionCommands {
 
     private CompanionCommands() {}
 
+    /** Permission nodes are namespaced so an operator can grant them in LuckPerms by group. */
+    private static final String NODE = "aicompanion.command.";
+
+    /** Acting on a companion that is not yours. Level 2, so console and operators keep working. */
+    private static final String ADMIN_NODE = "aicompanion.admin";
+
+    /**
+     * A subcommand any player may run on their own companion.
+     *
+     * <p>Level 0 by default: the whole command tree used to be gated at the root on
+     * {@code isSingleplayer() || hasPermissionLevel(2)}, a leftover from when this was singleplayer
+     * only, which meant no ordinary player could use the mod at all.
+     *
+     * <p>The level is read at evaluation time rather than baked in at registration, so
+     * {@code server.allowPlayerCommands} takes effect on {@code /companion reload} instead of only
+     * at restart. Locking the mod down raises these to 2 rather than removing them — one predicate
+     * with two levels, instead of a second gate that can disagree with the first.
+     */
+    private static java.util.function.Predicate<ServerCommandSource> player(String node) {
+        return src -> Permissions.check(src, NODE + node, ServerPolicy.allowPlayerCommands ? 0 : 2);
+    }
+
+    /** A subcommand that changes the server for everybody: config, skill files, a global reload. */
+    private static java.util.function.Predicate<ServerCommandSource> operator(String node) {
+        return src -> isWorldHost(src) || Permissions.check(src, NODE + node, 2);
+    }
+
+    /** Whether this caller may act on companions that are not theirs. */
+    private static boolean isAdmin(ServerCommandSource source) {
+        return isWorldHost(source) || Permissions.check(source, ADMIN_NODE, 2);
+    }
+
+    /**
+     * The person whose game this is: the player who opened the world, in singleplayer or on a LAN.
+     *
+     * <p>⚠️ Without this, {@code /companion reload} disappears in an ordinary survival singleplayer
+     * world. "Allow Cheats" defaults <b>off</b> there, which means permission level <b>0</b> — so an
+     * operator-level check refuses the one person who owns the game, the config file and the machine
+     * it runs on. The command tree used to carry {@code isSingleplayer() ||} at its root for exactly
+     * this reason; splitting permissions per node dropped that clause along with the root gate, and
+     * the failure is invisible until someone edits their config and tries to reload it.
+     *
+     * <p>Asks who the <b>host</b> is rather than whether the server is singleplayer, which is the one
+     * improvement on the original. An integrated server opened to LAN still reports itself as
+     * singleplayer, so the old test would have handed operator rights to every guest who joined.
+     */
+    private static boolean isWorldHost(ServerCommandSource source) {
+        MinecraftServer server = source.getServer();
+        ServerPlayerEntity player = source.getPlayer();
+        if (server == null || player == null) {
+            return false;
+        }
+        return server.isHost(player.getGameProfile());
+    }
+
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
                 dispatcher.register(CommandManager.literal("companion")
-                        // Op-gate on real servers, but always allow the local single-player owner.
-                        // Survival worlds default "Allow Cheats" OFF (perm level 0), which would
-                        // otherwise hide this command entirely; creative worlds default it ON.
-                        .requires(src -> src.getServer().isSingleplayer() || src.hasPermissionLevel(2))
-                        .then(CommandManager.literal("spawn")
+                        // Deliberately no gate on the root. Permissions are per-node now, and a root
+                        // requirement would silently veto every one of them — which is exactly what
+                        // it was doing.
+                        .then(CommandManager.literal("spawn").requires(player("spawn"))
                                 .executes(ctx -> spawn(ctx.getSource(), null))
                                 .then(CommandManager.argument("name", StringArgumentType.greedyString())
                                         .suggests(ROSTER_SUGGESTIONS)
                                         .executes(ctx -> spawn(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "name")))))
-                        .then(CommandManager.literal("goto")
+                        .then(CommandManager.literal("goto").requires(player("goto"))
                                 .then(CommandManager.argument("pos", BlockPosArgumentType.blockPos())
                                         .executes(ctx -> goTo(ctx.getSource(),
                                                 BlockPosArgumentType.getBlockPos(ctx, "pos"), null))
@@ -69,20 +127,41 @@ public final class CompanionCommands {
                         .then(withOptionalName("where", CompanionCommands::where))
                         .then(withOptionalName("stats", CompanionCommands::stats))
                         .then(withOptionalName("despawn", CompanionCommands::despawn))
-                        .then(CommandManager.literal("list").executes(ctx -> list(ctx.getSource())))
-                        .then(CommandManager.literal("reload").executes(ctx -> reload(ctx.getSource())))
-                        .then(CommandManager.literal("config").executes(ctx -> config(ctx.getSource())))
-                        .then(CommandManager.literal("radar").executes(ctx -> radar(ctx.getSource())))
-                        .then(CommandManager.literal("hud").executes(ctx -> hud(ctx.getSource())))
-                        .then(CommandManager.literal("tokens").executes(ctx -> tokens(ctx.getSource())))
-                        .then(CommandManager.literal("skills").executes(ctx -> skills(ctx.getSource()))
-                            .then(CommandManager.literal("reset")
+                        .then(CommandManager.literal("remember").requires(player("remember"))
+                                .then(CommandManager.argument("fact", StringArgumentType.greedyString())
+                                        .executes(ctx -> remember(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "fact"), false))))
+                        .then(CommandManager.literal("rememberhere").requires(player("rememberhere"))
+                                .then(CommandManager.argument("fact", StringArgumentType.greedyString())
+                                        .executes(ctx -> remember(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "fact"), true))))
+                        .then(CommandManager.literal("list").requires(player("list"))
+                                .executes(ctx -> list(ctx.getSource())))
+                        // Open to everyone, and split inside: reload does the caller's OWN half
+                        // unconditionally (their file, their endpoints, nobody else affected) and
+                        // the SERVER's half only for an operator. Gating the whole command left a
+                        // non-operator with no way to apply an edit to settings only they read.
+                        .then(CommandManager.literal("reload").requires(player("reload"))
+                                .executes(ctx -> reload(ctx.getSource())))
+                        .then(CommandManager.literal("config").requires(player("config"))
+                                .executes(ctx -> config(ctx.getSource())))
+                        .then(CommandManager.literal("radar").requires(player("radar"))
+                                .executes(ctx -> radar(ctx.getSource())))
+                        .then(CommandManager.literal("hud").requires(player("hud"))
+                                .executes(ctx -> hud(ctx.getSource())))
+                        .then(CommandManager.literal("tokens").requires(player("tokens"))
+                                .executes(ctx -> tokens(ctx.getSource())))
+                        .then(CommandManager.literal("skills").requires(player("skills"))
+                                .executes(ctx -> skills(ctx.getSource()))
+                            // Overwrites files in the server's skills directory, so operator-only
+                            // even though listing them is not.
+                            .then(CommandManager.literal("reset").requires(operator("skills.reset"))
                                     .executes(ctx -> skillsReset(ctx.getSource(), null))
                                     .then(CommandManager.argument("name", StringArgumentType.greedyString())
                                             .suggests(BUNDLED_SUGGESTIONS)
                                             .executes(ctx -> skillsReset(ctx.getSource(),
                                                     StringArgumentType.getString(ctx, "name"))))))
-                        .then(CommandManager.literal("skill")
+                        .then(CommandManager.literal("skill").requires(player("skill"))
                                 .then(CommandManager.argument("first", StringArgumentType.word())
                                         .suggests(SKILL_OR_COMPANION_SUGGESTIONS)
                                         .executes(ctx -> skill(ctx.getSource(),
@@ -104,6 +183,7 @@ public final class CompanionCommands {
     private static com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> withOptionalName(
             String literal, java.util.function.BiFunction<ServerCommandSource, String, Integer> action) {
         return CommandManager.literal(literal)
+                .requires(player(literal))
                 .executes(ctx -> action.apply(ctx.getSource(), null))
                 .then(CommandManager.argument("name", StringArgumentType.greedyString())
                         .suggests(LIVE_SUGGESTIONS)
@@ -122,25 +202,125 @@ public final class CompanionCommands {
     }
 
     /**
-     * Find a companion by name anywhere on the server, in any world.
+     * The companions in this world that the caller may act on: their own, or every one for an
+     * operator.
+     *
+     * <p>⚠️ <b>This is the ownership check the whole command surface was missing.</b> Every
+     * targeting command used to go through a lookup that matched on display name alone, so opening
+     * the commands to ordinary players would have let anybody move, inspect or <b>despawn</b>
+     * somebody else's companion. The owner was recorded at spawn all along; it was simply never
+     * consulted.
+     *
+     * <p>An ownerless companion — spawned from the console, so {@code initBrain} never ran — is
+     * visible only to an operator. Letting whoever walks past claim it is how a companion nobody
+     * owns becomes a companion everybody owns.
+     */
+    private static List<CompanionEntity> ownedCompanions(ServerCommandSource source) {
+        ServerPlayerEntity player = source.getPlayer();
+        if (player == null) {
+            // Console or a command block: it owns nothing, so "yours" is meaningless. An operator
+            // source sees everything; anything else sees nothing.
+            return isAdmin(source) ? liveCompanions(source) : List.of();
+        }
+        // ⚠️ Strictly the caller's own, INCLUDING for operators. This used to hand an admin the
+        // full list, which quietly made every unnamed command target the nearest companion of
+        // anybody — so an opped player standing near someone else's companion could delete it with
+        // a bare "/companion despawn" and no warning. That is the same coin-flip targeting the
+        // roster work removed, reintroduced for exactly the people most likely to be standing
+        // around other players' companions.
+        //
+        // It also matters because a family server ops everyone: if admin widened the default,
+        // ownership would be enforced against almost nobody. Reaching another player's companion is
+        // still possible, but it has to be asked for by name — see findCompanion.
+        UUID me = player.getUuid();
+        return liveCompanions(source).stream().filter(c -> me.equals(c.getOwnerUuid())).toList();
+    }
+
+    /**
+     * Find one of the caller's own companions by name, anywhere on the server, in any world.
      *
      * <p>Only used by {@code spawn}'s duplicate check. Everything else is deliberately scoped to the
      * caller's world — you cannot send a command to a companion in the Nether from the Overworld, and
      * pretending otherwise would just move the failure somewhere less obvious.
+     *
+     * <p>⚠️ <b>Scoped to one owner, which it was not before.</b> Matching by name across the whole
+     * server meant one roster entry was one companion for the entire server: the second player to
+     * try {@code /companion spawn Vetta} was told Vetta was already out, four thousand blocks away,
+     * in somebody else's base. Now that each client brings its own roster, two players having a
+     * companion with the same name is the ordinary case and not a collision — ownership is what
+     * tells them apart.
      */
-    private static CompanionEntity findAnywhere(MinecraftServer server, String name) {
-        if (server == null || name == null) {
+    private static CompanionEntity findOwnedAnywhere(MinecraftServer server, UUID owner, String name) {
+        if (server == null || name == null || owner == null) {
             return null;
         }
         for (ServerWorld world : server.getWorlds()) {
             for (Entity entity : world.iterateEntities()) {
                 if (entity instanceof CompanionEntity companion
+                        && owner.equals(companion.getOwnerUuid())
                         && companion.displayName().equalsIgnoreCase(name)) {
                     return companion;
                 }
             }
         }
         return null;
+    }
+
+    /** How many companions this player has out, across every world. */
+    private static int countOwnedAnywhere(MinecraftServer server, UUID owner) {
+        if (server == null || owner == null) {
+            return 0;
+        }
+        int count = 0;
+        for (ServerWorld world : server.getWorlds()) {
+            for (Entity entity : world.iterateEntities()) {
+                if (entity instanceof CompanionEntity companion
+                        && owner.equals(companion.getOwnerUuid())) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Companions whose owner is not online, and which are therefore doing nothing for anybody.
+     *
+     * <p>Only used to explain a refusal. They still count against the cap — see the note where that
+     * refusal is raised for why not counting them is the worse of the two options.
+     */
+    private static int countAbandoned(MinecraftServer server) {
+        if (server == null) {
+            return 0;
+        }
+        int count = 0;
+        for (ServerWorld world : server.getWorlds()) {
+            for (Entity entity : world.iterateEntities()) {
+                if (entity instanceof CompanionEntity companion) {
+                    UUID owner = companion.getOwnerUuid();
+                    if (owner == null || server.getPlayerManager().getPlayer(owner) == null) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    /** How many companions exist on the whole server — the global cap's input. */
+    private static int countAllAnywhere(MinecraftServer server) {
+        if (server == null) {
+            return 0;
+        }
+        int count = 0;
+        for (ServerWorld world : server.getWorlds()) {
+            for (Entity entity : world.iterateEntities()) {
+                if (entity instanceof CompanionEntity) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 
     /**
@@ -154,26 +334,60 @@ public final class CompanionCommands {
      * companions owned by the same player every command was a coin flip between them.
      */
     private static CompanionEntity findCompanion(ServerCommandSource source, String name) {
-        List<CompanionEntity> companions = liveCompanions(source);
+        // Only ever the caller's own — see ownedCompanions. Nothing below can return somebody
+        // else's companion, which is the property that makes the level-0 permissions safe.
+        List<CompanionEntity> companions = ownedCompanions(source);
         if (companions.isEmpty()) {
             return null;
         }
         if (name != null && !name.isBlank()) {
             String wanted = name.strip();
-            return companions.stream()
+            CompanionEntity own = companions.stream()
                     .filter(c -> c.displayName().equalsIgnoreCase(wanted))
                     .findFirst()
                     .orElse(null);
-        }
-        ServerPlayerEntity player = source.getPlayer();
-        if (player != null) {
-            for (CompanionEntity c : companions) {
-                if (player.getUuid().equals(c.getOwnerUuid())) {
-                    return c;
-                }
+            if (own != null) {
+                return own;
             }
+            return adminReach(source, wanted);
         }
+        // Nearest of yours: the list is already distance-sorted, and it no longer needs a
+        // second pass to prefer your own because it holds nothing else. The old fallback to
+        // companions.get(0) — anybody's nearest — is deliberately gone.
         return companions.get(0);
+    }
+
+    /**
+     * An operator reaching a companion that is not theirs, by name and on purpose.
+     *
+     * <p>The escape hatch that keeps a server administrable: someone has to be able to clear up a
+     * companion whose owner has gone. It is deliberately reachable <b>only by name</b> — an unnamed
+     * command never leaves the caller's own companions — so acting on someone else's is always
+     * something that was typed out, never something that happened because of where you were standing.
+     *
+     * <p>⚠️ Announces itself. Sending feedback from a lookup is not tidy, but the alternative is
+     * worse: this is the one path where a command does something to another player's property, and
+     * every caller would otherwise have to remember to say so. One place that cannot be forgotten
+     * beats six that can.
+     */
+    private static CompanionEntity adminReach(ServerCommandSource source, String wanted) {
+        if (!isAdmin(source)) {
+            return null;
+        }
+        CompanionEntity other = liveCompanions(source).stream()
+                .filter(c -> c.displayName().equalsIgnoreCase(wanted))
+                .findFirst()
+                .orElse(null);
+        if (other == null) {
+            return null;
+        }
+        String owner = other.ownerName();
+        source.sendFeedback(() -> Text.literal(
+                other.displayName() + " belongs to " + owner + " — acting on it as an operator.")
+                .formatted(Formatting.YELLOW), false);
+        AiCompanion.LOGGER.info("[{}] {} acted on {}'s companion {} as an operator",
+                AiCompanion.MOD_ID, source.getName(), owner, other.displayName());
+        return other;
     }
 
     /**
@@ -184,21 +398,43 @@ public final class CompanionCommands {
      * fixes. Listing the live ones distinguishes them at a glance.
      */
     private static int noCompanion(ServerCommandSource source, String name) {
-        List<CompanionEntity> companions = liveCompanions(source);
+        // "It belongs to someone else" is a fourth cause, and the one that would otherwise read as
+        // "no companion called Vetta" while Vetta is standing in front of you. Checked first,
+        // against every companion in the world rather than only the caller's.
+        if (name != null && !name.isBlank()) {
+            String wanted = name.strip();
+            CompanionEntity other = liveCompanions(source).stream()
+                    .filter(c -> c.displayName().equalsIgnoreCase(wanted))
+                    .findFirst()
+                    .orElse(null);
+            if (other != null) {
+                source.sendError(Text.literal(
+                        other.displayName() + " belongs to " + other.ownerName() + "."));
+                return 0;
+            }
+        }
+        List<CompanionEntity> companions = ownedCompanions(source);
         if (companions.isEmpty()) {
             source.sendError(Text.literal(
-                    "No companion found (none spawned, or it drifted into an unloaded area)."));
+                    "You have no companion out (none spawned, or it drifted into an unloaded area). "
+                            + "/companion spawn to call one."));
             return 0;
         }
         String live = companions.stream().map(CompanionEntity::displayName)
                 .collect(java.util.stream.Collectors.joining(", "));
-        source.sendError(Text.literal("No companion called '" + name.strip() + "'. Out right now: " + live));
+        source.sendError(Text.literal("You have no companion called '" + name.strip()
+                + "'. Yours right now: " + live));
         return 0;
     }
 
-    /** Tab-completion over the identities in the config roster — what {@code spawn} accepts. */
+    /**
+     * Tab-completion over the identities the CALLER's client announced — what {@code spawn} accepts
+     * from them. Falls back to the server's own roster for the console and singleplayer.
+     */
     private static final SuggestionProvider<ServerCommandSource> ROSTER_SUGGESTIONS = (ctx, builder) -> {
-        for (CompanionConfig.RosterEntry entry : CompanionConfig.roster()) {
+        ServerPlayerEntity caller = ctx.getSource().getPlayer();
+        for (CompanionConfig.RosterEntry entry
+                : ClientProfiles.rosterFor(caller == null ? null : caller.getUuid())) {
             builder.suggest(entry.name());
         }
         return builder.buildFuture();
@@ -206,13 +442,22 @@ public final class CompanionCommands {
 
     /** Tab-completion over the companions actually in the world — what the targeting commands accept. */
     private static final SuggestionProvider<ServerCommandSource> LIVE_SUGGESTIONS = (ctx, builder) -> {
-        for (CompanionEntity companion : liveCompanions(ctx.getSource())) {
+        for (CompanionEntity companion : ownedCompanions(ctx.getSource())) {
             builder.suggest(companion.displayName());
         }
         return builder.buildFuture();
     };
 
-    /** Recall the companion to the caller — interrupts whatever it was doing and paths back. */
+    /**
+     * Recall the companion to the caller — interrupts whatever it was doing and paths back.
+     *
+     * <p>Or teleports, when walking is impossible. A companion outside the players' simulation distance
+     * receives no ticks, so it cannot run a task, so it cannot walk anywhere: this command would set a
+     * pathfinding goal, report "coming to …", and do nothing at all. That is not a slow recall, it is a
+     * companion that is never coming back, and the only escape was to despawn it. Since this is the
+     * command an owner reaches for precisely when a companion has gone too far, it has to work at any
+     * distance — arriving is the contract and walking is the flavour.
+     */
     private static int come(ServerCommandSource source, String name) {
         CompanionEntity companion = findCompanion(source, name);
         if (companion == null) {
@@ -220,6 +465,20 @@ public final class CompanionCommands {
         }
         ServerPlayerEntity player = source.getPlayer();
         BlockPos target = player != null ? player.getBlockPos() : companion.getBlockPos();
+        String who = companion.displayName();
+
+        boolean stranded = !companion.isTicking();
+        if (stranded) {
+            // Teleport BEFORE handing over a task. Arriving next to the owner is what puts the companion
+            // back inside the simulated area, and only then can anything it is asked to do actually run.
+            double distance = player != null ? Math.sqrt(companion.squaredDistanceTo(player)) : -1;
+            long idleMs = companion.millisSinceTick();
+            AiCompanion.LOGGER.warn("[{}] {} has not ticked for {} ms at {} blocks — outside simulation "
+                    + "distance, so it cannot walk back. Teleporting instead of pathing.",
+                    AiCompanion.MOD_ID, who, idleMs, String.format("%.0f", distance));
+            companion.teleport(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, false);
+        }
+
         AltoClefController ctrl = companion.getController();
         if (ctrl != null) {
             // Controller-aware: replaces the current task so it stops "running off" and comes back.
@@ -227,8 +486,10 @@ public final class CompanionCommands {
         } else {
             companion.goTo(target);
         }
-        String who = companion.displayName();
-        source.sendFeedback(() -> Text.literal(who + " coming to " + target.toShortString()), false);
+        source.sendFeedback(() -> Text.literal(stranded
+                ? who + " was too far away to walk back and has been brought to "
+                        + target.toShortString()
+                : who + " coming to " + target.toShortString()), false);
         return 1;
     }
 
@@ -239,11 +500,124 @@ public final class CompanionCommands {
      * blocks away, got no reply and assumed their companion had died — then spawned a second one
      * beside the first. Nothing in the game would have told them otherwise.
      */
+    /**
+     * Teaches the companion a fact, and writes it to disk.
+     *
+     * <p>Two forms because scope cannot be guessed and getting it wrong is invisible:
+     * {@code /companion remember} stores something true of the player everywhere, and
+     * {@code /companion rememberhere} stores something true only in this world. "I prefer
+     * cobblestone" is the first; "my base is in the taiga" is the second, and storing the second as
+     * the first would have the companion assert it in every save.
+     *
+     * <p>Runs off the server thread: embedding is a network call and persisting writes files.
+     */
+    private static int remember(ServerCommandSource source, String fact, boolean thisWorldOnly) {
+        ServerPlayerEntity player;
+        try {
+            player = source.getPlayerOrThrow();
+        } catch (Exception e) {
+            source.sendError(Text.literal("Only a player can teach a companion something."));
+            return 0;
+        }
+        if (fact == null || fact.isBlank()) {
+            source.sendError(Text.literal("Give it something to remember."));
+            return 0;
+        }
+
+        final UUID owner = player.getUuid();
+        final String worldId = thisWorldOnly
+                ? adris.altoclef.player2api.WorldIdentity.idOf(source.getWorld())
+                : null;
+        final MinecraftServer server = source.getServer();
+
+        // Where the player is standing, for a world memory. "rememberhere" means here, and a
+        // memory about a place that carries no place is what makes the companion borrow a
+        // coordinate from elsewhere in the prompt and present it as something it recalled.
+        // Captured on the server thread, before the async write.
+        final com.neovetta.aicompanion.memory.Place place = thisWorldOnly
+                ? new com.neovetta.aicompanion.memory.Place(
+                        source.getWorld().getRegistryKey().getValue().toString(),
+                        player.getBlockPos().getX(),
+                        player.getBlockPos().getY(),
+                        player.getBlockPos().getZ())
+                : null;
+
+        // ⚠️ When the owning client holds the corpus, the write belongs THERE.
+        //
+        // These commands are Brigadier and run on the server, so they never went through the
+        // BrainTransport seam that moved everything else. Observed 2026-08-20 with clientBrain on:
+        // conversational memories went to the client while /companion rememberhere wrote to the
+        // server. The corpus was then split across two machines, and asking where home was recalled
+        // nothing at all — with no error, because a recall that finds nothing looks exactly like a
+        // recall that found nothing.
+        //
+        // The client prints its own confirmation, from the record it actually stored. It is also the
+        // only side that can count the corpus once it owns it.
+        if (adris.altoclef.player2api.brain.NetworkBrainTransport.canThink(owner)) {
+            try {
+                com.google.gson.JsonObject request = adris.altoclef.player2api.brain.BrainWire
+                        .rememberRequest(fact.strip(), thisWorldOnly, worldId,
+                                place == null ? null : place.dimension(),
+                                place == null ? null : place.x(),
+                                place == null ? null : place.y(),
+                                place == null ? null : place.z());
+                net.minecraft.network.PacketByteBuf buf = PacketByteBufs.create();
+                adris.altoclef.player2api.brain.BrainWire.writeRemember(buf, request);
+                ServerPlayNetworking.send(player,
+                        adris.altoclef.player2api.brain.BrainWire.MEMORY_REMEMBER, buf);
+                return 1;
+            } catch (Throwable e) {
+                // Falling through to the server-side write would put the memory on the wrong
+                // machine, which is the bug. Saying so is the honest outcome.
+                source.sendError(Text.literal(
+                        "Could not reach your client to store that: " + e));
+                AiCompanion.LOGGER.warn("[{}] could not send a remember to {}", AiCompanion.MOD_ID,
+                        owner, e);
+                return 0;
+            }
+        }
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // The record as STORED, not as submitted. Reporting the position we captured would
+                // claim success even when the store kept an older record and dropped it — which is
+                // exactly what happened the first time this shipped.
+                com.neovetta.aicompanion.memory.MemoryRecord saved =
+                        adris.altoclef.player2api.CompanionMemory.remember(owner, fact.strip(),
+                        thisWorldOnly
+                                ? com.neovetta.aicompanion.memory.MemoryScope.WORLD
+                                : com.neovetta.aicompanion.memory.MemoryScope.PERSON,
+                        worldId, place);
+                int held = adris.altoclef.player2api.CompanionMemory.countFor(owner);
+                final String where = saved.place() == null ? ""
+                        : "  @ " + saved.place().x() + ", " + saved.place().y()
+                                + ", " + saved.place().z();
+                // Back to the server thread to talk: sendFeedback is not safe off it.
+                server.execute(() -> source.sendFeedback(() -> Text.literal(
+                        (thisWorldOnly
+                                ? "Remembered, here in this world: "
+                                : "Remembered: ")
+                                + fact.strip() + where)
+                        .formatted(Formatting.GREEN)
+                        .append(Text.literal("  (" + held + " stored)")
+                                .formatted(Formatting.DARK_GRAY)), false));
+            } catch (Throwable e) {
+                String why = e.getMessage() == null ? e.toString() : e.getMessage();
+                server.execute(() -> source.sendError(Text.literal("Could not remember that: " + why)));
+                AiCompanion.LOGGER.warn("[{}] /companion remember failed", AiCompanion.MOD_ID, e);
+            }
+        });
+        return 1;
+    }
+
     private static int list(ServerCommandSource source) {
-        List<CompanionEntity> companions = liveCompanions(source);
+        // Yours, or everyone's for an operator. Listing every companion within a 20000-block box to
+        // any player is both spam and a position readout for somebody else's base.
+        List<CompanionEntity> companions = ownedCompanions(source);
         if (companions.isEmpty()) {
             source.sendFeedback(() -> Text.literal(
-                    "No companions are out. /companion spawn to call one.").formatted(Formatting.GRAY), false);
+                    "You have no companions out. /companion spawn to call one.")
+                    .formatted(Formatting.GRAY), false);
             return 1;
         }
         ServerPlayerEntity player = source.getPlayer();
@@ -311,6 +685,35 @@ public final class CompanionCommands {
      * entity — those need a despawn/spawn cycle, which the feedback says explicitly.
      */
     private static int reload(ServerCommandSource source) {
+        // The caller's own machine first, and without asking anyone's permission: these are the
+        // settings only that client ever reads, and on a dedicated server the server has never even
+        // seen the file they live in. Skipped for the world host, where the client and the server
+        // are one JVM and reloadAndApply below already re-reads the very same file.
+        final ServerPlayerEntity caller = source.getPlayer();
+        boolean toldClient = false;
+        if (caller != null && !isWorldHost(source)
+                && ServerPlayNetworking.canSend(caller, AiCompanion.RELOAD_CLIENT_CONFIG)) {
+            ServerPlayNetworking.send(caller, AiCompanion.RELOAD_CLIENT_CONFIG, PacketByteBufs.create());
+            toldClient = true;
+        }
+
+        if (!isAdmin(source)) {
+            // Not an error: they reloaded everything that was theirs to reload. Saying which half ran
+            // matters, because the half that did not is the one an operator would have expected.
+            if (toldClient) {
+                source.sendFeedback(() -> Text.literal(
+                        "Reloading your own settings — your companions, your endpoints, your memory "
+                                + "switches. This server's rules are the operator's and are unchanged.")
+                        .formatted(Formatting.GREEN), false);
+                return 1;
+            }
+            source.sendError(Text.literal(
+                    "Nothing to reload here: this server's config is the operator's, and your client "
+                            + "did not answer. Update the mod, or edit your own config in "
+                            + "/companion config."));
+            return 0;
+        }
+
         final int count = CompanionConfig.reloadAndApply(source.getServer());
         final int skillCount = CompanionSkills.all().size();
         source.sendFeedback(() -> Text.literal(String.format(
@@ -318,6 +721,15 @@ public final class CompanionCommands {
                 count, skillCount)), false);
         source.sendFeedback(() -> Text.literal(
                 "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
+        // Whatever reloadAndApply just found out about memory, said here rather than saved for the
+        // next conversation turn. Someone who ran this command has usually just changed a memory or
+        // embeddings setting, and this is the moment they are waiting to hear whether it took.
+        // Silent when memory is off or nothing changed, which is almost always.
+        for (adris.altoclef.player2api.MemoryHealth.Notice notice
+                : adris.altoclef.player2api.MemoryHealth.drain()) {
+            source.sendFeedback(() -> Text.literal(notice.text())
+                    .formatted(notice.problem() ? Formatting.RED : Formatting.GREEN), false);
+        }
         AiCompanion.LOGGER.info("[{}] config reloaded via /companion reload ({} live companion(s) updated)",
                 AiCompanion.MOD_ID, count);
         return 1;
@@ -630,38 +1042,85 @@ public final class CompanionCommands {
      * the roster exists to solve, and it defeats every way of telling them apart.
      */
     private static int spawn(ServerCommandSource source, String requested) {
+        ServerPlayerEntity player = source.getPlayer();
+        final UUID owner = player == null ? null : player.getUuid();
+        MinecraftServer server = source.getServer();
+
+        // The caps first, before any lookup: refusing after resolving an identity would be the same
+        // answer at more cost, and the global one is a TPS brake that should bite immediately.
+        if (owner != null && !isAdmin(source)) {
+            int mine = countOwnedAnywhere(server, owner);
+            if (!ServerPolicy.withinCap(mine, ServerPolicy.maxCompanionsPerPlayer)) {
+                source.sendError(Text.literal("You already have " + mine + " companion(s) out, which is "
+                        + "this server's limit. /companion despawn to put one away."));
+                return 0;
+            }
+        }
+        if (!isAdmin(source)
+                && !ServerPolicy.withinCap(countAllAnywhere(server), ServerPolicy.globalCompanionCap)) {
+            // ⚠️ Abandoned companions are counted deliberately. The cap reads as a TPS brake, and
+            // after the brainless-tick guard an offline player's companion is no longer a pathfinder
+            // — so the tempting fix is to stop counting them. That trades a visible, bounded problem
+            // for an invisible, unbounded one: companions are saved with the world, nothing else
+            // limits how many accumulate, and a server would quietly collect hundreds of idle bodies
+            // over a few months of players spawning two and never coming back.
+            //
+            // So the count stays honest and the REFUSAL explains itself instead. "At the limit" with
+            // no further detail is a dead end for whoever hits it; naming how many belong to players
+            // who are not here turns it into something an operator can act on.
+            int abandoned = countAbandoned(server);
+            String detail = abandoned == 0 ? ""
+                    : " " + abandoned + " of them belong to players who are offline";
+            source.sendError(Text.literal("This server is at its limit of "
+                    + ServerPolicy.globalCompanionCap + " companions." + detail
+                    + ". Try again when someone despawns one, or ask an operator."));
+            return 0;
+        }
+
+        // The CALLER's roster, announced by their client, falling back to the server's own for the
+        // console and for singleplayer. This is what makes identity the player's to choose: on a
+        // dedicated server the file next to the world is the operator's, and reading it here is how
+        // every player ended up with the operator's companion.
+        List<CompanionConfig.RosterEntry> available = ClientProfiles.rosterFor(owner);
+
         CompanionConfig.RosterEntry entry;
         if (requested == null || requested.isBlank()) {
-            // The first configured companion that is not already in the world, so spawning twice
+            // The first configured companion the caller does not already have out, so spawning twice
             // gives you two without having to name either. Always taking the FIRST entry meant a
             // second bare spawn could only ever be refused.
-            entry = CompanionConfig.roster().stream()
-                    .filter(e -> findAnywhere(source.getServer(), e.name()) == null)
+            entry = available.stream()
+                    .filter(e -> findOwnedAnywhere(server, owner, e.name()) == null)
                     .findFirst()
                     .orElse(null);
             if (entry == null) {
-                int count = CompanionConfig.roster().size();
+                int count = available.size();
                 source.sendError(Text.literal(count == 1
                         ? "Your only configured companion is already out. /companion list to find them, "
                                 + "or add another under \"companions\" in /companion config."
-                        : "All " + count + " configured companions are already out. /companion list "
-                                + "to find them, or add another in /companion config."));
+                        : "All " + count + " of your configured companions are already out. "
+                                + "/companion list to find them, or add another in /companion config."));
                 return 0;
             }
         } else {
-            entry = CompanionConfig.find(requested).orElse(null);
+            String wanted = requested.strip();
+            entry = available.stream()
+                    .filter(e -> e.name().equalsIgnoreCase(wanted))
+                    .findFirst()
+                    .orElse(null);
             if (entry == null) {
-                String known = CompanionConfig.roster().stream()
+                String known = available.stream()
                         .map(CompanionConfig.RosterEntry::name)
                         .collect(java.util.stream.Collectors.joining(", "));
-                source.sendError(Text.literal("No companion called '" + requested.strip()
-                        + "' in the config. Configured: " + known
+                source.sendError(Text.literal("No companion called '" + wanted
+                        + "' in your config. Configured: " + known
                         + " — add another in /companion config, Companions tab."));
                 return 0;
             }
             // Across every world, not just this one: a companion sent to the Nether is still out, and
             // spawning its double in the Overworld is exactly the duplicate this check exists to stop.
-            CompanionEntity existing = findAnywhere(source.getServer(), entry.name());
+            // Scoped to the caller, so another player having a companion by this name is not your
+            // problem and does not block you.
+            CompanionEntity existing = findOwnedAnywhere(server, owner, entry.name());
             if (existing != null) {
                 boolean sameWorld = existing.getWorld() == source.getWorld();
                 String where = sameWorld
@@ -676,18 +1135,19 @@ public final class CompanionCommands {
 
         ServerWorld world = source.getWorld();
         Vec3d pos = source.getPosition();
-        ServerPlayerEntity player = source.getPlayer();
         float yaw = player != null ? player.getYaw() : 0f;
 
         CompanionEntity companion = new CompanionEntity(AiCompanion.COMPANION, world);
         companion.refreshPositionAndAngles(pos.x, pos.y, pos.z, yaw, 0f);
-        // Name, skin and roster binding, all from the chosen entry and all persisted in NBT.
+        // Name, skin and the whole identity, persisted in NBT rather than looked up by name later:
+        // a client-owned identity has to survive its owner logging off, and re-resolving it from the
+        // server's roster is how a companion would silently turn back into the operator's.
         companion.applyRosterEntry(entry);
         world.spawnEntity(companion);
 
         // Attach the agent brain (owned by the spawning player). Talk to it in chat when nearby.
-        // Identity comes from config/aicompanion.json (see CompanionConfig); persona/llm settings were
-        // already applied to the engine statics at mod init.
+        // Identity is the caller's own, from the roster their client announced; llm/memory settings
+        // are read on whichever machine ends up doing the thinking.
         if (player != null) {
             companion.initBrain(CompanionConfig.character(entry), player);
         }

@@ -17,6 +17,7 @@
 
 package adris.altoclef;
 
+import adris.altoclef.player2api.TtsConfig;
 import adris.altoclef.player2api.manager.TTSManager;
 import adris.altoclef.player2api.utils.AudioUtils;
 import baritone.KeepName;
@@ -36,16 +37,26 @@ public final class PlayerEngineClient implements ClientModInitializer {
    public void onInitializeClient() {
       EntityRendererRegistry.register(PlayerEngine.FISHING_BOBBER, CustomFishingBobberRenderer::new);
 
-      // Companion speech: the server tells us what to say and where to synthesize it (local Kokoro);
-      // we fetch and play it here so the audio lands on this player's speakers. Read the buf on the
-      // network thread, then do the blocking HTTP + playback off it.
+      // Companion speech: the server tells us what to say, in which voice; we decide WHERE to
+      // synthesize it (our own Kokoro endpoint) and play it here, so the audio lands on this
+      // player's speakers. Read the buf on the network thread, then do the blocking HTTP +
+      // playback off it.
       ClientPlayNetworking.registerGlobalReceiver(TTSManager.SPEAK_CHANNEL, (client, handler, buf, responseSender) -> {
          UUID speaker = buf.readUUID();
-         String endpoint = buf.readUtf();
+         String serverEndpoint = buf.readUtf();
          String model = buf.readUtf();
          String voice = buf.readUtf();
          String text = buf.readUtf();
          double speed = buf.readDouble();
+
+         // THIS machine's endpoint wins, because THIS machine is the one that has to reach it.
+         // The server's copy of tts.endpoint describes the server's network, and on a dedicated
+         // server that meant the default "http://localhost:8880" was sent to every client no matter
+         // what the player had configured — the endpoint in their own file and config screen was
+         // applied to their own TtsConfig and then thrown away here. The wire field is kept as a
+         // fallback for a blank local value, and so the packet format does not change.
+         String local = TtsConfig.normalizedEndpoint();
+         String endpoint = local.isBlank() ? serverEndpoint : local;
 
          CompletableFuture.runAsync(() -> {
             // streamAudio blocks until the audio has finished, so this reply doubles as "the

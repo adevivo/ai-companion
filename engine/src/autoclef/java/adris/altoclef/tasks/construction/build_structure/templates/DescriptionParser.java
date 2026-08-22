@@ -197,6 +197,33 @@ public final class DescriptionParser {
     }
 
     /**
+     * Words that name a particular tree, as opposed to asking for wood in general.
+     *
+     * <p>"dark oak" needs no entry of its own: it tokenises to "dark" and "oak", and "oak" is already
+     * here. Deliberately excludes "wood", "wooden", "plank(s)" and "log(s)" — those are the generic
+     * words, and treating them as a choice of species is the whole bug this exists to answer.
+     */
+    private static final List<String> WOOD_SPECIES = List.of(
+            "oak", "spruce", "birch", "jungle", "acacia", "cherry", "mangrove");
+
+    /**
+     * Whether the description picks a species of wood, rather than just asking for wood.
+     *
+     * <p>Read by {@link adris.altoclef.tasks.construction.build_structure.WoodChoice} to decide
+     * whether it may retype a plan to whatever the companion is actually carrying. "A spruce house"
+     * is an instruction and must be honoured even if there is no spruce to be had; "a wooden house"
+     * is a description of the material, and any wood satisfies it.
+     */
+    public static boolean namesWoodSpecies(String description) {
+        for (String token : normalize(description).split("[^a-z0-9_]+")) {
+            if (WOOD_SPECIES.contains(token) || token.equals("dark_oak")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * One candidate word to a block id, or empty if it names nothing buildable.
      *
      * <p>Plurals are retried singular because descriptions say "oak planks" and "bricks" while some

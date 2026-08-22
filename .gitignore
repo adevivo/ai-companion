@@ -21,13 +21,20 @@ reference/
 # Engine jar staged into the consumer — a build artifact of ../engine, rebuild don't commit
 aicompanion/libs/*.jar
 
+# Memory engine jar staged from ../../ai-companion-memory — built there, not here. Staged twice
+# because the engine compiles against it (compileOnly) and the mod nests it into the shipped jar.
+# Rebuild with: cd ../../ai-companion-memory/engine && ./gradlew jar
+engine/libs/*.jar
+
 # Local scratch copies of skill files used for in-game testing — the shipped ones live in
 # aicompanion/src/main/resources/aicompanion/skills/
 test-skills/
 
 # Internal planning/design notes — kept locally, not published in the public repo
 TODO.md
+TODO-v0.3.0.md
 readme_ai_mod.md
+docs/companion-interaction-plan.md
 REFERENCES.md
 discord-todo-readme.md
 BUGS.md

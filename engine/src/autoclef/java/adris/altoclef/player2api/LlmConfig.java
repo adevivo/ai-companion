@@ -103,13 +103,34 @@ public final class LlmConfig {
      * attend to, the JSON contract at the front of the prompt is what gets lost — the model reasons
      * fine off the recent turns and answers in prose, so no command runs.
      *
-     * <p>16000 is set from measurement against one local model: parsed replies had a median prompt of
-     * ~16.6k characters, failed ones ~19.5k, and failure was total by ~24k. A model with a large
-     * context can safely raise this.
+     * <p>The original 16000 came from measurement against one local model: parsed replies had a median
+     * prompt of ~16.6k characters, failed ones ~19.5k, and failure was total by ~24k.
+     *
+     * <p><b>Raised to 20000 on 2026-08-17, because 16000 was below the floor.</b> Measured from a live
+     * session: the system prompt is 14,902 characters and the newest turn wrapped with world/agent
+     * status is ~1,664, and {@link ConversationHistory#getListJSONBounded} may drop neither. Their sum
+     * of 16,566 exceeds 16,000 on its own, so the trimmer fired on every turn, dropped every droppable
+     * turn of conversation history, and was still over budget. The companion had no context beyond the
+     * current turn, and nothing said so out loud — the warning that should have was missing its number.
+     *
+     * <p>20000 clears that floor by ~3.4k characters, roughly 34 turns of history at the ~100
+     * characters a plain turn costs. The added spend is only the history that was previously being
+     * thrown away: ~630 characters (~160 tokens) on a typical turn, ~860 tokens at the ceiling.
+     *
+     * <p>Two reasons the old failure numbers do not bound this. They were measured on a local
+     * llama.cpp model, while a hosted endpoint has orders of magnitude more context — 20k characters is
+     * only ~5k tokens. And the failure they describe, prose instead of JSON, is prevented at the API
+     * level for any OpenAI-compatible endpoint: {@code Player2APIService.applyLlmParams} sends
+     * {@code response_format: {"type":"json_object"}} whenever {@link #useGrammar} is on, which both
+     * xAI and llama.cpp honour. That guarantees valid JSON and not the right fields, so a much larger
+     * prompt could still lose the schema — this is headroom, not a reason to stop caring about size.
+     *
+     * <p>⚠️ An existing config file pins its own value. Back-fill only adds missing keys, so a config
+     * written before this change still reads 16000 and this default never reaches it.
      */
     public static volatile int maxPromptChars =
             Integer.parseInt(resolve("aicompanion.llm.maxPromptChars",
-                    "AICOMPANION_LLM_MAXPROMPTCHARS", "16000"));
+                    "AICOMPANION_LLM_MAXPROMPTCHARS", "20000"));
 
     /**
      * How many LLM requests may be in flight at once, across every companion.
@@ -144,6 +165,39 @@ public final class LlmConfig {
     public static volatile long usageReportEveryTokens =
             Long.parseLong(resolve("aicompanion.llm.usageReportEveryTokens",
                     "AICOMPANION_LLM_USAGEREPORTEVERYTOKENS", "100000"));
+
+    /**
+     * Let the owning player's client do its companion's thinking, instead of the game server.
+     *
+     * <p><b>Off by default.</b> On a dedicated server this is the difference between the operator
+     * funding every player's tokens and each player funding their own, and between every player's
+     * memories sitting on the operator's disk and staying on their own machine. In single-player it
+     * changes nothing observable — client and server are one process — which is exactly what makes
+     * it safe to test there first.
+     *
+     * <p>⚠️ <b>Requires {@link #localMode}.</b> The hosted Player2 path authenticates per player
+     * against a token the server holds, and there is no client-side equivalent yet; a client asked
+     * to think without one would fail every turn and fall back, paying the timeout each time. When
+     * {@code localMode} is false this switch is ignored and the server keeps thinking.
+     *
+     * <p>Falling back is normal, not exceptional: a vanilla client, an out-of-date one, or one that
+     * simply does not answer must never leave a companion mute. See {@code NetworkBrainTransport}.
+     */
+    public static volatile boolean clientBrain =
+            Boolean.parseBoolean(resolve("aicompanion.llm.clientBrain",
+                    "AICOMPANION_LLM_CLIENTBRAIN", "false"));
+
+    /**
+     * How long the server waits for a client to think before doing it itself, in milliseconds.
+     *
+     * <p>Generous on purpose. This is not a latency budget — nothing is blocked while it runs, the
+     * turn is already asynchronous — it is a liveness check on a client that said it could think and
+     * then went quiet. A frontier model on a slow link can legitimately take many seconds, and
+     * cutting it off to run the turn again on the server would spend twice and answer once.
+     */
+    public static volatile int clientBrainTimeoutMs =
+            Integer.parseInt(resolve("aicompanion.llm.clientBrainTimeoutMs",
+                    "AICOMPANION_LLM_CLIENTBRAINTIMEOUTMS", "45000"));
 
     private static String resolve(String property, String env, String fallback) {
         String v = System.getProperty(property);

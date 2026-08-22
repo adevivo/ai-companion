@@ -24,6 +24,7 @@ repositories {
     maven { name = 'Quilt Releases'; url = 'https://maven.quiltmc.org/repository/release/' }
     maven { name = 'Quilt Snapshots'; url = 'https://maven.quiltmc.org/repository/snapshot/' }
     maven { name = 'Shedaniel'; url = 'https://maven.shedaniel.me/' }   // Cloth Config
+    maven { name = 'Nucleoid'; url = 'https://maven.nucleoid.xyz/' }    // fabric-permissions-api
     maven {
         // Mod Menu (Terraformers' own maven 502s intermittently; Modrinth mirrors releases)
         name = 'Modrinth'
@@ -43,7 +44,34 @@ dependencies {
     // baritone/automatone + adris.altoclef (AltoClefController, IAutomatone, etc.).
     // include(...) nests it into the built jar (JiJ) so the CurseForge download runs
     // standalone; the nested jar keeps its own LGPL-3.0 license (META-INF/LICENSE).
-    include(modImplementation("libs:PlayerEngine:+"))
+    //
+    // ⚠️ Pinned, not '+'. Gradle caches dynamic-version resolution, so a rebuilt jar staged under
+    // the same version is silently ignored — and with '+' that stayed true even after the version
+    // moved, because the cached resolution was still considered fresh. It cost three separate
+    // debugging sessions, once as a runtime NoSuchMethodError that vanished into a swallowed
+    // Error. An exact version fails loudly at compile time instead. Bump this together with
+    // ../engine/gradle.properties.
+    include(modImplementation("libs:PlayerEngine:1.1.16"))
+
+    // The memory engine from ../../ai-companion-memory (built there, staged into libs/). Plain
+    // Java 17 + Gson, no Minecraft and no Fabric, so Loom wraps the non-mod jar for JiJ. Gson is
+    // deliberately not nested with it — Minecraft already ships Gson, and a second copy on the
+    // classpath is a real hazard rather than a redundancy.
+    //
+    // Pinned to an exact version rather than '+': Gradle caches dynamic-version resolution, so
+    // restaging a changed jar under an unchanged version silently keeps the old one. That cost real
+    // time on PlayerEngine today. Bump the version in ../../ai-companion-memory/engine/build.gradle
+    // and here together.
+    include(implementation("libs:aicompanion-memory:0.4.0"))
+
+    // Per-node permissions for /companion. A ~5 KB API with no implementation of its own: with no
+    // permissions mod installed every check falls back to the vanilla operator level, so this
+    // changes nothing on a family LAN — and with LuckPerms present an operator can grant
+    // aicompanion.command.spawn to a group instead of having to op everybody. A raw
+    // hasPermissionLevel(2) offers an operator only "op or nothing", and no public server ops
+    // everyone. JiJ'd (include) because the API classes must be on the classpath whether or not a
+    // permissions mod is there to implement them.
+    include(modImplementation("me.lucko:fabric-permissions-api:${fabric_permissions_version}"))
 
     implementation 'com.google.code.findbugs:jsr305:3.0.2'
 

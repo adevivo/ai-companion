@@ -77,6 +77,14 @@ public class BuildStructureTask extends Task {
     private static final int LEGACY_BLOCKS_PER_TICK = 256;
     /** Ticks to wait for a walk to one standing position. Matches {@code FarmProcess}'s per-tile budget. */
     private static final int MAX_STATION_TICKS = 300;
+    /**
+     * Ticks of zero placement progress before the build gives up on where it is standing.
+     *
+     * <p>Deliberately double {@link #MAX_STATION_TICKS}: a healthy build may legitimately spend a
+     * whole walk budget placing nothing while it travels to the next station, and tripping on that
+     * would blacklist good positions. Thirty seconds of nothing is not a slow walk, it is a stall.
+     */
+    private static final int STALL_TICKS = 600;
     /** Failed standing positions tolerated before the rest of the build is placed from where we are. */
     private static final int MAX_STATION_FAILURES = 4;
     /** Times a cell may drift out of sight before it is written out of reach instead. */
@@ -314,6 +322,10 @@ public class BuildStructureTask extends Task {
         private int stationFailures;
         private int workLogTicks;
         private int progressTicks;
+        /** {@code handled.cardinality()} when progress was last seen, for {@link #checkStalled}. */
+        private int lastProgressCount = -1;
+        /** Ticks since the last block was handled. Reset by progress, not by arriving somewhere. */
+        private int noProgressTicks;
         /** Blocks written from out of reach after the companion gave up on getting to them. */
         private int remotePlaced;
         /** True once reaching the rest has been abandoned; the remainder is written from where we stand. */
@@ -646,6 +658,9 @@ public class BuildStructureTask extends Task {
                 return null;
             }
             logProgress();
+            if (checkStalled()) {
+                return null;
+            }
 
             if (stage == Stage.APPROACH) {
                 if (!siteReady()) {
@@ -816,6 +831,23 @@ public class BuildStructureTask extends Task {
             // Worth keeping: the design is fine and part of it is already standing, so the next run
             // must resume this same plan rather than draw a new one somewhere else.
             planWorthKeeping = true;
+
+            // Short of something is not the same as short of everything. Refusing the whole build
+            // over the last few blocks is what made a big house impossible to start: the bill for one
+            // was 486 planks, 180 stairs and 34 panes, which does not fit in an inventory at all, so
+            // every attempt was refused and the owner was left telling it to build what it could.
+            // It can already stop gracefully when materials run out mid-build — placeOne sets a
+            // partway reason and the unfinished record survives — and resuming that record is proven.
+            // So place what is affordable and let that path do the stopping.
+            int affordable = affordableRunLength(remaining);
+            if (affordable > 0) {
+                LOGGER.info("Build ({}): starting anyway — about {} of {} remaining cells are paid for",
+                        description, affordable, remaining.size());
+                mod.tellOwner(String.format(
+                        "I can get about %d of the %d blocks left up with what I'm carrying — starting now, then I'll need %s.",
+                        affordable, remaining.size(), BuildMaterials.describeForPlayer(missing)));
+                return true;
+            }
             abortReason = String.format(
                     "Stopped building (%s): %d of %d blocks are already placed, but finishing needs %s more. Use `get` to collect exactly that, then run the SAME build_structure description again — it will carry on from where it stopped rather than starting over.",
                     shortDescription(), plan.size() - remaining.size(), plan.size(),
@@ -825,6 +857,39 @@ public class BuildStructureTask extends Task {
                     BuildMaterials.describeForPlayer(missing));
             stage = Stage.DONE;
             return false;
+        }
+
+        /**
+         * Roughly how many of {@code remaining} can be paid for before the inventory runs dry.
+         *
+         * <p>Walks the cells in plan order — {@code plan} is already {@link BuildOrder#normalise}d, so
+         * that is build order — spending a copy of the inventory as it goes, and stops at the first
+         * cell it cannot pay for. That mirrors what actually happens: {@code placeOne} does not skip an
+         * unaffordable cell, it stops the build there.
+         *
+         * <p><b>An estimate, and told to the owner as one.</b> Placement is driven by what is reachable
+         * from each standing position rather than strictly by plan order, and the carve phase runs
+         * ahead of the work phase, so the real stopping point drifts either side of this. It only has
+         * to be good enough to answer "is it worth starting at all", and for that the distinction that
+         * matters is zero versus not-zero.
+         */
+        private int affordableRunLength(List<SetBlockCommand> remaining) {
+            Map<Item, Integer> budget = new HashMap<>();
+            int count = 0;
+            for (SetBlockCommand command : remaining) {
+                Item cost = BuildMaterials.consumedItemFor(BuildMaterials.resolveBlock(command.blockName));
+                if (cost == null) {
+                    count++; // carved air, or a block that costs nothing to place
+                    continue;
+                }
+                int have = budget.computeIfAbsent(cost, item -> mod.getItemStorage().getItemCount(item));
+                if (have <= 0) {
+                    break;
+                }
+                budget.put(cost, have - 1);
+                count++;
+            }
+            return count;
         }
 
         /** Whether an index belongs to the phase currently running. */
@@ -990,7 +1055,22 @@ public class BuildStructureTask extends Task {
             // Never brick ourselves in: a solid block written into a cell our own body occupies is
             // suffocation damage and a stuck companion. Defer it until we have moved on.
             if (!cell.isAir() && bodyOccupies(pos)) {
-                deferrals.merge(index, 1, Integer::sum);
+                int misses = deferrals.merge(index, 1, Integer::sum);
+                // "Until we have moved on" assumed we would. We do not: the station chooser scores
+                // this spot on the cell it is next to, so it keeps sending the body back to the same
+                // place, and the cell under it is deferred forever. Measured 2026-08-06 building
+                // storeys onto each other — where standing on the last one's footprint is the normal
+                // case — as three separate builds livelocked at travel=finished with work queued and
+                // nothing placeable. Blacklisting is what actually moves the body off the cell.
+                // Placing it remotely is not an alternative here: the whole point is that we are
+                // standing in it.
+                if (misses >= MAX_DEFERRALS && station != null) {
+                    badStations.add(station);
+                    station = null;
+                    travelTask = null;
+                    // Safe to clear mid-drain: the caller re-tests isEmpty() every iteration.
+                    stationWork.clear();
+                }
                 return true;
             }
 
@@ -1000,15 +1080,18 @@ public class BuildStructureTask extends Task {
                 // has no refund path and must not get one — a give-back would let a build net items — so
                 // the re-placement is simply not charged again.
                 if (cost != null && !paidFor.remove(pos) && !BuildMaterials.consume(mod, cost, 1)) {
-                    // Pre-flight said we could afford this, so something else emptied the
-                    // inventory mid-build. Stop rather than carry on placing for free.
-                    LOGGER.warn("Ran out of {} partway through building ({})", BuildMaterials.name(cost),
-                            description);
+                    // No longer an anomaly. The pre-flight now deliberately starts builds it cannot
+                    // finish, so this is the ordinary ending for anything whose bill does not fit in an
+                    // inventory, and the wording has to send the model down the resume path instead of
+                    // reading as a failure worth abandoning.
+                    LOGGER.info("Ran out of {} partway through building ({}) — {} of {} up, saved for resume",
+                            BuildMaterials.name(cost), description, placedCount(), plan.size());
                     abortReason = String.format(
-                            "Stopped building (%s) partway: ran out of %s. The structure is incomplete. Use `get` to collect more, then build again.",
-                            shortDescription(), BuildMaterials.name(cost));
-                    playerReason = String.format("I ran out of %s partway through — the build is unfinished.",
-                            BuildMaterials.name(cost).replace('_', ' '));
+                            "Ran out of %s partway through building (%s). This is normal for a big build, not a failure: %d of %d blocks are up and the rest is saved. `get` more %s, then run the SAME build_structure description again — it carries on from exactly where it stopped rather than starting over.",
+                            BuildMaterials.name(cost), shortDescription(), placedCount(), plan.size(),
+                            BuildMaterials.name(cost));
+                    playerReason = String.format("I've got %d of %d blocks up — ran out of %s, so I'll fetch more.",
+                            placedCount(), plan.size(), BuildMaterials.name(cost).replace('_', ' '));
                     return false;
                 }
             }
@@ -1148,6 +1231,83 @@ public class BuildStructureTask extends Task {
                 if (!placeOne(index, true)) {
                     return;
                 }
+            }
+        }
+
+        /**
+         * Break a build that has stopped getting anywhere, whatever the reason.
+         *
+         * <p>Observed 2026-08-06: a build sat at {@code placed=70/174 cursor=3} on one station for
+         * three minutes with {@code remote=0 failures=0}. Nothing was placed, nothing timed out,
+         * nothing fell back to remote placement, and no exception was thrown. It recovered only when
+         * a mob attacked — mob defence outranks the build chain, and being interrupted resets this
+         * task's state, which is also what re-issuing the build by hand does. Left alone it would have
+         * sat there until the whole-build timeout.
+         *
+         * <p>This is a separate watchdog rather than a fix to {@link #stationTicks} because that
+         * counter is zeroed every tick the companion is standing at its station, so it measures time
+         * spent <em>walking</em> and nothing else. Any loop that keeps arriving somewhere resets it
+         * forever. Progress is the thing worth measuring, and {@code handled} is the only honest
+         * measure of it.
+         *
+         * <p>Recovers rather than aborts, down the same path a walk timeout already takes: blacklist
+         * the station and count a failure. Four of those and {@link #selectStation} enters remote mode
+         * and finishes from where it stands, so the worst case is bounded instead of open-ended.
+         *
+         * @return true when the caller should return null for this tick
+         */
+        private boolean checkStalled() {
+            // Only meaningful once placing has started. APPROACH is a walk and legitimately places
+            // nothing; DONE has nothing left to place.
+            if (stage != Stage.WORK && stage != Stage.CARVE) {
+                noProgressTicks = 0;
+                return false;
+            }
+            int done = handled.cardinality();
+            if (done != lastProgressCount) {
+                lastProgressCount = done;
+                noProgressTicks = 0;
+                return false;
+            }
+            if (++noProgressTicks <= STALL_TICKS) {
+                return false;
+            }
+            // Logged in full: which branch this gets stuck in has never been pinned down, and this is
+            // the line that will say. Keep it if the stall stops reproducing — it costs one line per
+            // recovery, and recoveries are supposed to be rare.
+            LOGGER.warn("Build ({}) made no progress for {} ticks at {}/{}: stage={} cursor={}"
+                            + " station={} travel={} work={} remote={} failures={} — dropping the station",
+                    description, noProgressTicks, done, plan.size(), stage, cursor,
+                    station == null ? "none" : station.toShortString(), describeTravel(),
+                    stationWork.size(), remotePlaced, stationFailures);
+
+            if (station != null) {
+                badStations.add(station);
+            }
+            station = null;
+            travelTask = null;
+            stationWork.clear();
+            stationTicks = 0;
+            noProgressTicks = 0;
+            stationFailures++;
+            return true;
+        }
+
+        /**
+         * The travel task's state for the stall log, without trusting it not to throw.
+         *
+         * <p>{@code isFinished()} on a subtask that was never ticked has thrown here before — a
+         * never-ticked {@code CustomBaritoneGoalTask} has no controller — and a diagnostic that can
+         * kill the thing it is diagnosing is worse than no diagnostic.
+         */
+        private String describeTravel() {
+            if (travelTask == null) {
+                return "none";
+            }
+            try {
+                return travelTask.isFinished() ? "finished" : "running";
+            } catch (Exception e) {
+                return "threw:" + e.getClass().getSimpleName();
             }
         }
 
@@ -1359,7 +1519,10 @@ public class BuildStructureTask extends Task {
         // reaches the model, which is where the codegen prompt's token cost is actually warranted.
         Optional<TemplateLibrary.Match> templated = TemplateLibrary.plan(description, mod);
         if (templated.isPresent()) {
-            actuallyRunningTask = new PlaceBlocks(templated.get().plan());
+            // Freshly designed, so the species is still up for grabs — see WoodChoice. The two
+            // resume paths above deliberately skip this: they must keep the wood they started with.
+            actuallyRunningTask = new PlaceBlocks(
+                    WoodChoice.resolve(templated.get().plan(), mod, description));
             return;
         }
         ensureCodegenReady();
@@ -1443,7 +1606,11 @@ public class BuildStructureTask extends Task {
                         history.addUserMessage(tryAgainMessage, service);
                         actuallyRunningTask = new RequestLLMCode();
                     }, () -> {
-                        actuallyRunningTask = new PlaceBlocks(planTask.plan);
+                        // The model writes oak for the same reason the templates do, so the same
+                        // retyping applies. Done here rather than in GenerateBlockPlan because that
+                        // runs on a worker thread and this reads the inventory.
+                        actuallyRunningTask = new PlaceBlocks(
+                                WoodChoice.resolve(planTask.plan, mod, description));
                     });
             return actuallyRunningTask;
         }

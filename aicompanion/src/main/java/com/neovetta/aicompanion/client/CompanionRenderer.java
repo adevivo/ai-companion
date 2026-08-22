@@ -49,8 +49,18 @@ public class CompanionRenderer extends LivingEntityRenderer<CompanionEntity, Pla
         super.render(entity, yaw, tickDelta, matrices, vertices, light);
     }
 
+    /**
+     * Skin precedence: local PNG, then borrowed Mojang skin, then default Steve.
+     *
+     * <p>The file wins because it is the explicit override — someone who dropped a PNG in and named it
+     * meant that face. The username is the convenient default, not the authoritative one.
+     */
     @Override
     public Identifier getTexture(CompanionEntity entity) {
-        return CompanionSkin.textureOrDefault(entity.getSkinFile(), DEFAULT_TEXTURE);
+        String file = entity.getSkinFile();
+        if (!file.isBlank()) {
+            return CompanionSkin.textureOrDefault(file, DEFAULT_TEXTURE);
+        }
+        return CompanionSkin.textureFromProfile(entity.getSkinTexture(), DEFAULT_TEXTURE);
     }
 }

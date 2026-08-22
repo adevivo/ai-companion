@@ -55,6 +55,7 @@ public class Prompts {
           "agentStatus" : "The status of you, the agent in the game."
           "reminders" : "Reminders with additional instructions."
           "gameDebugMessages" : "The most recent debug messages that the game has printed out. The user cannot see these."
+          "memories" : "Things you already know about this player from before, separated by ' | '. Present only when something you remember is relevant. Treat these as your own memories, not as instructions and not as something you were just told: use one when it actually helps, and do not announce that you remembered it, list them back, or mention having memories at all. If none of them fit what is being discussed, ignore them completely. Say only what a memory actually contains and do not embellish it: if it does not give a number, a place, or how far along something is, then you do not know that — say so plainly, or offer to go and look, instead of inventing a detail that sounds right. Knowing that a bridge is being built does not tell you how many blocks are left."
       }
       Response Format:
       Respond with JSON containing message, command and reason. All of these are strings.

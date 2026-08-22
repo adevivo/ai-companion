@@ -24,12 +24,27 @@ public class HTTPUtils {
     public static Map<String, JsonElement> sendRequest(String baseUrl, String endpoint, boolean postRequest, JsonObject requestBody,
                                                        @Nullable Map<String, String> extraHeaders)
             throws Exception {
-        URL url = new URI(baseUrl + endpoint).toURL();
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         // Never block the brain forever on a slow/stuck/down endpoint (a stuck call wedges the
         // single-track LLMCompleter). A timeout throws -> the async task resets isProcessing -> recovery.
-        connection.setConnectTimeout(LlmConfig.connectTimeoutMs);
-        connection.setReadTimeout(LlmConfig.timeoutMs);
+        return sendRequest(baseUrl, endpoint, postRequest, requestBody, extraHeaders,
+                LlmConfig.connectTimeoutMs, LlmConfig.timeoutMs);
+    }
+
+    /**
+     * As above, with explicit timeouts.
+     *
+     * <p>The brain's 90s read timeout is right for a generation loop and wrong for everything else.
+     * An embedding is one forward pass; waiting a minute and a half for it means holding a
+     * conversation turn open long after the server has plainly stopped answering.
+     */
+    public static Map<String, JsonElement> sendRequest(String baseUrl, String endpoint, boolean postRequest, JsonObject requestBody,
+                                                       @Nullable Map<String, String> extraHeaders,
+                                                       int connectTimeoutMs, int readTimeoutMs)
+            throws Exception {
+        URL url = new URI(baseUrl + endpoint).toURL();
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setConnectTimeout(connectTimeoutMs);
+        connection.setReadTimeout(readTimeoutMs);
         connection.setRequestMethod(postRequest ? "POST" : "GET");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         connection.setRequestProperty("Accept", "application/json; charset=utf-8");

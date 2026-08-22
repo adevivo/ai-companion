@@ -11,10 +11,27 @@ import net.minecraft.text.Text;
  * milestone, which by default fires once every 100k tokens — far too coarse to notice a companion
  * stuck in a think loop. This makes the rate visible at a glance.
  *
- * <p>The server pushes <em>cumulative</em> totals every ~20 ticks
- * ({@link com.neovetta.aicompanion.AiCompanion#TOKEN_USAGE}) and this class derives the history by
- * diffing consecutive snapshots into one-minute buckets. Cumulative-plus-diff means a dropped packet
- * is free (the next one carries the missing tokens) and the server needs no history buffer of its own.
+ * <p>Totals arrive as <em>cumulative</em> snapshots about once a second, and this class derives the
+ * history by diffing consecutive ones into per-minute buckets. Cumulative-plus-diff means a dropped
+ * update is free — the next one carries the missing tokens — and whoever is counting needs no history
+ * buffer of its own.
+ *
+ * <h2>Whichever machine paid is the machine that reports</h2>
+ *
+ * The counters in {@code Player2APIService} are {@code static}, so they live in whichever JVM made the
+ * call. That was the server without exception, and this panel was fed purely by
+ * {@link com.neovetta.aicompanion.AiCompanion#TOKEN_USAGE}.
+ *
+ * <p>⚠️ {@code llm.clientBrain} broke that assumption without breaking the packet. With the brain on
+ * the owning client the server's counters stay at zero for ever — and it went on pushing them every
+ * second, each one <b>overwriting</b> the real figures this machine already had. Observed 2026-08-20:
+ * 30 requests and 101,101 tokens spent client-side, against a panel reading zero the whole session.
+ * That is worse than the panel vanishing, because a wrong number reads as a working feature.
+ *
+ * <p>So {@link #selfUpdate()} feeds the panel from this machine's own counters when this machine is
+ * the one spending, and the server stays quiet when the owner is thinking client-side. Both halves are
+ * independently correct, which is what the fallback needs: a turn the client could not answer is paid
+ * for with the <em>server's</em> key, and that is genuinely the operator's bill and not the player's.
  *
  * <p>Threading follows {@link CompanionRadarHud}: the receiver writes from a netty thread and the HUD
  * callback reads on the render thread. The scalar fields are {@code volatile} with {@code receivedAtMs}
@@ -41,10 +58,37 @@ public final class CompanionTokenHud {
         return enabled;
     }
 
-    // Last snapshot from the server. receivedAtMs == 0 means "never received".
+    // Last snapshot, from whichever side is counting. receivedAtMs == 0 means "never received".
     private static volatile long promptTokens, completionTokens, totalTokens;
     private static volatile int requests;
     private static volatile long receivedAtMs = 0L;
+
+    /** Client ticks since the last self-update, so this samples at the server packet's ~1s cadence. */
+    private static int selfTickCounter = 0;
+
+    /**
+     * Feed the panel from THIS machine's counters, when this machine is the one spending.
+     *
+     * <p>Called every client tick and samples once a second, matching the cadence the panel's
+     * per-minute buckets and its 60-second staleness cutoff were both built around. Pushing only at
+     * the end of a turn would let the panel time out and disappear during a quiet stretch, which is
+     * exactly when someone is looking at it to see whether a companion is burning tokens unattended.
+     *
+     * <p>The {@code requests <= 0} guard is what keeps this from fighting the server. A client that
+     * has spent nothing has nothing to say — on a server-side brain that is every client, and the
+     * packet remains the only source, untouched.
+     */
+    public static void selfUpdate() {
+        if (++selfTickCounter % 20 != 0) {
+            return;
+        }
+        adris.altoclef.player2api.Player2APIService.UsageSnapshot usage =
+                adris.altoclef.player2api.Player2APIService.usageSnapshot();
+        if (usage.requests() <= 0) {
+            return;
+        }
+        update(usage.promptTokens(), usage.completionTokens(), usage.totalTokens(), usage.requests());
+    }
 
     // Per-minute history. buckets[head] is the in-progress minute; older minutes walk backwards,
     // wrapping. Guarded by BUCKETS — never read or written outside a synchronized block.
