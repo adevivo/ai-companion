@@ -7,7 +7,7 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.3.1 — A silent turn no longer crashes the world
 
-Bundles PlayerEngine 1.1.17. One fix, and it is the kind worth shipping on its own.
+Bundles PlayerEngine 1.1.18. One bug, in two places, and it is the kind worth shipping on its own.
 
 ### A companion that acted without speaking took the server down
 
@@ -32,10 +32,27 @@ forgets should not be able to bring it back:
 - `toString()` tolerates one anyway. It is a logging helper on the server thread; a dump of the
   history is never worth a crash.
 
-Five regression tests cover it, verified to fail against the old code.
+### And the same null, already saved, stopped a companion from starting at all
 
-**Nothing was written to disk**, so no save is carrying a bad record and no world needs repairing —
-the poisoned entry lived in memory for the rest of a session and went away with it.
+The record does reach disk — conversation history is a `.txt` transcript, one JSON object per line —
+so a companion that took a command-only turn under 0.3.0 has a
+`{"role":"assistant","content":null}` line in its file. Loading it read that null as text and threw,
+and because the throw escapes the brain's constructor the companion never finished starting: it
+retried on the next tick, and the next, at one error per second indefinitely. Observed 2026-08-22 as
+`Luna's AI threw during tick; skipping this update`, repeating for as long as the world was open,
+with that companion unable to answer.
+
+The loader now repairs the line rather than choking on it — that turn was a companion acting without
+speaking, and an empty message is what it always meant, so discarding the line would quietly rewrite
+the transcript. **Your existing history files heal themselves on the next load; there is nothing to
+delete.**
+
+A corrupt transcript also no longer costs more than a transcript. The loader caught `IOException`
+only, so anything else escaped and took the companion with it; it now catches everything, says which
+file and why, and starts with an empty history. Losing a transcript is recoverable — a companion that
+cannot exist is not.
+
+Eight regression tests cover both halves, verified to fail against the old code.
 
 ---
 

@@ -210,13 +210,7 @@ public class ConversationHistory {
          try {
             String line;
             while ((line = reader.readLine()) != null) {
-               JsonObject obj = Utils.parseCleanedJson(line);
-               if (obj.has("content")) {
-                  String content = obj.get("content").getAsString();
-                  if (content.length() > 500) {
-                     obj.addProperty("content", content.substring(0, 500));
-                  }
-               }
+               JsonObject obj = repairLoadedLine(Utils.parseCleanedJson(line));
 
                loaded.add(obj);
                if (loaded.size() > 64) {
@@ -240,10 +234,43 @@ public class ConversationHistory {
 
             throw var7;
          }
-      } catch (IOException var8) {
-         var8.printStackTrace();
+      } catch (Throwable var8) {
+         // Throwable, not IOException. A corrupt or half-written history must cost the history and
+         // nothing else — this runs inside the AltoClefController constructor, so anything escaping
+         // here means the brain never finishes building and the entity retries every tick instead of
+         // simply starting fresh. Losing a transcript is recoverable; a companion that cannot exist
+         // is not.
+         LOGGER.warn("Could not read conversation history from {} ({}) — starting with an empty "
+               + "transcript rather than refusing to start.", this.historyFile, var8.toString());
          this.conversationHistory.clear();
       }
+   }
+
+   /**
+    * Make one line off disk safe to keep, in place.
+    *
+    * <p>⚠️ {@code has("content")} is true for a stored null and {@code getAsString()} throws on it. A
+    * single {@code {"role":"assistant","content":null}} line, written by a build before
+    * {@code safeContent} existed, made this throw on <b>every</b> load — and the throw escapes
+    * {@code initBrain}, so the companion never finished starting and retried once per tick for ever.
+    * Observed 2026-08-22: {@code Luna's AI threw during tick} at one line per second, indefinitely.
+    *
+    * <p>Repaired rather than dropped. That turn was a companion acting without speaking, and an empty
+    * message is what it always meant; discarding the line would silently rewrite the transcript.
+    *
+    * <p>Extracted so it can be tested without a Fabric config directory — the loader around it cannot.
+    */
+   static JsonObject repairLoadedLine(JsonObject obj) {
+      if (obj == null) {
+         return null;
+      }
+      String content = str(obj, "content", null);
+      if (content == null) {
+         obj.addProperty("content", "");
+      } else if (content.length() > 500) {
+         obj.addProperty("content", content.substring(0, 500));
+      }
+      return obj;
    }
 
    /**

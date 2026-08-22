@@ -99,4 +99,46 @@ class ConversationHistoryNullContentTest {
         assertEquals(before + 1, history.getListJSON().size(),
                 "a silent turn is still a turn the model took");
     }
+
+    // ---- the load path: a null already on disk, written before the writers were fixed ----
+
+    @Test
+    @DisplayName("a stored null content is repaired on load, not thrown on")
+    void repairsAStoredNullOnLoad() {
+        JsonObject poisoned = com.google.gson.JsonParser
+                .parseString("{\"role\":\"assistant\",\"content\":null}").getAsJsonObject();
+
+        JsonObject repaired = assertDoesNotThrow(
+                () -> ConversationHistory.repairLoadedLine(poisoned),
+                "the exact line found in Luna_Luna.txt must not throw — it looped initBrain every tick");
+
+        assertFalse(repaired.get("content").isJsonNull());
+        assertEquals("", repaired.get("content").getAsString());
+        assertEquals("assistant", repaired.get("role").getAsString(),
+                "the line is repaired, not discarded — dropping it rewrites the transcript");
+    }
+
+    @Test
+    @DisplayName("ordinary and over-long lines still load as before")
+    void ordinaryLinesAreUnaffectedAndLongOnesStillTruncate() {
+        JsonObject normal = com.google.gson.JsonParser
+                .parseString("{\"role\":\"user\",\"content\":\"hello\"}").getAsJsonObject();
+        assertEquals("hello", ConversationHistory.repairLoadedLine(normal).get("content").getAsString());
+
+        JsonObject longLine = new JsonObject();
+        longLine.addProperty("role", "user");
+        longLine.addProperty("content", "x".repeat(900));
+        assertEquals(500, ConversationHistory.repairLoadedLine(longLine).get("content").getAsString().length(),
+                "the 500-char truncation must survive the null guard");
+    }
+
+    @Test
+    @DisplayName("a line with no content key at all is left alone")
+    void missingContentKeyIsNotInvented() {
+        JsonObject noContent = com.google.gson.JsonParser
+                .parseString("{\"role\":\"user\"}").getAsJsonObject();
+        JsonObject out = assertDoesNotThrow(() -> ConversationHistory.repairLoadedLine(noContent));
+        assertEquals("", out.get("content").getAsString(),
+                "an absent content reads the same as a null one, and both must be safe to read");
+    }
 }
