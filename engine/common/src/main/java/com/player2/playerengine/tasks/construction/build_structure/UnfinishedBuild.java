@@ -264,7 +264,7 @@ public final class UnfinishedBuild {
 
     private static String dimensionOf(PlayerEngineController mod) {
         try {
-            return mod.getWorld().dimension().location().toString();
+            return mod.getWorld().dimension().identifier().toString();
         } catch (Exception e) {
             return "";
         }

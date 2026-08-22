@@ -6,10 +6,10 @@ import com.neovetta.aicompanion.core.ServerPolicy;
 import com.player2.playerengine.PlayerEngineController;
 import com.player2.playerengine.player2api.ConversationHistory;
 import com.player2.playerengine.player2api.LLMCompleter;
-import com.neovetta.aicompanion.core.LlmConfig;
-import com.neovetta.aicompanion.core.ServerPolicy;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import dev.architectury.networking.NetworkManager;
+import io.netty.buffer.Unpooled;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -20,9 +20,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -258,9 +256,10 @@ public final class NetworkBrainTransport implements BrainTransport {
                     ctx.companionName(), ctx.ownerName(),
                     ctx.ownerUuid() == null ? null : ctx.ownerUuid().toString(), ctx.autonomous());
 
-            FriendlyByteBuf buf = PacketByteBufs.create();
+            RegistryFriendlyByteBuf buf =
+                    new RegistryFriendlyByteBuf(Unpooled.buffer(), owner.registryAccess());
             BrainWire.writeTurnRequest(buf, requestId, ctx.companionUuid(), context);
-            ServerPlayNetworking.send(owner, BrainWire.TURN_REQUEST, buf);
+            NetworkManager.sendToPlayer(owner, BrainWire.TURN_REQUEST, buf);
         } catch (Throwable e) {
             // Could not even send it. Decide now rather than waiting out a timeout for a packet that
             // never left — and decide it in the one place that knows who pays, rather than reaching

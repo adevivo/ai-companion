@@ -34,7 +34,7 @@ public class PiglinAiMixin {
    )
    private static void aicompanion$alsoTargetCompanion(Piglin piglin, CallbackInfoReturnable<Optional<? extends LivingEntity>> cir) {
       LivingEntity companion = CompanionTargetHelper.nearestCompanion(piglin);
-      if (companion == null || PiglinAi.isWearingGold(companion)) {
+      if (companion == null || PiglinAi.isWearingSafeArmor(companion)) {
          return;
       }
 

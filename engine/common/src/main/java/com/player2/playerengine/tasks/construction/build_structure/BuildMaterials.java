@@ -74,7 +74,7 @@ public final class BuildMaterials {
     public static Block resolveBlock(String blockName) {
         String raw = blockName == null ? "" : blockName.trim();
         Identifier id = Identifier.tryParse(raw.contains(":") ? raw : "minecraft:" + raw);
-        return id == null ? Blocks.AIR : BuiltInRegistries.BLOCK.get(id);
+        return id == null ? Blocks.AIR : BuiltInRegistries.BLOCK.getValue(id);
     }
 
     /** The item consumed to place one of {@code block}, or null if the block is free or a liquid. */

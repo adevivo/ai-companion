@@ -8,6 +8,7 @@ import com.player2.playerengine.commands.base.CommandException;
 import com.player2.playerengine.util.helpers.ItemHelper;
 import com.player2.playerengine.automaton.api.entity.LivingEntityHungerManager;
 import com.player2.playerengine.automaton.api.entity.LivingEntityInventory;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -107,7 +108,7 @@ public class EatCommand extends Command {
         int bestNutrition = -1;
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
-            if (stack.isEmpty() || !stack.getItem().isEdible()) {
+            if (stack.isEmpty() || !stack.has(DataComponents.FOOD)) {
                 continue;
             }
             String name = ItemHelper.stripItemName(stack.getItem());
@@ -117,8 +118,8 @@ public class EatCommand extends Command {
                 }
                 continue;
             }
-            FoodProperties food = stack.getItem().getFoodProperties();
-            int nutrition = food == null ? 0 : food.getNutrition();
+            FoodProperties food = stack.get(DataComponents.FOOD);
+            int nutrition = food == null ? 0 : food.nutrition();
             if (nutrition > bestNutrition) {
                 bestNutrition = nutrition;
                 best = stack;

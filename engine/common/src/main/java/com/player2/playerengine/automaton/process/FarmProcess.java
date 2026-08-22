@@ -397,7 +397,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
          // 3. Something is growing here. Bone-meal it if we can, then move on either way — a second
          //    application can wait for the next pass rather than parking us on one tile.
          if (cropState.getBlock() instanceof BonemealableBlock bonemealable
-            && bonemealable.isValidBonemealTarget(this.ctx.world(), cropPos, cropState, true)
+            && bonemealable.isValidBonemealTarget(this.ctx.world(), cropPos, cropState)
             && bonemealable.isBonemealSuccess(this.ctx.world(), this.ctx.world().random, cropPos, cropState)
             && this.baritone.getInventoryBehavior().selectFromWholeInventory(false, this::isBoneMeal)) {
             Optional<Rotation> rot = RotationUtils.reachable(this.ctx, cropPos);

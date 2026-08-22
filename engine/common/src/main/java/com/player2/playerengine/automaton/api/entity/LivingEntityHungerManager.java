@@ -19,6 +19,7 @@ package com.player2.playerengine.automaton.api.entity;
 
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.food.FoodProperties;
@@ -87,7 +88,9 @@ public class LivingEntityHungerManager {
          }
       }
 
-      if (!entity.level().getGameRules().getBoolean(GameRules.RULE_NATURAL_REGENERATION) || !this.canFoodHeal(entity)) {
+      boolean naturalRegen = entity.level() instanceof ServerLevel serverLevel
+         && serverLevel.getGameRules().get(GameRules.NATURAL_HEALTH_REGENERATION);
+      if (!naturalRegen || !this.canFoodHeal(entity)) {
          this.foodTickTimer = 0;
          return;
       }

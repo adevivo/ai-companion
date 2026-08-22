@@ -12,7 +12,6 @@ import com.player2.playerengine.util.ItemTarget;
 import com.player2.playerengine.util.helpers.ItemHelper;
 import java.util.ArrayList;
 import java.util.List;
-import net.minecraft.world.item.ArmorItem;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.Item;
 

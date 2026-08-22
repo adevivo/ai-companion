@@ -35,8 +35,6 @@ import org.apache.logging.log4j.Logger;
 import com.player2.playerengine.PlayerEngineController;
 import com.player2.playerengine.player2api.Event.UserMessage;
 import com.player2.playerengine.player2api.status.StatusUtils;
-import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
-import net.fabricmc.fabric.api.message.v1.ServerMessageEvents.ChatMessage;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;

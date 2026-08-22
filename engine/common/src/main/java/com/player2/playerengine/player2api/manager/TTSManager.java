@@ -14,7 +14,7 @@ import com.player2.playerengine.player2api.Player2APIService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import dev.architectury.networking.NetworkManager;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 
@@ -103,12 +103,26 @@ public class TTSManager {
      * Listen for clients reporting on the lines we asked them to speak. Call once, at mod init.
      */
     public static void registerAckReceiver() {
-        ServerPlayNetworking.registerGlobalReceiver(
-                ACK_CHANNEL, (server, player, handler, buf, responseSender) -> {
-                    UUID speaker = buf.readUUID();
-                    boolean spoken = buf.readBoolean();
-                    server.execute(() -> onSpeechAck(player.getUUID(), speaker, spoken));
-                });
+        NetworkManager.registerReceiver(NetworkManager.Side.C2S, ACK_CHANNEL, (buf, context) -> {
+            // Read on the network thread: the buffer is released once this returns, so the queued
+            // work below must close over values, never over the buf.
+            UUID speaker = buf.readUUID();
+            boolean spoken = buf.readBoolean();
+            UUID listener = context.getPlayer().getUUID();
+            context.queue(() -> onSpeechAck(listener, speaker, spoken));
+        });
+    }
+
+    /**
+     * Tell Architectury about the speech channel so the server can build packets for it.
+     *
+     * <p>Registering a receiver is what normally populates the channel's payload type, and for this
+     * channel that happens on the client. A dedicated server never runs that code, so without this
+     * call {@code NetworkManager.toPacket(Side.S2C, SPEAK_CHANNEL, ...)} would look up a type that
+     * was never registered and send a malformed packet. Call once, from common init, on both sides.
+     */
+    public static void registerSpeechChannel() {
+        NetworkManager.registerS2CPayloadType(SPEAK_CHANNEL);
     }
 
     /**

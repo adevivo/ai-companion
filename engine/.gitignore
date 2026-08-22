@@ -20,6 +20,7 @@ classes/
 *.ipr
 *.iws
 /logs/
+logs/
 
 # Copyright Files
 !/.idea/copyright/Baritone.xml

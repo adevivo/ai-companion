@@ -1,10 +1,14 @@
 package com.player2.playerengine.player2api;
 
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
+import java.util.Optional;
 import java.util.UUID;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -63,25 +67,57 @@ public final class WorldIdentity extends SavedData {
         return new WorldIdentity(UUID.randomUUID().toString(), label);
     }
 
-    private static WorldIdentity load(CompoundTag tag) {
-        String id = tag.getString(KEY_ID);
+    /**
+     * Serialization, which is all of it since 1.21: {@link SavedData} no longer has read/write
+     * hooks to override, only a {@link Codec} handed to a {@link SavedDataType}.
+     *
+     * <p>The keys are unchanged from the hand-rolled version, so the file on disk keeps its shape.
+     */
+    private static final Codec<WorldIdentity> CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.STRING.optionalFieldOf(KEY_ID, "").forGetter(w -> w.id),
+            Codec.STRING.optionalFieldOf(KEY_LABEL).forGetter(w -> Optional.ofNullable(w.label))
+    ).apply(i, WorldIdentity::fromDisk));
+
+    private static WorldIdentity fromDisk(String id, Optional<String> label) {
         // An empty id would silently scope every memory to "", pooling separate worlds into one.
         // Better to mint a new one and lose the old world's memories than to merge two worlds.
-        if (id == null || id.isBlank()) {
+        if (id.isBlank()) {
             LOGGER.warn("World identity file had no id — minting a new one. Memories attached to "
                     + "the previous id, if any, will no longer be reachable in this world.");
-            return fresh(tag.getString(KEY_LABEL));
+            WorldIdentity minted = fresh(label.orElse(null));
+            // Same reason as in mint() below: without this the replacement is never written and a
+            // corrupt file mints a different id on every load rather than being repaired once.
+            minted.setDirty();
+            return minted;
         }
-        return new WorldIdentity(id, tag.getString(KEY_LABEL));
+        return new WorldIdentity(id, label.orElse(null));
     }
 
-    @Override
-    public CompoundTag save(CompoundTag tag) {
-        tag.putString(KEY_ID, id);
-        if (label != null) {
-            tag.putString(KEY_LABEL, label);
-        }
-        return tag;
+    /**
+     * ⚠️ One shared instance, never rebuilt per call. {@link
+     * net.minecraft.world.level.storage.DimensionDataStorage} caches loaded data in a map keyed by
+     * this object, and {@code SavedDataType} is a record — so a type built fresh on each call would
+     * hold a different constructor lambda, compare unequal, miss the cache, and re-read the file
+     * from disk every time {@link #of} was called.
+     *
+     * <p>The data fixer type has to be a real value: {@code readTagFromDisk} calls {@code update}
+     * on it without a null check, so a null would work on the first load and throw on the second,
+     * once the file exists. It never actually fixes anything here — the writer stamps the current
+     * data version, so on read the from- and to-versions are equal and the fixer is a no-op.
+     */
+    private static final SavedDataType<WorldIdentity> TYPE = new SavedDataType<>(
+            DATA_NAME, WorldIdentity::mint, CODEC, DataFixTypes.SAVED_DATA_COMMAND_STORAGE);
+
+    /** The first-sighting case: no file on disk. The label is filled in by {@link #of}. */
+    private static WorldIdentity mint() {
+        WorldIdentity created = fresh(null);
+        // ⚠️ REQUIRED. computeIfAbsent registers the instance but does not mark it dirty, and
+        // SavedData is only written when it is. Without this the id is minted fresh on every single
+        // load and never reaches disk — which looks like it works, right up until every memory
+        // attached to the previous id is unreachable. Confirmed by its absence: three loads, three
+        // different ids, no aicompanion_world_id.dat anywhere.
+        created.setDirty();
+        return created;
     }
 
     /** The stable id. Opaque, and safe to send to the service in cleartext. */
@@ -110,24 +146,18 @@ public final class WorldIdentity extends SavedData {
         ServerLevel overworld = server.overworld();
         String name = server.getWorldData().getLevelName();
 
-        WorldIdentity identity = overworld.getDataStorage()
-                .computeIfAbsent(WorldIdentity::load, () -> {
-                    WorldIdentity created = fresh(name);
-                    // ⚠️ REQUIRED. computeIfAbsent registers the instance but does not mark it
-                    // dirty, and SavedData is only written when it is. Without this the id is
-                    // minted fresh on every single load and never reaches disk — which looks like
-                    // it works, right up until every memory attached to the previous id is
-                    // unreachable. Confirmed by its absence: three loads, three different ids, no
-                    // aicompanion_world_id.dat anywhere.
-                    created.setDirty();
-                    LOGGER.info("Minted a world identity for \"{}\": {}", name, created.id);
-                    return created;
-                }, DATA_NAME);
+        WorldIdentity identity = overworld.getDataStorage().computeIfAbsent(TYPE);
 
-        // Track renames so the label stays useful. Never touches the id.
+        // Track renames so the label stays useful, and fill in the label of an identity that was
+        // just minted — this is the only place that knows the world's current name. Never touches
+        // the id.
         if (name != null && !name.equals(identity.label)) {
+            boolean justMinted = identity.label == null;
             identity.label = name;
             identity.setDirty();
+            if (justMinted) {
+                LOGGER.info("Minted a world identity for \"{}\": {}", name, identity.id);
+            }
         }
         return identity;
     }

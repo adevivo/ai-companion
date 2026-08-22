@@ -72,6 +72,7 @@ import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.ToolMaterial;
 import net.minecraft.world.level.block.BaseFireBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.Vec3;
@@ -235,8 +236,8 @@ public class MobDefenseChain extends SingleTaskChain {
       }
 
       int armor = self.getArmorValue();
-      TieredItem bestWeapon = getBestWeapon(mod);
-      float damage = bestWeapon == null ? 0.0F : bestWeapon.getTier().getAttackDamageBonus() + 1.0F;
+      Item bestWeapon = getBestWeapon(mod);
+      float damage = bestWeapon == null ? 0.0F : attackDamageBonus(bestWeapon) + 1.0F;
       int shield = hasShield(mod) && bestWeapon != null ? 3 : 0;
       // Gear score plus what the body itself is worth, the whole thing scaled by how much of that body
       // is left. The bravery term matters: without it the inherited scoring rates an unarmoured
@@ -638,6 +639,36 @@ public class MobDefenseChain extends SingleTaskChain {
       }
 
       return mod.getItemStorage().hasItem(Items.SHIELD) || mod.getItemStorage().hasItemInOffhand(mod, Items.SHIELD);
+   }
+
+   /**
+    * The material damage bonus of a weapon, as {@code TieredItem.getTier()} used to report it.
+    *
+    * <p>1.21 removed {@code TieredItem}, and an {@link Item} no longer carries its {@link
+    * ToolMaterial} — the damage lives in an attribute modifier component instead. Reading that
+    * component would be the general answer, but it is on a different scale (a diamond sword's
+    * modifier is 6, its material bonus is 3), and the number feeds the fight-or-flee threshold that
+    * {@code BehaviorConfig.defenseBravery} was tuned against. So the mapping is spelled out instead,
+    * which keeps every existing threshold meaning what it did.
+    *
+    * <p>⚠️ Covers exactly the items {@link #getBestWeapon} can return. Add a weapon there, add it
+    * here.
+    */
+   private static float attackDamageBonus(Item weapon) {
+      if (weapon == Items.NETHERITE_SWORD || weapon == Items.NETHERITE_AXE) {
+         return ToolMaterial.NETHERITE.attackDamageBonus();
+      } else if (weapon == Items.DIAMOND_SWORD || weapon == Items.DIAMOND_AXE) {
+         return ToolMaterial.DIAMOND.attackDamageBonus();
+      } else if (weapon == Items.IRON_SWORD || weapon == Items.IRON_AXE) {
+         return ToolMaterial.IRON.attackDamageBonus();
+      } else if (weapon == Items.GOLDEN_SWORD || weapon == Items.GOLDEN_AXE) {
+         return ToolMaterial.GOLD.attackDamageBonus();
+      } else if (weapon == Items.STONE_SWORD || weapon == Items.STONE_AXE) {
+         return ToolMaterial.STONE.attackDamageBonus();
+      } else if (weapon == Items.WOODEN_SWORD || weapon == Items.WOODEN_AXE) {
+         return ToolMaterial.WOOD.attackDamageBonus();
+      }
+      return 0.0F;
    }
 
    public static Item getBestWeapon(PlayerEngineController mod) {

@@ -17,6 +17,7 @@
 
 package com.player2.playerengine;
 
+import com.player2.playerengine.player2api.brain.BrainWire;
 import com.player2.playerengine.player2api.manager.TTSManager;
 import com.player2.playerengine.automaton.KeepName;
 import net.fabricmc.api.ModInitializer;
@@ -34,5 +35,11 @@ public final class PlayerEngineServer implements ModInitializer {
       // happened. It answers when the line finishes — or straight away when there is no Kokoro server
       // to play it — and that answer is what releases the companion's speech lock.
       TTSManager.registerAckReceiver();
+
+      // Architectury learns a channel's payload type when a receiver is registered for it, and the
+      // receivers for these two live on the client. A dedicated server never runs that code, so it
+      // has to be told about them here or every outgoing packet on them is built with a null type.
+      TTSManager.registerSpeechChannel();
+      BrainWire.registerServerToClientChannels();
    }
 }

@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import dev.architectury.networking.NetworkManager;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.Identifier;
 
@@ -60,6 +61,20 @@ public final class BrainWire {
      * only side that can count the corpus once it owns it.
      */
     public static final Identifier MEMORY_REMEMBER = id("memory_remember");
+
+    /**
+     * Declare the channels this side sends on, so packets built for them carry a real payload type.
+     *
+     * <p>Architectury registers a channel's type as a side effect of registering a receiver for it,
+     * and the receivers for both channels below are on the client. The server therefore has to
+     * declare them itself; without this an integrated server works (the client registered them in
+     * the same JVM) and a dedicated server silently sends packets typed {@code null}. Call once,
+     * from common init.
+     */
+    public static void registerServerToClientChannels() {
+        NetworkManager.registerS2CPayloadType(TURN_REQUEST);
+        NetworkManager.registerS2CPayloadType(MEMORY_REMEMBER);
+    }
 
     /**
      * Everything the client needs to build the prompt itself.

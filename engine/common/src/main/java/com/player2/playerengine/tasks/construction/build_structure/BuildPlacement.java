@@ -74,7 +74,7 @@ public final class BuildPlacement {
             return OptionalInt.empty();
         }
 
-        int minBuildHeight = mod.getWorld().getMinBuildHeight();
+        int minBuildHeight = mod.getWorld().getMinY();
         List<Integer> offsets = new ArrayList<>(planBase.size());
         for (Map.Entry<Long, Integer> entry : planBase.entrySet()) {
             int x = unpackX(entry.getKey());

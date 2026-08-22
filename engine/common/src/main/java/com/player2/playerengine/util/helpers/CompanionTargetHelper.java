@@ -4,6 +4,7 @@ import com.neovetta.aicompanion.core.BehaviorConfig;
 import com.neovetta.aicompanion.core.BehaviorConfig;
 import com.player2.playerengine.automaton.api.entity.IAutomatone;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.targeting.TargetingConditions;
@@ -74,7 +75,9 @@ public final class CompanionTargetHelper {
             if (!candidate.isAlive() || candidate == mob) {
                 continue;
             }
-            if (conditions != null && !conditions.test(mob, candidate)) {
+            if (conditions != null
+                    && (!(level instanceof ServerLevel serverLevel)
+                        || !conditions.test(serverLevel, mob, candidate))) {
                 continue;
             }
 

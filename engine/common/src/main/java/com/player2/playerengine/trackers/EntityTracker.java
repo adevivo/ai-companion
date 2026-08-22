@@ -1,7 +1,6 @@
 package com.player2.playerengine.trackers;
 
 import com.player2.playerengine.util.Debug;
-import adris.altoclef.mixins.PersistentProjectileEntityAccessor;
 import com.player2.playerengine.eventbus.EventBus;
 import com.player2.playerengine.eventbus.events.PlayerCollidedWithEntityEvent;
 import com.player2.playerengine.trackers.blacklisting.EntityLocateBlacklist;

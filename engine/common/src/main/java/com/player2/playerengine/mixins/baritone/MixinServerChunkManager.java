@@ -1,7 +1,6 @@
 package com.player2.playerengine.mixins.baritone;
 
 import com.neovetta.aicompanion.core.CompanionTickGuard;
-import com.neovetta.aicompanion.core.CompanionTickGuard;
 import com.player2.playerengine.automaton.utils.accessor.ServerChunkManagerAccessor;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
@@ -65,7 +64,7 @@ public abstract class MixinServerChunkManager implements ServerChunkManagerAcces
     * companion's own tick, so vanilla, other mods, and worker threads are untouched.
     */
    @Inject(
-      method = "getChunk(IILnet/minecraft/world/level/chunk/ChunkStatus;Z)Lnet/minecraft/world/level/chunk/ChunkAccess;",
+      method = "getChunk(IILnet/minecraft/world/level/chunk/status/ChunkStatus;Z)Lnet/minecraft/world/level/chunk/ChunkAccess;",
       at = @At("HEAD"),
       cancellable = true
    )
@@ -82,7 +81,7 @@ public abstract class MixinServerChunkManager implements ServerChunkManagerAcces
    private ChunkAccess aicompanion$emptyChunk(int x, int z) {
       if (this.aicompanion$fallbackBiome == null) {
          this.aicompanion$fallbackBiome =
-               this.level.registryAccess().registryOrThrow(Registries.BIOME).getHolderOrThrow(Biomes.PLAINS);
+               this.level.registryAccess().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
       }
       return new EmptyLevelChunk(this.level, new ChunkPos(x, z), this.aicompanion$fallbackBiome);
    }

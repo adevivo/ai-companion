@@ -115,19 +115,19 @@ public class CharacterUtils {
    }
 
    public static Character readFromNBT(CompoundTag compound) {
-      String name = compound.getString("name").get();
-      String shortName = compound.getString("shortName").get();
-      String greetingInfo = compound.getString("greetingInfo").get();
-      String description = compound.getString("description").get();
-      String skinURL = compound.getString("skinURL").get();
-      ListTag voiceIdsList = compound.getList("voiceIds").get();
+      String name = compound.getStringOr("name", "");
+      String shortName = compound.getStringOr("shortName", "");
+      String greetingInfo = compound.getStringOr("greetingInfo", "");
+      String description = compound.getStringOr("description", "");
+      String skinURL = compound.getStringOr("skinURL", "");
+      ListTag voiceIdsList = compound.getListOrEmpty("voiceIds");
       String[] voiceIds = new String[voiceIdsList.size()];
 
       for (int i = 0; i < voiceIdsList.size(); i++) {
-         voiceIds[i] = voiceIdsList.getString(i).get();
+         voiceIds[i] = voiceIdsList.getStringOr(i, "");
       }
 
-      String persona = compound.getString("persona");
+      String persona = compound.getStringOr("persona", "");
       return new Character(name, shortName, greetingInfo, description, skinURL, voiceIds, persona);
    }
 

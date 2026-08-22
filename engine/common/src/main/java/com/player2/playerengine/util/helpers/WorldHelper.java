@@ -214,7 +214,7 @@ public interface WorldHelper {
          return surface;
       }
       Level world = controller.getWorld();
-      int floor = Math.max(world.getMinBuildHeight(), refY - LOCAL_FLOOR_SEARCH_DEPTH);
+      int floor = Math.max(world.getMinY(), refY - LOCAL_FLOOR_SEARCH_DEPTH);
       for (int y = refY; y >= floor; y--) {
          if (world.getBlockState(new BlockPos(x, y, z)).blocksMotion()
                && !world.getBlockState(new BlockPos(x, y + 1, z)).blocksMotion()) {

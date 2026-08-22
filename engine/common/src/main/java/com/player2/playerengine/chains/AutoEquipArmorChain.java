@@ -2,17 +2,21 @@ package com.player2.playerengine.chains;
 
 import com.neovetta.aicompanion.core.BehaviorConfig;
 import com.player2.playerengine.PlayerEngineController;
-import com.neovetta.aicompanion.core.BehaviorConfig;
 import com.player2.playerengine.tasks.base.TaskRunner;
 import com.player2.playerengine.util.ItemTarget;
 import com.player2.playerengine.automaton.api.entity.LivingEntityInventory;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.item.ArmorItem;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.item.equipment.Equippable;
 
 /**
  * Wear the best armour in the pack, and keep a shield in the offhand, without being asked.
@@ -109,23 +113,23 @@ public class AutoEquipArmorChain extends SingleTaskChain {
          return;
       }
 
+      HolderLookup.Provider registries = self.registryAccess();
+
       for (EquipmentSlot slot : ARMOR_SLOTS) {
          ItemStack worn = self.getItemBySlot(slot);
-         int bestScore = score(worn);
-         ArmorItem best = null;
+         int bestScore = score(worn, registries);
+         Item best = null;
 
          for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
-            if (stack.isEmpty() || !(stack.getItem() instanceof ArmorItem armor)) {
+            Equippable equippable = stack.get(DataComponents.EQUIPPABLE);
+            if (stack.isEmpty() || equippable == null || equippable.slot() != slot) {
                continue;
             }
-            if (armor.getType().getSlot() != slot) {
-               continue;
-            }
-            int candidate = score(stack);
+            int candidate = score(stack, registries);
             if (candidate > bestScore) {
                bestScore = candidate;
-               best = armor;
+               best = stack.getItem();
             }
          }
 
@@ -133,7 +137,7 @@ public class AutoEquipArmorChain extends SingleTaskChain {
             // forceEquipArmor swaps the worn piece back into the inventory slot it came from, so an
             // upgrade never costs the old piece.
             mod.getSlotHandler().forceEquipArmor(mod, new ItemTarget(best));
-            mod.log("Put on " + best.getDescription().getString() + ".");
+            mod.log("Put on " + best.getName().getString() + ".");
          }
       }
    }
@@ -150,11 +154,26 @@ public class AutoEquipArmorChain extends SingleTaskChain {
     * well as a fresh one right up until it breaks, and preferring intact-but-worse armour would be
     * wrong every tick before that moment.
     */
-   private static int score(ItemStack stack) {
-      if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof ArmorItem armor)) {
+   private static int score(ItemStack stack, HolderLookup.Provider registries) {
+      if (stack == null || stack.isEmpty() || !stack.has(DataComponents.EQUIPPABLE)) {
          return 0;
       }
-      int protection = EnchantmentHelper.getItemEnchantmentLevel(Enchantments.ALL_DAMAGE_PROTECTION, stack);
-      return armor.getDefense() * 10 + Math.round(armor.getToughness() * 2.0F) + protection;
+      // 1.21 removed ArmorItem and its getDefense()/getToughness(): armour values are ordinary
+      // attribute modifiers on the stack now, which is also why this reads the stack rather than the
+      // item — a modifier component can differ per stack.
+      double defense = 0.0;
+      double toughness = 0.0;
+      ItemAttributeModifiers modifiers =
+            stack.getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS, ItemAttributeModifiers.EMPTY);
+      for (ItemAttributeModifiers.Entry entry : modifiers.modifiers()) {
+         if (entry.attribute().value() == Attributes.ARMOR.value()) {
+            defense += entry.modifier().amount();
+         } else if (entry.attribute().value() == Attributes.ARMOR_TOUGHNESS.value()) {
+            toughness += entry.modifier().amount();
+         }
+      }
+      int protection = EnchantmentHelper.getItemEnchantmentLevel(
+            registries.getOrThrow(Enchantments.PROTECTION), stack);
+      return (int) Math.round(defense * 10.0 + toughness * 2.0) + protection;
    }
 }
