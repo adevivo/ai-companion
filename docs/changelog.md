@@ -54,6 +54,23 @@ cannot exist is not.
 
 Eight regression tests cover both halves, verified to fail against the old code.
 
+### A rate limit is no longer reported as a broken endpoint
+
+Every client-brain failure sent the owner the same sentence — *"could not reach your model. Check
+llm.endpoint in your own config"* — whatever had actually gone wrong. A companion that hit
+OpenRouter's free daily cap therefore told its owner to go and debug an endpoint that was working
+perfectly. Naming the wrong cause is worse than naming none: it sends someone to fix the one thing
+that is fine.
+
+The client already sends its error text back; it was being dropped on the way to the player. Rate
+limits, refused keys, exhausted credit and unreachable endpoints now each say what they are and what
+to do, and an unrecognised failure is quoted rather than guessed at.
+
+⚠️ **OpenRouter's free models allow 50 requests per day** without credits, resetting at 00:00 UTC;
+10 credits raises it to 1000. A companion spends one per turn and a second per turn when memory
+extraction is on, so 50 is about twenty minutes of conversation. The Model tooltip and the readme now
+say so.
+
 ---
 
 ## 0.3.0 — It remembers, it thinks on your machine, and it works for everyone on the server

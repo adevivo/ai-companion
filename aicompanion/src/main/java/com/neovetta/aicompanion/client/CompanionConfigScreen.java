@@ -488,7 +488,9 @@ public final class CompanionConfigScreen {
                         Text.literal("Prefer a fast, non-reasoning model."),
                         Text.literal("Saved endpoint's models first, cheapest first;"),
                         Text.literal("type to search, or enter any name freely."),
-                        Text.literal("OpenRouter: keep the ':free' suffix or you get billed."),
+                        Text.literal("OpenRouter: keep the ':free' suffix or you get billed,"),
+                        Text.literal("and free models are capped at 50 requests PER DAY"),
+                        Text.literal("without credits — a companion spends one per turn."),
                         Text.literal("The suggested free ones are those that can be asked"),
                         Text.literal("for JSON — most free models cannot, and a companion"),
                         Text.literal("whose model answers in prose runs no commands."))
