@@ -503,6 +503,82 @@ Structure mirrors the proven upstream pattern: **`engine/`** is the framework li
 AltoClef; we modify its brain), and **`aicompanion/`** is a consumer mod that depends on the engine jar
 and defines the entity/spawn/config — exactly how Player2NPC consumes PlayerEngine.
 
+## Minecraft versions and branches
+
+The mod targets several Minecraft versions at once, and they are **peers** — none is a staging area
+for another. Three layers, each with its own lifetime:
+
+| Layer | Where | Lifetime |
+|---|---|---|
+| Version-neutral core | `ai-companion-memory` (separate repo) | one branch, semver |
+| Engine — our PlayerEngine fork | `engine/` | per Minecraft version |
+| The mod — entity, commands, UI, glue | `aicompanion/` | per Minecraft version |
+
+### Branches
+
+One branch per Minecraft version, named `mc/<version>` — `mc/1.20.1`, `mc/1.21.11`. `main` tracks the
+newest version under active development; when a new line stabilises, the previous one keeps living on
+its own `mc/*` branch and continues to receive fixes. Old lines are not abandoned, they are just no
+longer where new work starts.
+
+Pick the branch for the Minecraft version you are building for. Everything below in **Building**,
+including the required JDK, differs between them:
+
+| | `mc/1.20.1` | `mc/1.21.11` |
+|---|---|---|
+| Java | 17 | **21** |
+| Gradle | 8.10 | 8.14 |
+| Engine build | Fabric Loom, single project | Architectury Loom, `common/` + `fabric/` |
+| Engine packages | `baritone.*`, `adris.altoclef.*` | `com.player2.playerengine.*` |
+| Mod mappings | Quilt Mappings | Mojang (Mojmap) |
+
+### ⚠️ You cannot cherry-pick engine changes between branches
+
+Upstream renamed and restructured everything between the versions we forked, so the two engine trees
+share **no source file paths at all** — measured 2026-08-22: 733 paths on `mc/1.20.1`, 676 on
+`mc/1.21.11`, and the 12 in common are `gradlew`, `LICENSE` and the build scripts. A cherry-pick of an
+engine fix does not conflict, it finds no file.
+
+What *does* share paths across branches, and therefore cherry-picks normally:
+
+- everything under `aicompanion/` (all 42 paths)
+- `docs/`, `readme.md`, `BUGS.md`
+- **the core library pin** in `aicompanion/build.gradle` — which is the point, see below
+
+### Where a fix should live
+
+Historically ~90% of our commits touched `engine/`, which is exactly where cross-branch sharing is
+impossible. The fix is to keep version-independent logic *out* of the engine:
+
+- **Memory, extraction, scoring, config schemas, server policy, roster ownership, the brain
+  contract, and their tests** live in `ai-companion-memory`. It has zero Minecraft imports, is
+  version-neutral by construction, and ships to every branch as a JiJ'd, version-pinned jar. Fix it
+  once there, bump the pin on each live `mc/*` branch — and that pin bump *is* cherry-pickable.
+- **Only genuinely Minecraft-coupled code** belongs in `engine/`: pathfinding, tasks, mixins, block
+  and entity interaction, structure building.
+
+Before adding a file to `engine/`, check whether it needs Minecraft at all. If it does not, it is
+almost certainly core-library code and putting it in the engine commits you to porting it forever.
+
+### Release numbering
+
+`<mod version>+mc<minecraft version>` — for example `0.4.0+mc1.21.11` and `0.4.0+mc1.20.1`.
+
+The **mod version is the feature set** and the **`+mc` suffix is the target**, so the same number on
+two branches means the same features built for different Minecraft versions, and one changelog entry
+covers both. This follows Fabric API's own scheme (`0.141.1+1.21.11`).
+
+### Adding a new Minecraft version
+
+1. Branch from the nearest existing `mc/*`.
+2. Re-base `engine/` on upstream PlayerEngine's branch for that version — they maintain their own
+   per-version branches. `engine/UPSTREAM_FORK.txt` records the merge base and how to do the
+   three-way merge.
+3. Migrate `aicompanion/` for the new mappings. Most breakage is renamed or moved `net.minecraft`
+   classes, and that can be derived mechanically from the official Mojang mappings rather than fixed
+   by hand — see `UPSTREAM_FORK.txt`.
+4. Bump the `aicompanion-memory` pin to the current core release. No work is needed *in* the core.
+
 ## Building
 
 **JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`.
