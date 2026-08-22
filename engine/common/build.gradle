@@ -2,7 +2,38 @@ architectury {
     common rootProject.enabled_platforms.split(',')
 }
 
+repositories {
+    mavenCentral()
+    flatDir { dir "$rootProject.projectDir/libs" }   // aicompanion-memory, built from ../ai-companion-memory
+}
+
+// Tests for the version-neutral seams that remain on the Minecraft side. Deliberately narrow —
+// plain JUnit over classes that are pure logic. Anything needing a running Minecraft does not
+// belong here, and anything needing neither belongs in ai-companion-memory instead.
+sourceSets {
+    test {
+        compileClasspath += main.compileClasspath + main.output
+        runtimeClasspath += main.runtimeClasspath + main.output
+    }
+}
+
+test {
+    useJUnitPlatform()
+    testLogging { events 'passed', 'skipped', 'failed' }
+}
+
 dependencies {
+    // The version-neutral core, built from ../ai-companion-memory and staged into libs/.
+    // compileOnly: the consumer mod nests this jar (JiJ) and Fabric puts every nested jar on one
+    // classloader, so the classes are there at runtime. Declaring it `implementation` would bundle
+    // a second copy — two versions of the same scorer is the silent-divergence failure this exists
+    // to prevent. Pinned exact, never '+': Gradle caches dynamic-version resolution.
+    compileOnly 'libs:aicompanion-memory:0.5.0'
+    testImplementation 'libs:aicompanion-memory:0.5.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
     // We depend on Fabric Loader here to use the Fabric @Environment annotations,
     // which get remapped to the correct annotations on each platform.
     // Do NOT use other classes from Fabric Loader.

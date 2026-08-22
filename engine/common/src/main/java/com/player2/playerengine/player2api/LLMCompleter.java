@@ -2,6 +2,7 @@ package com.player2.playerengine.player2api;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.apache.logging.log4j.LogManager;
@@ -9,11 +10,18 @@ import org.apache.logging.log4j.Logger;
 
 import com.google.gson.JsonObject;
 
+import com.player2.playerengine.player2api.utils.Utils.ThrowingFunction;
 import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.player2.playerengine.player2api.utils.Utils.ThrowingFunction;
 
 public class LLMCompleter {
-    private boolean isProcessing = false; // probably don't need this anymore but can keep to be safe
+    /**
+     * Whether a request is out. Claimed on the server thread and released on {@link #llmThread}, so
+     * it cannot be a plain field: a non-volatile read may never observe the release, which strands
+     * the completer as permanently busy. {@code compareAndSet} also closes the check-then-act window
+     * that the old {@code if (isProcessing) ... isProcessing = true} left open.
+     */
+    private final AtomicBoolean inFlight = new AtomicBoolean(false);
 
     private final ExecutorService llmThread = Executors.newSingleThreadExecutor();
     private static final Logger LOGGER = LogManager.getLogger();
@@ -23,20 +31,12 @@ public class LLMCompleter {
             ConversationHistory history,
             Consumer<T> extOnLLMResponse,
             Consumer<String> extOnErrMsg,
-            ThrowingFunction<ConversationHistory, T> completeConversation,
-            boolean isConversation) {
+            ThrowingFunction<ConversationHistory, T> completeConversation) {
         LOGGER.info("Called completer.process with history={}", history);
-        if (isProcessing) {
+        if (!inFlight.compareAndSet(false, true)) {
             LOGGER.warn("Called llmcompleter.process when it was already processing! This should not happen.");
             return;
         }
-
-        // set locks:
-        if (isConversation) {
-            LOGGER.info("Setting conversation lock -> true");
-            ConversationManager.Lock.waitingForResponseLock = true;
-        }
-        isProcessing = true;
 
         Consumer<T> onLLMResponse = resp -> {
             try {
@@ -46,14 +46,8 @@ public class LLMCompleter {
                         "[LLMCompleter/process/onLLMResponse]: Error in external llm resp, errMsg={} llmResp={}",
                         e.getMessage(), resp.toString());
             } finally {
-                LOGGER.info(
-                        "Done processing, releasing conversation lock and setting this.completer.isprocessing -> false");
-
-                isProcessing = false;
-                if (isConversation) {
-                    LOGGER.info("Setting conversation lock -> false");
-                    ConversationManager.Lock.waitingForResponseLock = false;
-                }
+                LOGGER.info("Done processing, releasing this completer back to the pool");
+                inFlight.set(false);
             }
         };
 
@@ -65,13 +59,8 @@ public class LLMCompleter {
                         "[LLMCompleter/process/onErrMsg]: Error in external onErrmsg, errMsgFromException={} errMsg={}",
                         e.getMessage(), errMsg);
             } finally {
-                LOGGER.info(
-                        "Done processing, releasing conversation lock and setting this.completer.isprocessing -> false");
-                isProcessing = false;
-                if (isConversation) {
-                    LOGGER.info("Setting conversation lock -> false");
-                    ConversationManager.Lock.waitingForResponseLock = false;
-                }
+                LOGGER.info("Done processing, releasing this completer back to the pool");
+                inFlight.set(false);
             }
         };
 
@@ -91,23 +80,31 @@ public class LLMCompleter {
             Player2APIService player2apiService,
             ConversationHistory history,
             Consumer<JsonObject> extOnLLMResponse,
-            Consumer<String> extOnErrMsg,
-            boolean isConversation) {
+            Consumer<String> extOnErrMsg) {
         process(player2apiService, history, extOnLLMResponse, extOnErrMsg,
-                player2apiService::completeConversation, isConversation);
+                player2apiService::completeConversation);
     }
 
     public void processToString(
             Player2APIService player2apiService,
             ConversationHistory history,
             Consumer<String> extOnLLMResponse,
-            Consumer<String> extOnErrMsg,
-            boolean isConversation) {
+            Consumer<String> extOnErrMsg) {
         process(player2apiService, history, extOnLLMResponse, extOnErrMsg,
-                player2apiService::completeConversationToString, isConversation);
+                player2apiService::completeConversationToString);
+    }
+
+    /**
+     * Clear the in-flight flag. The pool is {@code static}, so a world that stops while a request is
+     * outstanding leaves this set — {@link #isAvailible()} then returns false for the rest of the
+     * game process and that pool slot is never usable again, in this world or any other. Called from
+     * {@code ConversationManager.onServerStopping()}.
+     */
+    public void reset() {
+        inFlight.set(false);
     }
 
     public boolean isAvailible() {
-        return !isProcessing;
+        return !inFlight.get();
     }
 }

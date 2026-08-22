@@ -47,13 +47,17 @@ public class AgentSideEffects {
                 // }
             }
             TTSManager.TTS(characterMessage.message(), sendingCharacterData.getCharacter(),
-                    sendingCharacterData.getPlayer2apiService());
+                    sendingCharacterData.getPlayer2apiService(), sendingCharacterData.getUUID());
             ConversationManager.onAICharacterMessage(characterMessage,
                     characterMessage.sendingCharacterData().getUUID());
         }
 
         // command part:
         if (characterMessage.command() != null && !characterMessage.command().isBlank()) {
+            // A new command owns its own outcome. Without this, a failure recorded by a command that
+            // was replaced rather than finished would still be sitting there and would be reported
+            // as the next command's result.
+            characterMessage.sendingCharacterData().recordCommandFailure(null);
             onCommandListGenerated(characterMessage.sendingCharacterData().getMod(), characterMessage.command(),
                     characterMessage.sendingCharacterData()::onCommandFinish);
         }
@@ -61,6 +65,18 @@ public class AgentSideEffects {
 
     public static void onError(MinecraftServer server, String errMsg) {
         LOGGER.error(errMsg);
+        // The LLM request cap otherwise fails silently in-world: the companion just goes mute and
+        // the reason lives only in the log. Surface it in chat so the player knows to raise
+        // llm.maxRequests or restart, instead of assuming the mod froze/broke.
+        if (errMsg != null && errMsg.contains("cap reached")) {
+            LOGGER.error("Companion hit the LLM request guardrail (llm.maxRequests). It will not respond "
+                    + "again until you restart the session (or set llm.maxRequests to 0 for unlimited).");
+            String notice = "[companion] Thinking budget reached for this session (llm.maxRequests). "
+                    + "Raise the cap in config or restart the world to continue.";
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                broadcastChatToPlayer(server, notice, player);
+            }
+        }
     }
 
     public static void onCommandListGenerated(PlayerEngineController mod, String command,
@@ -73,7 +89,36 @@ public class AgentSideEffects {
         } else {
             mod.isStopping = false;
         }
+        // `idle` and `bodylang` are the model's two ways of saying "nothing to do here" — one stands by,
+        // the other waves. Both used to run through the task chain, which REPLACES whatever work is in
+        // flight, and the LookAtOwnerTask that follows then leaves the agent idle for good. So a nod
+        // hello or an "I'm already on it" in reply to small talk would silently kill a 20-minute `farm`
+        // or `get`, and the model would keep reporting progress on a task that no longer existed.
+        //
+        // Neither is worth cancelling real work for. Skip them while a non-idle user task is running;
+        // the spoken reply still goes out, only the gesture is dropped. `stop` remains the way to
+        // actually abort a task.
+        boolean cosmetic = commandWithPrefix.contains("idle") || commandWithPrefix.startsWith("@bodylang");
+        if (cosmetic && mod.getUserTaskChain().isActive() && !mod.getUserTaskChain().isRunningIdleTask()) {
+            LOGGER.info("Skipping cosmetic {} — a user task is already running", commandWithPrefix);
+            return;
+        }
         if (commandWithPrefix.contains("idle")) {
+            mod.runUserTask(new LookAtOwnerTask());
+            return;
+        }
+
+        // Owner-only plumbing. Filtering it out of the system prompt is necessary but not sufficient:
+        // the model sees its own earlier turns, so a command it read once it can emit again. Reject it
+        // here — the agent's own dispatch path, so the owner and the idle-command plumbing that share
+        // CommandExecutor are unaffected — and route the reason back through the same error channel as
+        // an invalid command, which lands in gameDebugMessages and lets the model correct itself.
+        String bareName = commandWithPrefix.substring(cmdExecutor.getCommandPrefix().length()).trim().split("\\s+")[0];
+        if (CommandExecutor.isOwnerOnly(bareName)) {
+            LOGGER.info("Refusing owner-only command from the agent: {}", commandWithPrefix);
+            onStop.accept(new CommandExecutionStopReason.Error(commandWithPrefix,
+                    "`" + bareName + "` can only be run by your owner, not by you. "
+                            + "Ask them to run it if it needs doing, and pick another command or none."));
             mod.runUserTask(new LookAtOwnerTask());
             return;
         }

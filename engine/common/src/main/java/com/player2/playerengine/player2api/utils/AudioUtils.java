@@ -1,6 +1,5 @@
 package com.player2.playerengine.player2api.utils;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import javax.sound.sampled.AudioFormat;
@@ -14,31 +13,45 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
+/**
+ * Client-side audio playback for companion speech.
+ *
+ * <p>Runs on the player's machine (driven by the {@code playerengine:stream_tts} packet), so the
+ * audio comes out of the player's speakers, not the server's. Voice/model/speed are supplied by the
+ * server in that packet; the endpoint is this client's own {@code tts.endpoint}, resolved by the
+ * caller — see {@code PlayerEngineClient}.
+ */
 public class AudioUtils {
-    private static final String WEB_API_URL = "https://api.player2.game";
 
-    public static void streamAudio(String clientId, String token, String text, double speed, String[] voiceIds) {
+    /**
+     * Fetch speech for {@code text} from a Kokoro (OpenAI-compatible) endpoint and play it.
+     *
+     * <p>Blocks until playback has finished, so the return is the server's cue that the companion has
+     * stopped talking — see {@code TTSManager.onSpeechAck}. The server cannot work this out for
+     * itself: the endpoint is reachable from here and not necessarily from there.
+     *
+     * @param endpoint base URL, no trailing slash; {@code /v1/audio/speech} is appended
+     * @return true if the line was actually spoken; false if synthesis or playback failed
+     */
+    public static boolean streamAudio(String endpoint, String model, String voice, String text, double speed) {
         HttpURLConnection connection = null;
         try {
             JsonObject requestBody = new JsonObject();
-            requestBody.addProperty("text", text);
+            requestBody.addProperty("model", model);
+            requestBody.addProperty("input", text);
+            requestBody.addProperty("voice", voice);
+            // Must be wav: javax.sound.sampled ships no MP3 decoder, so any other format throws
+            // UnsupportedAudioFileException. Kokoro returns 16-bit mono PCM @24kHz, which it reads natively.
+            requestBody.addProperty("response_format", "wav");
             requestBody.addProperty("speed", speed);
-            requestBody.addProperty("audio_format", "wav");
-            JsonArray voiceIdsArray = new JsonArray();
-            for (String id : voiceIds) {
-                voiceIdsArray.add(id);
-            }
-            requestBody.add("voice_ids", voiceIdsArray);
 
-
-            URL url = new URL(WEB_API_URL+"/v1/tts/stream");
+            URL url = new URL(endpoint + "/v1/audio/speech");
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("Accept", "audio/wav");
-
-            connection.setRequestProperty("player2-game-key", clientId);
-            connection.setRequestProperty("Authorization", "Bearer " + token);
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(30000);
 
             connection.setDoOutput(true);
 
@@ -67,9 +80,12 @@ public class AudioUtils {
                     sourceDataLine.stop();
                 }
             }
+            return true;
         } catch (Exception e) {
-            System.err.println("Error during TTS streaming: " + e.getMessage());
-            e.printStackTrace();
+            // Never let a TTS failure disturb the game: the line is already in chat either way.
+            System.err.println("[AudioUtils] TTS playback failed (" + endpoint
+                    + "): " + e + " — is the Kokoro stack running? See config/aicompanion/tts/README.md");
+            return false;
         } finally {
             if (connection != null) {
                 connection.disconnect();

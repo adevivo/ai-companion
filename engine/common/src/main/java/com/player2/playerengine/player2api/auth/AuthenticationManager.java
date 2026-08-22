@@ -1,5 +1,8 @@
 package com.player2.playerengine.player2api.auth;
 
+import com.neovetta.aicompanion.core.LlmConfig;
+import com.neovetta.aicompanion.core.LlmConfig;
+import com.player2.playerengine.player2api.Player2APIService;
 import com.google.gson.JsonObject;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
@@ -42,6 +45,11 @@ public class AuthenticationManager {
     }
 
     public CompletableFuture<String> authenticate(Player player, String clientId) {
+        if (LlmConfig.localMode) {
+            // Local mode (llama.cpp): no Player2 cloud auth. Hand back a dummy token immediately
+            // so no caller ever runs the device-auth flow.
+            return CompletableFuture.completedFuture("local");
+        }
         AuthKey authKey = new AuthKey(player.getUUID(), clientId);
         String username = player.getName().getString();
 

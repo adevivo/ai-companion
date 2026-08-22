@@ -4,17 +4,18 @@ import com.player2.playerengine.PlayerEngineController;
 import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.player2.playerengine.tasks.base.Task;
 import com.player2.playerengine.util.helpers.ItemHelper;
+import com.player2.playerengine.util.helpers.WorldHelper;
 import com.player2.playerengine.automaton.api.entity.IAutomatone;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.Map.Entry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction.Axis;
+import net.minecraft.util.Mth;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.Entity;
@@ -26,6 +27,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ShieldItem;
 
 public class StatusUtils {
+   /**
+    * Radius, in blocks, at which a companion notices another companion. Deliberately shorter than
+    * {@link ConversationManager#messagePassingMaxDistance} (earshot, 64): a companion may hear one
+    * it cannot see, and that asymmetry is intended.
+    */
+   private static final int NEARBY_NPC_RADIUS = 32;
+
    public static String getInventoryString(PlayerEngineController mod) {
       Map<String, Integer> counts = new HashMap<>();
 
@@ -153,14 +161,25 @@ public class StatusUtils {
       return status.toString();
    }
 
+   /** What the agent is currently holding in its main hand — so the LLM can perceive/confirm equips. */
+   public static String getHeldItemString(PlayerEngineController mod) {
+      ItemStack main = mod.getPlayer().getItemBySlot(EquipmentSlot.MAINHAND);
+      return main.isEmpty() ? "empty hand" : ItemHelper.stripItemName(main.getItem());
+   }
+
    public static String getNearbyPlayers(PlayerEngineController mod) {
       List<String> descriptions = new ArrayList<>();
+      UUID self = mod.getPlayer().getUUID();
 
-      for (Entity entity : mod.getEntityTracker().getCloseEntities()) {
-         if (entity instanceof Player player
-               && entity.distanceTo(mod.getPlayer()) < ConversationManager.messagePassingMaxDistance) {
+      // Scans the level's player list directly. It must not read EntityTracker.getCloseEntities():
+      // that list is gated on PlayerExtraController.inRange, i.e. Settings.entityReachRange, which is
+      // 3 blocks of melee reach -- so this field claimed 64 and delivered 3, and a companion was told
+      // it was alone by the person standing in front of it.
+      for (Player player : mod.getWorld().players()) {
+         if (!player.getUUID().equals(self)
+               && player.distanceTo(mod.getPlayer()) < ConversationManager.messagePassingMaxDistance) {
             String username = player.getName().getString();
-            String position = entity.position().align(EnumSet.allOf(Axis.class)).toString();
+            String position = player.position().align(EnumSet.allOf(Axis.class)).toString();
             descriptions.add(username + " at " + position);
          }
       }
@@ -172,19 +191,23 @@ public class StatusUtils {
 
    public static String getNearbyNPCs(PlayerEngineController mod) {
       List<String> descriptions = new ArrayList<>();
+      UUID self = mod.getPlayer().getUUID();
 
-      for (Entity entity : mod.getEntityTracker().getCloseEntities()) {
-         if (entity instanceof IAutomatone && entity.distanceTo(mod.getPlayer()) < 32.0F) {
+      // Same world scan as getNearbyHostileMobs above, and for the same reason as getNearbyPlayers.
+      // Self-exclusion is by UUID, never by display name: two companions sharing a name used to
+      // erase each other from this field.
+      for (Entity entity : mod.getWorld().getAllEntities()) {
+         if (entity instanceof IAutomatone
+               && !entity.getUUID().equals(self)
+               && entity.distanceTo(mod.getPlayer()) < NEARBY_NPC_RADIUS) {
             String username = entity.getDisplayName().getString();
-            if (!Objects.equals(username, mod.getPlayer().getDisplayName().getString())) {
-               String position = entity.position().align(EnumSet.allOf(Axis.class)).toString();
-               descriptions.add(username + " at " + position);
-            }
+            String position = entity.position().align(EnumSet.allOf(Axis.class)).toString();
+            descriptions.add(username + " at " + position);
          }
       }
 
       return descriptions.isEmpty()
-            ? String.format("no nearby npcs within %d", 32)
+            ? String.format("no nearby npcs within %d", NEARBY_NPC_RADIUS)
             : "[" + String.join(",", descriptions.stream().map(s -> "\"" + s + "\"").toArray(String[]::new)) + "]";
    }
 
@@ -214,8 +237,54 @@ public class StatusUtils {
       return mod.getInteractionManager().getGameType().isCreative() ? "creative" : "survival";
    }
 
+   /**
+    * The bot's FEET position — the block it occupies, not where it is looking from.
+    *
+    * <p>This used to report {@code getEyePosition()}, roughly 1.53 blocks higher (the companion is
+    * player-sized, {@code height * 0.85}), while every prompt that consumes it — notably the
+    * build_structure ground-level rule — describes it as the feet. A build placed at the reported Y
+    * therefore floated a block or two above the terrain even when the model followed instructions
+    * exactly. Only {@link AgentStatus} reads this; the raytracing/look code calls
+    * {@code getEyePosition()} directly and is unaffected.
+    */
+   /**
+    * The bot's position as whole block coordinates, in the form a command takes.
+    *
+    * <p>Was {@code Vec3.toString()}, which renders "(11.902638855274441, 70.0, -46.66562711550304)".
+    * Models copy this field straight into {@code goto}, and that string is not valid argument syntax
+    * — one observed session spent 39 consecutive turns re-issuing it and failing. The precision was
+    * useless to a block-based agent and cost tokens in every prompt besides.
+    */
    public static String getCurrentPosition(PlayerEngineController mod) {
-      return mod.getEntity().getEyePosition().toString();
+      net.minecraft.world.phys.Vec3 pos = mod.getEntity().position();
+      return String.format("%d %d %d",
+            (int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
+   }
+
+   /**
+    * Y of the ground block the bot is standing on, so "ground level" is something it can read rather
+    * than guess. Without it a model asked to build at ground level has no terrain height anywhere in
+    * its context and will reach for any plausible-looking Y nearby — in one observed session it took
+    * the Y of a skeleton in {@code nearby hostiles} and buried the build two blocks down.
+    *
+    * <p>Answered from the block the entity is actually resting on, because the prompt promises this is
+    * "the ground block you are standing on". Sampling a column at the rounded centre broke that promise
+    * twice over: underground it read the terrain overhead (in a cave at y=42 it reported 70), and on
+    * the edge of a structure it read straight past the block underfoot — measured 2026-07-29 standing
+    * on a roof at y=69 over water, where it reported 62.
+    *
+    * <p>{@code mainSupportingBlockPos}, which {@link Entity#getOnPos()} returns, is maintained by the
+    * engine from the collision that actually holds the entity up, so it is right on a one-block ledge
+    * where no single column is. It only exists while standing; airborne, fall back to the column read.
+    */
+   public static String getGroundLevelString(PlayerEngineController mod) {
+      Entity entity = mod.getEntity();
+      if (entity.onGround()) {
+         return Integer.toString(entity.getOnPos().getY());
+      }
+      int ground = WorldHelper.groundYNear(mod, Mth.floor(entity.getX()), Mth.floor(entity.getZ()),
+            Mth.floor(entity.getY()));
+      return Integer.toString(ground);
    }
 
    public static String getTaskTree(PlayerEngineController mod) {

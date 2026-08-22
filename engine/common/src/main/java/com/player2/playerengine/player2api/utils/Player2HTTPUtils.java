@@ -1,5 +1,7 @@
 package com.player2.playerengine.player2api.utils;
 
+import com.neovetta.aicompanion.core.LlmConfig;
+import com.neovetta.aicompanion.core.LlmConfig;
 import com.player2.playerengine.player2api.auth.AuthKey;
 import com.player2.playerengine.player2api.auth.AuthenticationManager;
 import com.google.gson.JsonElement;
@@ -26,8 +28,40 @@ public class Player2HTTPUtils {
     private static final Set<AuthKey> energyRetryAttempted = ConcurrentHashMap.newKeySet();
 
     public static Map<String, JsonElement> sendRequest(Player player, String clientId, String endpoint, boolean postRequest, JsonObject requestBody) throws Exception{
+        return sendRequest(player, clientId, endpoint, postRequest, requestBody, null);
+    }
+
+    /**
+     * As above, with request-specific headers merged in on top of the auth ones.
+     *
+     * <p>Exists for xAI's {@code x-grok-conv-id} routing header, which is not authentication and is
+     * meaningless to the other endpoints this method serves. Unknown headers are ignored by
+     * llama.cpp and by the Player2 API, so it costs nothing to let it through either path rather
+     * than special-casing the provider here.
+     */
+    public static Map<String, JsonElement> sendRequest(Player player, String clientId, String endpoint, boolean postRequest, JsonObject requestBody, Map<String, String> extraHeaders) throws Exception{
+        if (LlmConfig.localMode) {
+            // Local or hosted OpenAI-compatible endpoint: no Player2 device-auth/token. If an apiKey is
+            // configured (e.g. xAI/Grok, OpenAI), send it as a bearer token; otherwise no auth (llama.cpp).
+            Map<String, String> headers = null;
+            if (LlmConfig.apiKey != null && !LlmConfig.apiKey.isBlank()) {
+                headers = new HashMap<>();
+                headers.put("Authorization", "Bearer " + LlmConfig.apiKey);
+            }
+            if (extraHeaders != null && !extraHeaders.isEmpty()) {
+                if (headers == null) {
+                    headers = new HashMap<>();
+                }
+                headers.putAll(extraHeaders);
+            }
+            return HTTPUtils.sendRequest(LlmConfig.baseUrl, endpoint, postRequest, requestBody, headers);
+        }
+
         String token = awaitToken(player, clientId);
         Map<String, String> headers = getHeaders(clientId, token);
+        if (extraHeaders != null) {
+            headers.putAll(extraHeaders);
+        }
 
         try {
             return HTTPUtils.sendRequest(WEB_API_URL, endpoint, postRequest, requestBody, headers);
