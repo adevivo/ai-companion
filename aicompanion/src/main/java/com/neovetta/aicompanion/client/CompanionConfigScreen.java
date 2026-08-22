@@ -234,7 +234,7 @@ public final class CompanionConfigScreen {
      * itself.
      */
     private static void addScopeNotice(ConfigCategory cat, ConfigEntryBuilder eb) {
-        if (Minecraft.getInstance().getServer() != null) {
+        if (Minecraft.getInstance().getSingleplayerServer() != null) {
             cat.addEntry(eb.startTextDescription(Component.literal(
                             "Editing this world's config/aicompanion.json — changes apply on save.")
                     .withStyle(ChatFormatting.GRAY)).build());
@@ -422,7 +422,7 @@ public final class CompanionConfigScreen {
      * view of the entity list, so the line is omitted rather than guessed at.
      */
     private static String liveCompanionNames() {
-        MinecraftServer server = Minecraft.getInstance().getServer();
+        MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
         if (server == null) {
             return null;
         }
@@ -996,7 +996,7 @@ public final class CompanionConfigScreen {
         // again. No-ops when there is nobody to send to.
         ClientConfigSync.announce();
 
-        MinecraftServer server = Minecraft.getInstance().getServer();
+        MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
         if (server != null) {
             // Singleplayer/LAN host: same process as the server, so apply immediately — on the
             // server thread, since reloadAndApply touches live entities.

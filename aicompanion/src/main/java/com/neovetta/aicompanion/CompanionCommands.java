@@ -100,7 +100,7 @@ public final class CompanionCommands {
         if (server == null || player == null) {
             return false;
         }
-        return server.isSingleplayerOwner(player.getGameProfile());
+        return server.isSingleplayerOwner(player.nameAndId());
     }
 
     public static void register() {
@@ -537,7 +537,7 @@ public final class CompanionCommands {
         // Captured on the server thread, before the async write.
         final com.neovetta.aicompanion.memory.Place place = thisWorldOnly
                 ? new com.neovetta.aicompanion.memory.Place(
-                        source.getLevel().dimension().getValue().toString(),
+                        source.getLevel().dimension().identifier().toString(),
                         player.blockPosition().getX(),
                         player.blockPosition().getY(),
                         player.blockPosition().getZ())
@@ -1003,7 +1003,7 @@ public final class CompanionCommands {
                 continue;
             }
             usedSlots++;
-            String path = BuiltInRegistries.ITEM.getId(stack.getItem()).getPath();
+            String path = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
             counts.merge(path, stack.getCount(), Integer::sum);
         }
         final int used = usedSlots;
@@ -1027,7 +1027,7 @@ public final class CompanionCommands {
         if (stack == null || stack.isEmpty()) {
             return null;
         }
-        String path = BuiltInRegistries.ITEM.getId(stack.getItem()).getPath();
+        String path = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
         if (stack.isDamageableItem()) {
             return path + " (" + (stack.getMaxDamage() - stack.getDamageValue()) + "/" + stack.getMaxDamage() + ")";
         }
@@ -1136,10 +1136,10 @@ public final class CompanionCommands {
             // problem and does not block you.
             CompanionEntity existing = findOwnedAnywhere(server, owner, entry.name());
             if (existing != null) {
-                boolean sameWorld = existing.level() == source.level();
+                boolean sameWorld = existing.level() == source.getLevel();
                 String where = sameWorld
                         ? Math.round(Math.sqrt(existing.distanceToSqr(source.getPosition()))) + " blocks away"
-                        : "in " + existing.level().dimension().getValue().getPath();
+                        : "in " + existing.level().dimension().identifier().getPath();
                 source.sendFailure(Component.literal(entry.name() + " is already out, " + where
                         + ". /companion come " + entry.name()
                         + " to call them, or /companion list to see everyone."));

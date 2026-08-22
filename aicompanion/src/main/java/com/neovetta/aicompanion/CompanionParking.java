@@ -1,5 +1,9 @@
 package com.neovetta.aicompanion;
 
+import net.minecraft.world.level.storage.TagValueOutput;
+import net.minecraft.world.level.storage.TagValueInput;
+import net.minecraft.util.ProblemReporter;
+import net.minecraft.nbt.NbtAccounter;
 import com.neovetta.aicompanion.core.ServerPolicy;
 import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
@@ -104,26 +108,32 @@ public final class CompanionParking {
     private static boolean parkOne(CompanionEntity companion, ServerLevel world, UUID owner) {
         String name = companion.displayName();
         try {
-            CompoundTag tag = new CompoundTag();
-            // saveSelfNbt writes the entity id alongside its state, and returns false for anything
-            // that must not be saved on its own (a passenger, something already removed). Believe it.
-            if (!companion.saveAsPassenger(tag)) {
+            // Entities save through ValueOutput now rather than straight into a CompoundTag.
+            // TagValueOutput is the bridge back to one, which this file still needs because what it
+            // writes is a standalone .nbt file rather than part of a region save.
+            TagValueOutput out = TagValueOutput.createWithContext(
+                    ProblemReporter.DISCARDING, world.registryAccess());
+            // saveAsPassenger writes the entity id alongside its state, and returns false for
+            // anything that must not be saved on its own (a passenger, something already removed).
+            // Believe it.
+            if (!companion.saveAsPassenger(out)) {
                 AiCompanion.LOGGER.warn("[{}] not parking {} — it declined to be saved (riding "
                         + "something, or already gone). Leaving it where it is.",
                         AiCompanion.MOD_ID, name);
                 return false;
             }
-            tag.putString(DIMENSION_KEY, world.dimension().getValue().toString());
+            CompoundTag tag = out.buildResult();
+            tag.putString(DIMENSION_KEY, world.dimension().identifier().toString());
 
             Path dir = parkedDir(owner);
             Files.createDirectories(dir);
-            File file = dir.resolve(companion.getUUID() + ".nbt").toFile();
+            Path file = dir.resolve(companion.getUUID() + ".nbt");
             NbtIo.writeCompressed(tag, file);
 
             // ⚠️ Read it back before removing anything. A write that reported success but produced
             // an unreadable file is exactly the case that would cost somebody their inventory, and
             // it is cheap to rule out.
-            CompoundTag check = NbtIo.readCompressed(file);
+            CompoundTag check = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
             if (check == null || !check.contains(DIMENSION_KEY)) {
                 AiCompanion.LOGGER.error("[{}] parked file for {} did not read back — leaving the "
                         + "companion in the world rather than risk its inventory.",
@@ -176,7 +186,7 @@ public final class CompanionParking {
 
     private static boolean restoreOne(MinecraftServer server, ServerPlayer owner, Path file) {
         try {
-            CompoundTag tag = NbtIo.readCompressed(file.toFile());
+            CompoundTag tag = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
             if (tag == null) {
                 return false;
             }
@@ -185,12 +195,14 @@ public final class CompanionParking {
                 // The dimension is gone — a datapack removed it, or the save moved. Keep the file:
                 // deleting it is the one irreversible option, and the world may come back.
                 AiCompanion.LOGGER.warn("[{}] parked companion in an unknown dimension ({}) — "
-                        + "keeping it on disk", AiCompanion.MOD_ID, tag.getString(DIMENSION_KEY));
+                        + "keeping it on disk", AiCompanion.MOD_ID, tag.getStringOr(DIMENSION_KEY, "?"));
                 return false;
             }
 
             CompanionEntity companion = new CompanionEntity(AiCompanion.COMPANION, world);
-            companion.readNbt(tag); // position, rotation, UUID, inventory, identity, owner
+            // position, rotation, UUID, inventory, identity, owner
+            companion.load(TagValueInput.create(
+                    ProblemReporter.DISCARDING, world.registryAccess(), tag));
 
             // A crash between writing the file and discarding the entity would leave both. Spawning
             // the second one is how an inventory gets duplicated, so the file loses.
@@ -213,15 +225,15 @@ public final class CompanionParking {
     }
 
     private static ServerLevel worldOf(MinecraftServer server, CompoundTag tag) {
-        String id = tag.getString(DIMENSION_KEY);
-        if (id == null || id.isBlank()) {
+        String id = tag.getStringOr(DIMENSION_KEY, "");
+        if (id.isBlank()) {
             return server.overworld();
         }
         Identifier parsed = Identifier.tryParse(id);
         if (parsed == null) {
             return server.overworld();
         }
-        ResourceKey<Level> key = ResourceKey.of(Registries.DIMENSION, parsed);
+        ResourceKey<Level> key = ResourceKey.create(Registries.DIMENSION, parsed);
         ServerLevel world = server.getLevel(key);
         return world;
     }

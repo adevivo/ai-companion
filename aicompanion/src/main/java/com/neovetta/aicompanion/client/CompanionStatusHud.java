@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion.client;
 
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -119,7 +120,7 @@ public final class CompanionStatusHud {
     private static final int COLOR_TEXT_DIM = 0xAAAAAA;
 
     /** Render callback body — registered against {@code HudRenderCallback.EVENT} in the client init. */
-    public static void render(GuiGraphics ctx, float tickDelta) {
+    public static void render(GuiGraphics ctx, DeltaTracker delta) {
         if (mode == Mode.OFF || SNAPSHOTS.isEmpty()) {
             return;
         }
@@ -130,7 +131,7 @@ public final class CompanionStatusHud {
         }
 
         long now = System.currentTimeMillis();
-        Identifier here = client.level.dimension().getValue();
+        Identifier here = client.level.dimension().identifier();
 
         List<Row> rows = new ArrayList<>();
         boolean anyNeedsAttention = false;

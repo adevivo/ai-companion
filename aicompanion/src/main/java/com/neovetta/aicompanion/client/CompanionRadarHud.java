@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion.client;
 
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -89,7 +90,7 @@ public final class CompanionRadarHud {
     private static final int COLOR_MARKER_LOW = 0xFFFF5555;
 
     /** Render callback body — registered against {@code HudRenderCallback.EVENT} in the client init. */
-    public static void render(GuiGraphics ctx, float tickDelta) {
+    public static void render(GuiGraphics ctx, DeltaTracker delta) {
         if (mode == Mode.OFF || SNAPSHOTS.isEmpty()) {
             return;
         }
@@ -100,7 +101,7 @@ public final class CompanionRadarHud {
         }
 
         long now = System.currentTimeMillis();
-        Identifier here = client.level.dimension().getValue();
+        Identifier here = client.level.dimension().identifier();
 
         // Decide what to draw before drawing any of it: the bar itself is shared, so it must not be
         // painted at all if every companion turns out to be hidden by AUTO or aged out.

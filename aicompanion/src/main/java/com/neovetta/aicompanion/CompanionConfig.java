@@ -322,7 +322,7 @@ public final class CompanionConfig {
         // going to conclude the setting does not work.
         //
         // Their rules go out on the same pass, so the Server tab stops showing stale values too.
-        for (ServerPlayer player : server.getPlayerList().getPlayerList()) {
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             server.getPlayerList().sendPlayerPermissionLevel(player);
             AiCompanion.sendServerPolicy(player);
         }

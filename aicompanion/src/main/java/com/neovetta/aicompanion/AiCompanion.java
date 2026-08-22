@@ -1,5 +1,7 @@
 package com.neovetta.aicompanion;
 
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -8,8 +10,6 @@ import com.neovetta.aicompanion.entity.CompanionEntity;
 import com.neovetta.aicompanion.screen.CompanionScreens;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
-import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
-import net.minecraft.world.entity.EntityDimensions;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
@@ -104,7 +104,7 @@ public class AiCompanion implements ModInitializer {
                             com.google.gson.JsonObject payload = com.google.gson.JsonParser
                                     .parseString(json).getAsJsonObject();
                             for (String problem : ClientProfiles.announce(player, payload)) {
-                                player.sendMessage(net.minecraft.network.chat.Component.literal("[companion] " + problem)
+                                player.displayClientMessage(net.minecraft.network.chat.Component.literal("[companion] " + problem)
                                         .withStyle(net.minecraft.ChatFormatting.YELLOW), false);
                             }
                         } catch (Throwable e) {
@@ -113,7 +113,7 @@ public class AiCompanion implements ModInitializer {
                             // are told so, rather than finding /companion spawn mysteriously empty.
                             LOGGER.warn("[{}] unreadable roster announcement from {}", MOD_ID,
                                     player.getName().getString(), e);
-                            player.sendMessage(net.minecraft.network.chat.Component.literal(
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
                                     "[companion] your companion config could not be read — using this "
                                             + "server's defaults").withStyle(net.minecraft.ChatFormatting.YELLOW),
                                     false);
@@ -278,17 +278,30 @@ public class AiCompanion implements ModInitializer {
                 .add(Attributes.ARMOR, CombatConfig.DEFAULT_ARMOR);
     }
 
-    /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
-    public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
-            .<CompanionEntity>createLiving()
-            .category(MobCategory.MISC)
-            .entityFactory(CompanionEntity::new)
-            .defaultAttributes(AiCompanion::createCompanionAttributes)
-            .dimensions(EntityDimensions.scalable(EntityType.PLAYER.getWidth(), EntityType.PLAYER.getHeight()))
-            .trackRangeBlocks(64)
-            .trackedUpdateRate(1)
-            .forceTrackedVelocityUpdates(true)
-            .build();
+    /**
+     * Our companion entity type — a player-sized LivingEntity, tracked like a nearby player.
+     *
+     * <p>Vanilla's {@code EntityType.Builder} rather than {@code FabricEntityTypeBuilder}, which no
+     * longer offers a living-entity variant. Two of the arguments changed meaning in the move and
+     * are not the same numbers as before:
+     *
+     * <ul>
+     *   <li>{@code clientTrackingRange} counts <b>chunks</b>, where Fabric's {@code
+     *       trackRangeBlocks} counted blocks. 64 blocks is 4 chunks; passing 64 here would ask for
+     *       1024 blocks of tracking.
+     *   <li>{@code build} now takes the registry key, so the id is named here as well as at
+     *       registration below. Both must agree.
+     * </ul>
+     *
+     * <p>Default attributes are no longer part of the builder; {@code FabricDefaultAttributeRegistry}
+     * still carries them, and {@code onInitialize} registers them.
+     */
+    public static final EntityType<CompanionEntity> COMPANION = EntityType.Builder
+            .of((EntityType.EntityFactory<CompanionEntity>) CompanionEntity::new, MobCategory.MISC)
+            .sized(EntityType.PLAYER.getWidth(), EntityType.PLAYER.getHeight())
+            .clientTrackingRange(4)
+            .updateInterval(1)
+            .build(ResourceKey.create(Registries.ENTITY_TYPE, id("companion")));
 
     @Override
     public void onInitialize() {

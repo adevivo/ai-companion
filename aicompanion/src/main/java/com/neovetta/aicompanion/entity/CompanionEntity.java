@@ -1,5 +1,13 @@
 package com.neovetta.aicompanion.entity;
 
+import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.ItemStackWithSlot;
+import net.minecraft.core.UUIDUtil;
+import java.util.Optional;
+import net.minecraft.world.item.Item;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.Holder;
 import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -150,7 +158,12 @@ public class CompanionEntity extends LivingEntity
 
     public CompanionEntity(EntityType<? extends CompanionEntity> type, Level world) {
         super(type, world);
-        this.setStepHeight(0.6f);
+        // Step height stopped being a field and became an attribute. Set through the attribute map
+        // so anything that modifies it later — an item, an effect — composes instead of overwriting.
+        AttributeInstance step = this.getAttribute(Attributes.STEP_HEIGHT);
+        if (step != null) {
+            step.setBaseValue(0.6);
+        }
         setSpeed(0.4f);
         this.interactionManager = new LivingEntityInteractionManager(this);
         this.inventory = new LivingEntityInventory(this);
@@ -162,11 +175,11 @@ public class CompanionEntity extends LivingEntity
     }
 
     @Override
-    protected void initDataTracker() {
-        super.initDataTracker();
-        this.entityData.startTracking(SKIN_FILE, "");
-        this.entityData.startTracking(SKIN_SLIM, false);
-        this.entityData.startTracking(SKIN_TEXTURE, "");
+    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(SKIN_FILE, "");
+        builder.define(SKIN_SLIM, false);
+        builder.define(SKIN_TEXTURE, "");
     }
 
     /** Which roster entry this companion is, or blank if it predates the roster. */
@@ -269,7 +282,7 @@ public class CompanionEntity extends LivingEntity
     }
 
     /** Set one attribute's base value, ignoring attributes this entity somehow doesn't have. */
-    private void setBase(Attribute attribute, double value) {
+    private void setBase(Holder<Attribute> attribute, double value) {
         AttributeInstance instance = this.getAttribute(attribute);
         if (instance != null) {
             instance.setBaseValue(value);
@@ -290,11 +303,20 @@ public class CompanionEntity extends LivingEntity
      * eats its entire supply one item at a time and stays hungry.
      */
     @Override
-    public ItemStack eatFood(Level world, ItemStack stack) {
-        this.hungerManager.eat(stack.getItem(), stack);
-        world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.PLAYER_BURP,
-                SoundSource.PLAYERS, 0.5f, world.getRandom().nextFloat() * 0.1f + 0.9f);
-        return super.eatFood(world, stack);
+    protected void completeUsingItem() {
+        // `eatFood` is gone: 1.21 moved food to the Consumable data component, and the last hook a
+        // LivingEntity still gets is the one that fires when the use timer runs out. The stack has
+        // to be read BEFORE delegating, because super consumes it and leaves an empty stack behind.
+        ItemStack stack = this.getUseItem();
+        boolean edible = !stack.isEmpty() && stack.has(DataComponents.CONSUMABLE);
+        Item item = stack.getItem();
+        super.completeUsingItem();
+        if (edible) {
+            this.hungerManager.eat(item, stack);
+            Level world = this.level();
+            world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.PLAYER_BURP,
+                    SoundSource.PLAYERS, 0.5f, world.getRandom().nextFloat() * 0.1f + 0.9f);
+        }
     }
 
     /** This companion's display name, falling back to the default identity's if it somehow has none. */
@@ -319,33 +341,37 @@ public class CompanionEntity extends LivingEntity
     }
 
     // --- Persistence: keep the player-like inventory across save/load ---
+    //
+    // 1.21.9 replaced raw CompoundTag on the entity save hooks with ValueInput/ValueOutput, which
+    // are format-agnostic and Optional-returning. Two consequences run through everything below:
+    // a missing key now yields an empty Optional rather than a silent zero-or-blank, so every read
+    // states its own default; and "is this key present" is answered by the Optional rather than by
+    // a separate contains() call with a tag-type id.
     @Override
-    public void readCustomDataFromNbt(CompoundTag tag) {
+    protected void readAdditionalSaveData(ValueInput tag) {
         super.readAdditionalSaveData(tag);
-        if (tag.contains("head_yaw")) {
-            this.yHeadRot = tag.getFloat("head_yaw");
-        }
-        this.inventory.readNbt(tag.getList("Inventory", 10));
-        this.inventory.selectedSlot = tag.getInt("SelectedItemSlot");
-        if (tag.containsUuid("Owner")) {
-            this.ownerUuid = tag.getUUID("Owner");
-        }
-        this.rosterName = tag.getString("RosterName");
-        this.metOwner = tag.getBoolean("MetOwner");
+        // Absent for anything saved before head yaw was persisted — keep whatever the entity has.
+        // ValueInput has no Optional getFloat, only the defaulted form — keep what we have if absent.
+        this.yHeadRot = tag.getFloatOr("head_yaw", this.yHeadRot);
+        this.inventory.readNbt(tag.listOrEmpty("Inventory", ItemStackWithSlot.CODEC));
+        this.inventory.selectedSlot = tag.getIntOr("SelectedItemSlot", 0);
+        tag.read("Owner", UUIDUtil.CODEC).ifPresent(owner -> this.ownerUuid = owner);
+        this.rosterName = tag.getStringOr("RosterName", "");
+        this.metOwner = tag.getBooleanOr("MetOwner", false);
         // Identity from the entity itself, not from whatever config happens to be loaded. A
         // companion saved before identities were persisted has no Identity tag, so it falls back to
         // the old name lookup — which is exactly what it did before, and the only case where the
         // server's roster still gets a say in who somebody else's companion is.
-        if (tag.contains("Identity", 10)) {
-            applyRosterEntry(readIdentity(tag.getCompound("Identity")));
+        Optional<ValueInput> identityTag = tag.child("Identity");
+        if (identityTag.isPresent()) {
+            applyRosterEntry(readIdentity(identityTag.get()));
         } else {
             CompanionConfig.find(this.rosterName).ifPresent(this::applyRosterEntry);
         }
     }
 
-    /** One roster entry as NBT, so a companion carries its own identity through a save. */
-    private static CompoundTag writeIdentity(CompanionConfig.RosterEntry entry) {
-        CompoundTag tag = new CompoundTag();
+    /** One roster entry as saved data, so a companion carries its own identity through a save. */
+    private static void writeIdentity(ValueOutput tag, CompanionConfig.RosterEntry entry) {
         tag.putString("name", entry.name() == null ? "" : entry.name());
         tag.putString("description", entry.description() == null ? "" : entry.description());
         tag.putString("persona", entry.persona() == null ? "" : entry.persona());
@@ -353,28 +379,28 @@ public class CompanionEntity extends LivingEntity
         tag.putString("skinUsername", entry.skinUsername() == null ? "" : entry.skinUsername());
         tag.putBoolean("skinSlim", entry.skinSlim());
         tag.putString("voice", entry.voice() == null ? "" : entry.voice());
-        return tag;
     }
 
-    private static CompanionConfig.RosterEntry readIdentity(CompoundTag tag) {
+    private static CompanionConfig.RosterEntry readIdentity(ValueInput tag) {
         return new CompanionConfig.RosterEntry(
-                tag.getString("name"), tag.getString("description"), tag.getString("persona"),
-                tag.getString("skinFile"), tag.getString("skinUsername"),
-                tag.getBoolean("skinSlim"), tag.getString("voice"));
+                tag.getStringOr("name", ""), tag.getStringOr("description", ""),
+                tag.getStringOr("persona", ""), tag.getStringOr("skinFile", ""),
+                tag.getStringOr("skinUsername", ""), tag.getBooleanOr("skinSlim", false),
+                tag.getStringOr("voice", ""));
     }
 
     @Override
-    public void writeCustomDataToNbt(CompoundTag tag) {
+    protected void addAdditionalSaveData(ValueOutput tag) {
         super.addAdditionalSaveData(tag);
         tag.putFloat("head_yaw", this.yHeadRot);
-        tag.put("Inventory", this.inventory.writeNbt(new ListTag()));
+        this.inventory.writeNbt(tag.list("Inventory", ItemStackWithSlot.CODEC));
         tag.putInt("SelectedItemSlot", this.inventory.selectedSlot);
         if (this.ownerUuid != null) {
-            tag.putUuid("Owner", this.ownerUuid);
+            tag.store("Owner", UUIDUtil.CODEC, this.ownerUuid);
         }
         tag.putString("RosterName", this.rosterName == null ? "" : this.rosterName);
         if (this.identity != null) {
-            tag.put("Identity", writeIdentity(this.identity));
+            writeIdentity(tag.child("Identity"), this.identity);
         }
         // Read back off the brain when there is one: onGreeting flips it there, and the entity is
         // what outlives the brain. Without this the flag would reset on every restart and the
@@ -545,7 +571,7 @@ public class CompanionEntity extends LivingEntity
         this.interactionManager.update();
         this.inventory.updateItems();
         attackStrengthTicker++; // LivingEntities don't tick attack cooldown by default
-        if (!this.level().isClientSide && !aiDisabled && shouldTickAi()) {
+        if (!this.level().isClientSide() && !aiDisabled && shouldTickAi()) {
             // Inside this window the chunk source answers reads from memory instead of blocking on a
             // load — see CompanionTickGuard. Scoped to the AI only: super.tick() below must keep
             // vanilla's normal world access for physics and collision.
@@ -568,7 +594,7 @@ public class CompanionEntity extends LivingEntity
         }
         super.tick();
         this.updateSwingTime();
-        if (!this.level().isClientSide) {
+        if (!this.level().isClientSide()) {
             // Order matters: bank this tick's exertion before the hunger manager converts exhaustion
             // into saturation and food, so effort is paid for in the same tick it happens.
             tickExhaustion();
@@ -609,7 +635,7 @@ public class CompanionEntity extends LivingEntity
         buf.writeDouble(this.getX());
         buf.writeDouble(this.getY());
         buf.writeDouble(this.getZ());
-        buf.writeIdentifier(this.level().dimension().getValue());
+        buf.writeIdentifier(this.level().dimension().identifier());
         buf.writeFloat(this.getHealth());
         buf.writeFloat(this.getMaxHealth());
         // Hunger rides the same snapshot rather than getting a channel of its own: it changes on the
@@ -737,14 +763,11 @@ public class CompanionEntity extends LivingEntity
      * {@link LivingEntity} (only {@code MobEntity} implements it), so there is nothing to double up with.
      */
     @Override
-    protected void dropInventory() {
-        super.dropEquipment();
-        if (this.level().isClientSide) {
-            return;
-        }
-        int stacks = dropAll(this.inventory.main)
-                + dropAll(this.inventory.armor)
-                + dropAll(this.inventory.offHand);
+    protected void dropEquipment(ServerLevel level) {
+        super.dropEquipment(level);
+        int stacks = dropAll(level, this.inventory.main)
+                + dropAll(level, this.inventory.armor)
+                + dropAll(level, this.inventory.offHand);
         announceDeath(stacks);
     }
 
@@ -754,7 +777,7 @@ public class CompanionEntity extends LivingEntity
      * {@link ItemStack} instance to the new {@link ItemEntity} rather than copying it, so leaving it in
      * place would alias a stack that now belongs to the world.
      */
-    private int dropAll(List<ItemStack> slots) {
+    private int dropAll(ServerLevel level, List<ItemStack> slots) {
         int dropped = 0;
         for (int i = 0; i < slots.size(); i++) {
             ItemStack stack = slots.get(i);
@@ -762,7 +785,7 @@ public class CompanionEntity extends LivingEntity
                 continue;
             }
             slots.set(i, ItemStack.EMPTY);
-            this.spawnAtLocation(stack, 0.5f); // waist height, so nothing spawns inside the floor
+            this.spawnAtLocation(level, stack, 0.5f); // waist height, so nothing spawns inside the floor
             dropped++;
         }
         return dropped;
@@ -805,10 +828,10 @@ public class CompanionEntity extends LivingEntity
      * does the same thing for the same reason.
      */
     @Override
-    public void onDeath(DamageSource source) {
+    public void die(DamageSource source) {
         boolean wasDying = this.dead; // onDeath is guarded but not documented as once-only
         super.die(source);
-        if (!this.level().isClientSide && !wasDying) {
+        if (!this.level().isClientSide() && !wasDying) {
             ConversationManager.forget(this.getUUID());
         }
     }
@@ -825,7 +848,7 @@ public class CompanionEntity extends LivingEntity
         if (server == null || !server.isRunning() || server.isShutdown() || server.isStopped()) {
             return false;
         }
-        return this.level() instanceof ServerLevel serverWorld && !serverWorld.getPlayers().isEmpty();
+        return this.level() instanceof ServerLevel serverWorld && !serverWorld.players().isEmpty();
     }
 
     /**
@@ -942,7 +965,7 @@ public class CompanionEntity extends LivingEntity
         if (hand != InteractionHand.MAIN_HAND || !player.getItemInHand(hand).isEmpty() || player.isShiftKeyDown()) {
             return super.interact(player, hand);
         }
-        if (this.level().isClientSide) {
+        if (this.level().isClientSide()) {
             // Swing and open on the server's say-so; the client cannot know who the owner is.
             return InteractionResult.SUCCESS;
         }
@@ -977,7 +1000,7 @@ public class CompanionEntity extends LivingEntity
     }
 
     @Override
-    public void tickMovement() {
+    public void aiStep() {
         super.aiStep();
         this.yHeadRot = this.getYRot();
         pickupItems();
@@ -999,8 +1022,10 @@ public class CompanionEntity extends LivingEntity
      * this same path and that is a much larger change.
      */
     private void pickupItems() {
-        if (this.level().isClientSide || !this.isAlive() || this.dead
-                || !this.level().getGameRules().getBoolean(GameRules.MOB_GRIEFING)) {
+        // Game rules moved off Level onto ServerLevel, which also states what the client-side guard
+        // below used to say separately: there are no rules to read on a client level.
+        if (!(this.level() instanceof ServerLevel serverLevel) || !this.isAlive() || this.dead
+                || !serverLevel.getGameRules().get(GameRules.MOB_GRIEFING)) {
             return;
         }
         boolean full = this.getLivingInventory().getEmptySlot() < 0;
@@ -1061,46 +1086,48 @@ public class CompanionEntity extends LivingEntity
 
     // --- Combat: LivingEntity has no attack of its own ---
     @Override
-    public boolean tryAttack(Entity target) {
+    public boolean doHurtTarget(ServerLevel level, Entity target) {
         // Swinging costs the same 0.1 exhaustion it costs a player. See tickExhaustion().
         this.hungerManager.addExhaustion(0.1f);
         // Read the cooldown before resetting it: an attack landed mid-recharge does reduced damage,
         // exactly like a player spam-clicking. Without this the companion out-DPSes its own gear.
         float charge = this.getAttackCooldownProgress(0.5F);
         attackStrengthTicker = 0;
-        float damage = (float) this.getAttributeValue(Attributes.ATTACK_DAMAGE);
+        float base = (float) this.getAttributeValue(Attributes.ATTACK_DAMAGE);
         float knockback = (float) this.getAttributeValue(Attributes.ATTACK_KNOCKBACK);
-        float enchantBonus = 0.0F;
-        if (target instanceof LivingEntity living) {
-            enchantBonus = EnchantmentHelper.getAttackDamage(this.getMainHandItem(), living.getGroup());
-            knockback += EnchantmentHelper.getKnockback(this);
-        }
-        damage *= 0.2F + charge * charge * 0.8F;
-        enchantBonus *= charge;
-        damage += enchantBonus;
-        int fire = EnchantmentHelper.getFireAspect(this);
-        if (fire > 0) {
-            target.igniteForSeconds(fire * 4);
-        }
-        boolean hit = target.damage(this.damageSources().mobAttack(this), damage);
+        DamageSource source = this.damageSources().mobAttack(this);
+        ItemStack weapon = this.getMainHandItem();
+
+        // Enchantments no longer answer "how much extra damage" directly — getAttackDamage,
+        // getKnockback and getFireAspect are all gone, replaced by one pipeline that takes a base
+        // value and returns it modified by whatever the weapon's components say. The bonus is
+        // recovered by difference, because the charge multiplier applies to it differently: base
+        // damage scales with the square of the charge and the enchantment bonus scales linearly,
+        // which is what a player's attack does and what this code has always done.
+        float enchantBonus = EnchantmentHelper.modifyDamage(level, weapon, target, source, base) - base;
+        knockback = EnchantmentHelper.modifyKnockback(level, weapon, target, source, knockback);
+        float damage = base * (0.2F + charge * charge * 0.8F) + enchantBonus * charge;
+
+        boolean hit = target.hurtServer(level, source, damage);
         if (hit) {
             if (knockback > 0.0F && target instanceof LivingEntity living) {
                 living.knockback(knockback * 0.5F,
                         Mth.sin(this.getYRot() * ((float) Math.PI / 180F)),
                         -Mth.cos(this.getYRot() * ((float) Math.PI / 180F)));
-                this.setVelocity(this.getDeltaMovement().multiply(0.6, 1.0, 0.6));
+                this.setDeltaMovement(this.getDeltaMovement().multiply(0.6, 1.0, 0.6));
             }
-            this.applyDamageEffects(this, target);
+            // Fire aspect used to be read here and applied by hand. It is one of the post-attack
+            // effects now, along with everything else a weapon's enchantments do on a landed hit.
+            EnchantmentHelper.doPostAttackEffects(level, target, source);
             this.setLastHurtMob(target);
             // Weapon wear. LivingEntity never does this — only PlayerEntity#attack calls postHit, which
             // is the hook SwordItem/AxeItem/TridentItem use for hurtAndBreak(1) and their on-hit extras.
             // Use the Item overload: the ItemStack one demands a PlayerEntity we don't have.
             if (target instanceof LivingEntity living) {
-                ItemStack weapon = this.getMainHandItem();
                 if (!weapon.isEmpty()) {
                     weapon.getItem().hurtEnemy(weapon, living, this);
                     if (weapon.isEmpty()) {
-                        this.equipStack(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
+                        this.setItemSlot(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
                     }
                 }
             }
@@ -1118,12 +1145,12 @@ public class CompanionEntity extends LivingEntity
      * to keep this file free of a constant that has to be re-checked on every mapping bump.
      */
     @Override
-    public void damageArmor(DamageSource source, float amount) {
+    public void hurtArmor(DamageSource source, float amount) {
         getLivingInventory().damageArmor(source, amount, new int[]{0, 1, 2, 3});
     }
 
     @Override
-    public void takeKnockback(double strength, double x, double z) {
+    public void knockback(double strength, double x, double z) {
         if (this.hurtMarked) {
             super.knockback(strength, x, z);
         }
@@ -1136,12 +1163,7 @@ public class CompanionEntity extends LivingEntity
     }
 
     @Override
-    public Iterable<ItemStack> getArmorItems() {
-        return getLivingInventory().armor;
-    }
-
-    @Override
-    public ItemStack getEquippedStack(EquipmentSlot slot) {
+    public ItemStack getItemBySlot(EquipmentSlot slot) {
         if (slot == EquipmentSlot.MAINHAND) {
             return this.inventory.getMainHandStack();
         } else if (slot == EquipmentSlot.OFFHAND) {
@@ -1152,36 +1174,19 @@ public class CompanionEntity extends LivingEntity
                 : ItemStack.EMPTY;
     }
 
-    /**
-     * Wear out a shield that blocked a hit.
+    /*
+     * The `damageShield` override that used to live here is gone, and deliberately.
      *
-     * <p>{@code LivingEntity.damageShield} is an empty stub — the real implementation lives on
-     * {@code PlayerEntity}, so a companion blocked damage exactly as a player does but its shield never
-     * lost a point of durability and could never break. That is a permanent advantage no player has,
-     * and an unbreakable shield is worth considerably more than the one you handed over.
-     *
-     * <p>Mirrors the vanilla player rule: hits under 3 damage cost nothing, anything above costs
-     * {@code 1 + floor(damage)}.
+     * It existed because `LivingEntity.damageShield` was an empty stub — only `PlayerEntity`
+     * implemented it — so a companion blocked damage exactly as a player does while its shield
+     * never lost durability. 1.21 moved blocking to the `minecraft:blocks_attacks` data component,
+     * which carries its own `item_damage` and is applied by `LivingEntity.applyItemBlocking` for
+     * any living entity, companion included. Re-implementing it here would now wear the shield
+     * twice per blocked hit rather than not at all.
      */
-    @Override
-    public void damageShield(float amount) {
-        if (!this.useItem.is(Items.SHIELD) || amount < 3.0F) {
-            return;
-        }
-        InteractionHand hand = this.getUsedItemHand();
-        this.useItem.damage(1 + Mth.floor(amount), this,
-                companion -> companion.sendToolBreakStatus(hand));
-        if (this.useItem.isEmpty()) {
-            this.equipStack(hand == InteractionHand.MAIN_HAND ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND,
-                    ItemStack.EMPTY);
-            this.stopUsingItem();
-            this.playSound(SoundEvents.SHIELD_BREAK, 0.8F,
-                    0.8F + this.level().getRandom().nextFloat() * 0.4F);
-        }
-    }
 
     @Override
-    public void equipStack(EquipmentSlot slot, ItemStack stack) {
+    public void setItemSlot(EquipmentSlot slot, ItemStack stack) {
         if (slot == EquipmentSlot.MAINHAND) {
             this.inventory.setItem(this.inventory.selectedSlot, stack);
         } else if (slot == EquipmentSlot.OFFHAND) {

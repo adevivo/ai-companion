@@ -73,7 +73,7 @@ public final class ClientBrain {
         });
 
         NetworkManager.registerReceiver(NetworkManager.Side.S2C, BrainWire.TURN_REQUEST,
-                (buf, context) -> {
+                (buf, packet) -> {
                     markThinkingHere(true);
                     UUID requestId = buf.readUUID();
                     buf.readUUID(); // companion uuid — not needed here, the server tracks the turn

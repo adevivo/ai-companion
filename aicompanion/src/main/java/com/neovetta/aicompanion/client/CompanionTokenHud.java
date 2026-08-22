@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion.client;
 
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -155,7 +156,7 @@ public final class CompanionTokenHud {
     private static final int COLOR_GRAPH_BG = 0x30FFFFFF;
 
     /** Render callback body — registered against {@code HudRenderCallback.EVENT} in the client init. */
-    public static void render(GuiGraphics ctx, float tickDelta) {
+    public static void render(GuiGraphics ctx, DeltaTracker delta) {
         if (!enabled) {
             // Only drawing stops — update() keeps banking deltas, so switching the panel back on
             // shows the real history for the time it was hidden instead of a hole in the graph.
@@ -171,7 +172,7 @@ public final class CompanionTokenHud {
         if (System.currentTimeMillis() - receivedAtMs > GIVE_UP_MS) {
             return; // companion despawned or stopped ticking — the panel is only for a live one
         }
-        if (client.options.debugEnabled) {
+        if (client.getDebugOverlay().showDebugScreen()) {
             return; // F3 overlay owns the top-left; don't draw on top of it
         }
 

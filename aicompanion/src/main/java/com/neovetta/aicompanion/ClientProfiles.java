@@ -129,7 +129,7 @@ public final class ClientProfiles {
     private static Set<String> onlineNames(MinecraftServer server) {
         Set<String> names = new LinkedHashSet<>();
         if (server != null) {
-            for (ServerPlayer p : server.getPlayerList().getPlayerList()) {
+            for (ServerPlayer p : server.getPlayerList().getPlayers()) {
                 names.add(p.getName().getString());
             }
         }
