@@ -1,149 +1,88 @@
 plugins {
-    id 'fabric-loom' version '1.6-SNAPSHOT'
-    id 'com.github.johnrengelman.shadow' version '8.1.1'
+    id 'dev.architectury.loom' version '1.14.476' apply false
+    id 'architectury-plugin' version '3.4-SNAPSHOT'
+    id 'com.gradleup.shadow' version '8.3.6' apply false
 }
 
-group project.maven_group
-version project.mod_version
-
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
-
-compileJava {
-    options.encoding = "UTF-8"
+architectury {
+    minecraft = project.minecraft_version
 }
 
-
-sourceSets {
-    autoclef {
-        compileClasspath += main.compileClasspath + main.runtimeClasspath + main.output
-        runtimeClasspath += main.compileClasspath + main.runtimeClasspath + main.output
-    }
-    // Tests for the autoclef sourceset, which is where the memory code lives. Added 2026-08-17: this
-    // fork had no test infrastructure at all, so MemoryGate — a guard whose whole job is to refuse
-    // things — had nothing checking that it refused the right things, and it duly produced a false
-    // negative in game. Deliberately narrow: plain JUnit over the classes that are pure logic. Do not
-    // grow this into a home for tests that need a running Minecraft.
-    test {
-        compileClasspath += autoclef.compileClasspath + autoclef.output
-        runtimeClasspath += autoclef.compileClasspath + autoclef.output
+allprojects {
+    group = rootProject.maven_group
+    version = rootProject.mod_version
+    repositories {
+        maven {
+            name = 'ParchmentMC'
+            url = 'https://maven.parchmentmc.org'
+        }
     }
 }
 
-repositories {
-    mavenCentral()
-    maven {
-         name = 'ParchmentMC'
-         url = 'https://maven.parchmentmc.org'
+subprojects {
+    apply plugin: 'dev.architectury.loom'
+    apply plugin: 'architectury-plugin'
+    apply plugin: 'maven-publish'
+
+    base {
+        // Set up a suffixed format for the mod jar names, e.g. `example-fabric`.
+        archivesName = "$rootProject.archives_name-$project.name"
     }
 
-    maven {
-        name = 'Quilt Snapshots'
-        url = 'https://maven.quiltmc.org/repository/snapshot'
+    repositories {
+        // Add repositories to retrieve artifacts from in here.
+        // You should only use this when depending on other mods because
+        // Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
+        // See https://docs.gradle.org/current/userguide/declaring_repositories.html
+        // for more information about repositories.
     }
 
-    maven {
-        url = "https://maven.quiltmc.org/repository/release/"
+    loom {
+        silentMojangMappingsLicense()
     }
 
-    mavenLocal()
-
-    flatDir {
-        dir 'libs'
-    }
-}
-
-dependencies {
-    minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings loom.layered() {
-        officialMojangMappings()
-        parchment("org.parchmentmc.data:parchment-1.20.1:2023.09.03@zip")
-    }
-    modImplementation "net.fabricmc:fabric-loader:0.15.6"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
-    implementation 'com.google.code.findbugs:jsr305:3.0.2'
-
-    // The memory engine from ../../ai-companion-memory, staged into libs/.
-    //
-    // compileOnly, NOT implementation: the consumer mod already nests this jar (JiJ), and Fabric
-    // puts every nested jar on one classloader, so the classes are there at runtime. Declaring it
-    // implementation here would bundle a second copy — two versions of the same scorer on the
-    // classpath is precisely the silent-divergence failure this engine exists to prevent.
-    compileOnly 'libs:aicompanion-memory:0.4.0'
-
-    implementation 'com.fasterxml.jackson.core:jackson-core:2.16.0'
-    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.16.0'
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.16.0'
-
-    shadow('com.fasterxml.jackson.core:jackson-core:2.16.0')
-    shadow('com.fasterxml.jackson.core:jackson-annotations:2.16.0')
-    shadow('com.fasterxml.jackson.core:jackson-databind:2.16.0')
-
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-}
-
-test {
-    useJUnitPlatform()
-    testLogging {
-        events 'passed', 'skipped', 'failed'
-    }
-}
-
-shadowJar {
-    configurations = [project.configurations.shadow]
-
-    archiveBaseName.set('PlayerEngine')
-    archiveClassifier.set('dev')
-
-    from sourceSets.main.output
-    from sourceSets.autoclef.output
-
-    filesMatching('fabric.mod.json') {
-        expand 'version': project.version
+    dependencies {
+        minecraft "net.minecraft:minecraft:$rootProject.minecraft_version"
+        mappings loom.layered() {
+            officialMojangMappings()
+            parchment("org.parchmentmc.data:parchment-${rootProject.minecraft_version}:2025.12.20@zip")
+        }
     }
 
-    manifest {
-        attributes(tasks.jar.manifest.attributes)
-        attributes('MixinConfigs': 'mixins.automatone.json')
+    java {
+        // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
+        // if it is present.
+        // If you remove this line, sources will not be generated.
+        withSourcesJar()
+
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
-}
 
-remapJar {
-    dependsOn("shadowJar")
-    archiveBaseName.set('PlayerEngine')
-    archiveClassifier.set('')
-    input.set(shadowJar.archiveFile)
-}
+    tasks.withType(JavaCompile).configureEach {
+        it.options.release = 21
+    }
 
-java {
-    withSourcesJar()
-}
+    // Configure Maven publishing.
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                artifactId = base.archivesName.get()
+                from components.java
+            }
+        }
 
-javadoc {
-    options.addStringOption('Xwerror', '-quiet')
-    options.linkSource true
-    options.encoding "UTF-8"
-    source = sourceSets.main.allJava
-    classpath += sourceSets.main.compileClasspath
-}
-
-jar {
-    from sourceSets.main.output, sourceSets.autoclef.output
-
-    preserveFileTimestamps = false
-    reproducibleFileOrder = true
-
-    manifest {
-        attributes(
-                'MixinConfigs': 'mixins.automatone.json',
-
-                'Implementation-Title': 'PlayerEngine',
-                'Implementation-Version': project.version
-        )
+        // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
+        repositories {
+            // Add repositories to publish to here.
+            // Notice: This block does NOT have the same function as the block in the top level.
+            // The repositories here will be used for publishing your artifact, not for
+            // retrieving dependencies.
+        }
     }
 }
 
 tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
+    options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
     options.compilerArgs += ["-Xmaxerrs", "500000"]
 }

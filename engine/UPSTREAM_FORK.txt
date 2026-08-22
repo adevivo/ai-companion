@@ -1,3 +1,51 @@
-Forked from Goodbird-git/PlayerEngine (LGPL-3.0) on 2026-07-14.
-Upstream commit: 13fddc140a7ffd60b6bc9d1f084b36adc0674510
-We modify the adris.altoclef.player2api brain package to target local llama.cpp.
+PlayerEngine — provenance and porting notes
+===========================================
+Upstream: Goodbird-git/PlayerEngine (LGPL-3.0)
+
+Original fork  2026-07-14, upstream `main` @ 13fddc140a7ffd60b6bc9d1f084b36adc0674510
+               Layout: src/main/java/baritone + src/autoclef/java/adris/altoclef, Fabric Loom,
+               MC 1.20.1, Java 17.
+
+RE-BASED       2026-08-22, upstream `1.21.10-arch` @ bc5816a71e1fe1853f38651f816a45339eaa7b91
+               Architectury multiloader (common/ + fabric/ + neoforge/), MC 1.21.10, Java 21.
+               Packages renamed upstream: baritone.*        -> com.player2.playerengine.automaton.*
+                                          adris.altoclef.*  -> com.player2.playerengine.*
+               Renamed classes: AltoClefController -> PlayerEngineController
+                                AltoClefCommands   -> PlayerEngineCommands
+                                Settings           -> PlayerEngineSettings
+                                Debug              -> util/Debug
+                                commandsystem/*    -> commands/base/*
+
+THE MERGE BASE. Upstream `main` @ 13fddc1 is the exact tree we forked, so it is a true three-way
+merge base for re-applying our work onto the Architectury tree:
+    base   = upstream main @ 13fddc1        (git clone --branch main)
+    ours   = ai-companion-mod branch `main` or `fix/perception-radius`, engine/ subtree
+    theirs = this tree
+Measured 2026-08-22 against that base: 586 of 654 shared files byte-identical, 68 modified by us,
+61 added by us, 5 upstream files we had dropped. All 68 have counterparts here.
+Retrieve the old tree with:  git show main:engine/src/<path>
+
+PORTED TO 1.21.11 BY US. Upstream stopped at 1.21.10 and never published a 1.21.11 branch, so the
+following is our own work and is a permanent divergence from upstream:
+  - architectury-loom 1.11-SNAPSHOT -> 1.14.476 (pinned exact; Architectury API 19.0.1 requires
+    Loom >= 1.13.467, and a dynamic version would let Gradle silently cache a stale resolution)
+  - architectury_api 18.0.6 -> 19.0.1, fabric_api 0.136.0+1.21.10 -> 0.141.1+1.21.11
+  - parchment 2025.10.12 -> 2025.12.20 (there is no 2025.10.12 for 1.21.11)
+  - enabled_platforms = fabric only; `include 'neoforge'` removed from settings.gradle. The
+    neoforge/ directory is kept (one file) so the loader can be re-enabled cheaply.
+  - 35 net.minecraft package moves + ResourceLocation -> Identifier, applied mechanically from the
+    official Mojang mappings (44 files, 60 imports).
+  - 34 genuine API breaks fixed by hand across 11 files. The notable ones:
+      DimensionType.ultraWarm()/.natural() were REMOVED in 1.21.11 in favour of the new
+      net.minecraft.world.attribute.EnvironmentAttributes system (WATER_EVAPORATES, PIGLINS_ZOMBIFY,
+      BED_RULE, ...). All five call sites meant "is water usable here", so they now compare
+      dimension() against Level.NETHER / Level.OVERWORLD directly. That is simpler than an attribute
+      lookup and will not move again the next time dimension properties are reshuffled.
+      ResourceKey.location() -> identifier(); Camera.getPosition() -> position();
+      RenderType static factories -> RenderTypes; GameRules moved to world.level.gamerules and
+      RULE_NATURAL_REGENERATION -> NATURAL_HEALTH_REGENERATION with a generic get() replacing
+      getBoolean(); CommandSourceStack.hasPermission(int) -> permissions().hasPermission(Permission).
+
+Build:  export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+        cd engine && ./gradlew :fabric:build      # -> fabric/build/libs/playerengine-fabric-*.jar
+Upstream commits gradlew non-executable (mode 100644); chmod +x if it comes back that way.
