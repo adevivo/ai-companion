@@ -1,9 +1,9 @@
 package com.neovetta.aicompanion.client;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 /**
  * Client-side panel showing this session's LLM token spend: running totals plus a per-minute burn-rate
@@ -164,8 +164,8 @@ public final class CompanionTokenHud {
         if (receivedAtMs == 0L) {
             return; // no companion has ever reported in this session
         }
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null || client.world == null || client.options.hudHidden) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null || client.world == null || client.options.hideGui) {
             return;
         }
         if (System.currentTimeMillis() - receivedAtMs > GIVE_UP_MS) {
@@ -187,22 +187,22 @@ public final class CompanionTokenHud {
             peak = Math.max(peak, v);
         }
 
-        TextRenderer tr = client.textRenderer;
+        Font tr = client.textRenderer;
         int graphY = PANEL_Y + 3 + LINE_HEIGHT * 2;
         int panelBottom = graphY + GRAPH_HEIGHT + 2 + LINE_HEIGHT + 2;
         ctx.fill(PANEL_X - 2, PANEL_Y - 2, PANEL_X + PANEL_WIDTH + 2, panelBottom, COLOR_PANEL);
 
         // Line 1: total + request count.
-        ctx.drawShadowedText(tr, Text.literal("tokens"), PANEL_X, PANEL_Y, COLOR_LABEL);
-        ctx.drawShadowedText(tr, Text.literal(abbreviate(totalTokens)), PANEL_X + 34, PANEL_Y, COLOR_VALUE);
+        ctx.drawString(tr, Component.literal("tokens"), PANEL_X, PANEL_Y, COLOR_LABEL);
+        ctx.drawString(tr, Component.literal(abbreviate(totalTokens)), PANEL_X + 34, PANEL_Y, COLOR_VALUE);
         String reqs = requests + " req";
-        ctx.drawShadowedText(tr, Text.literal(reqs),
+        ctx.drawString(tr, Component.literal(reqs),
                 PANEL_X + PANEL_WIDTH - tr.getWidth(reqs), PANEL_Y, COLOR_LABEL);
 
         // Line 2: the in/out split.
         String in = "in " + abbreviate(promptTokens);
-        ctx.drawShadowedText(tr, Text.literal(in), PANEL_X, PANEL_Y + LINE_HEIGHT, COLOR_IN);
-        ctx.drawShadowedText(tr, Text.literal("out " + abbreviate(completionTokens)),
+        ctx.drawString(tr, Component.literal(in), PANEL_X, PANEL_Y + LINE_HEIGHT, COLOR_IN);
+        ctx.drawString(tr, Component.literal("out " + abbreviate(completionTokens)),
                 PANEL_X + tr.getWidth(in) + 6, PANEL_Y + LINE_HEIGHT, COLOR_OUT);
 
         // The graph: BUCKET_COUNT minutes, oldest at the left edge, the in-progress minute at the right.
@@ -226,9 +226,9 @@ public final class CompanionTokenHud {
 
         // Line 3: the graph's units and scale.
         int labelY = graphY + GRAPH_HEIGHT + 2;
-        ctx.drawShadowedText(tr, Text.literal("tok/min"), PANEL_X, labelY, COLOR_LABEL);
+        ctx.drawString(tr, Component.literal("tok/min"), PANEL_X, labelY, COLOR_LABEL);
         String peakLabel = "peak " + abbreviate(peak);
-        ctx.drawShadowedText(tr, Text.literal(peakLabel),
+        ctx.drawString(tr, Component.literal(peakLabel),
                 PANEL_X + PANEL_WIDTH - tr.getWidth(peakLabel), labelY, COLOR_LABEL);
     }
 

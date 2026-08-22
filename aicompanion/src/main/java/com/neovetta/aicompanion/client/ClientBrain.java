@@ -19,8 +19,8 @@ import java.util.concurrent.CompletableFuture;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.network.PacketByteBuf;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.FriendlyByteBuf;
 
 /**
  * Doing a companion's thinking on the machine that owns it.
@@ -66,15 +66,15 @@ public final class ClientBrain {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             // Per connection: the previous server may have delegated and this one may not.
             markThinkingHere(false);
-            PacketByteBuf buf = PacketByteBufs.create();
+            FriendlyByteBuf buf = PacketByteBufs.create();
             ClientPlayNetworking.send(BrainWire.HELLO, buf);
         });
 
         ClientPlayNetworking.registerGlobalReceiver(BrainWire.TURN_REQUEST,
                 (client, handler, buf, responseSender) -> {
                     markThinkingHere(true);
-                    UUID requestId = buf.readUuid();
-                    buf.readUuid(); // companion uuid — not needed here, the server tracks the turn
+                    UUID requestId = buf.readUUID();
+                    buf.readUUID(); // companion uuid — not needed here, the server tracks the turn
                     JsonObject context = BrainWire.readContext(buf);
                     // Off the render thread: this makes a network call to an LLM and may take
                     // seconds. Nothing here touches the game world.
@@ -121,19 +121,19 @@ public final class ClientBrain {
             int held = CompanionMemory.countFor(owner);
             String where = saved.place() == null ? ""
                     : "  @ " + saved.place().x() + ", " + saved.place().y() + ", " + saved.place().z();
-            say(net.minecraft.text.Text.literal(
+            say(net.minecraft.text.Component.literal(
                     (thisWorldOnly ? "Remembered, here in this world: " : "Remembered: ")
                             + saved.text() + where)
-                    .formatted(net.minecraft.util.Formatting.GREEN)
-                    .append(net.minecraft.text.Text.literal("  (" + held + " stored on your machine)")
-                            .formatted(net.minecraft.util.Formatting.DARK_GRAY)));
+                    .formatted(net.minecraft.util.ChatFormatting.GREEN)
+                    .append(net.minecraft.text.Component.literal("  (" + held + " stored on your machine)")
+                            .formatted(net.minecraft.util.ChatFormatting.DARK_GRAY)));
         } catch (Throwable e) {
             // Throwable for the same reason think() uses it: a linkage error between mod and engine
             // arrives as an Error, and swallowing it here would leave the player staring at a command
             // that printed nothing at all.
             AiCompanion.LOGGER.warn("[{}] could not store a remembered fact", AiCompanion.MOD_ID, e);
-            say(net.minecraft.text.Text.literal("Could not remember that: " + e)
-                    .formatted(net.minecraft.util.Formatting.RED));
+            say(net.minecraft.text.Component.literal("Could not remember that: " + e)
+                    .formatted(net.minecraft.util.ChatFormatting.RED));
         }
     }
 
@@ -147,16 +147,16 @@ public final class ClientBrain {
     private static void reportMemoryHealth() {
         for (adris.altoclef.player2api.MemoryHealth.Notice notice
                 : adris.altoclef.player2api.MemoryHealth.drain()) {
-            say(net.minecraft.text.Text.literal("[memory] " + notice.text())
+            say(net.minecraft.text.Component.literal("[memory] " + notice.text())
                     .formatted(notice.problem()
-                            ? net.minecraft.util.Formatting.RED
-                            : net.minecraft.util.Formatting.GREEN));
+                            ? net.minecraft.util.ChatFormatting.RED
+                            : net.minecraft.util.ChatFormatting.GREEN));
         }
     }
 
     /** Put a line in this player's chat, from whatever thread happens to be running. */
-    private static void say(net.minecraft.text.Text text) {
-        MinecraftClient client = MinecraftClient.getInstance();
+    private static void say(net.minecraft.network.chat.Component text) {
+        Minecraft client = Minecraft.getInstance();
         client.execute(() -> {
             if (client.player != null) {
                 client.player.sendMessage(text, false);
@@ -241,7 +241,7 @@ public final class ClientBrain {
 
     private static void send(UUID requestId, String replyJson, String error) {
         try {
-            PacketByteBuf buf = PacketByteBufs.create();
+            FriendlyByteBuf buf = PacketByteBufs.create();
             BrainWire.writeTurnResult(buf, requestId, replyJson, error);
             ClientPlayNetworking.send(BrainWire.TURN_RESULT, buf);
         } catch (Throwable e) {
@@ -251,8 +251,8 @@ public final class ClientBrain {
     }
 
     private static UUID localPlayerUuid() {
-        return MinecraftClient.getInstance().player == null
-                ? null : MinecraftClient.getInstance().player.getUuid();
+        return Minecraft.getInstance().player == null
+                ? null : Minecraft.getInstance().player.getUuid();
     }
 
     private static Player2APIService service() {

@@ -1,12 +1,12 @@
 package com.neovetta.aicompanion.client;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -93,9 +93,9 @@ public final class CompanionRadarHud {
         if (mode == Mode.OFF || SNAPSHOTS.isEmpty()) {
             return;
         }
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null || client.options.hudHidden) {
+        Minecraft client = Minecraft.getInstance();
+        LocalPlayer player = client.player;
+        if (player == null || client.world == null || client.options.hideGui) {
             return;
         }
 
@@ -131,13 +131,13 @@ public final class CompanionRadarHud {
         readings.sort(Comparator.comparingDouble(Reading::dist).reversed());
 
         boolean allDim = readings.stream().allMatch(r -> r.stale() || r.crossDim());
-        int screenW = ctx.getScaledWindowWidth();
-        int screenH = ctx.getScaledWindowHeight();
+        int screenW = ctx.guiWidth();
+        int screenH = ctx.guiHeight();
         int centerX = screenW / 2;
         int barLeft = centerX - BAR_WIDTH / 2;
         int barRight = barLeft + BAR_WIDTH;
         int barY = screenH - BAR_BOTTOM_OFFSET;
-        TextRenderer tr = client.textRenderer;
+        Font tr = client.textRenderer;
 
         // Bar background + border + center tick.
         ctx.fill(barLeft - 1, barY - 1, barRight + 1, barY + BAR_HEIGHT + 1, (allDim ? 0x40 : 0x80) << 24);
@@ -156,7 +156,7 @@ public final class CompanionRadarHud {
             String prefix = showNames ? snap.name() + " " : "";
 
             if (r.crossDim()) {
-                ctx.drawCenteredShadowedText(tr, Text.literal(prefix + "other dimension"),
+                ctx.drawCenteredString(tr, Component.literal(prefix + "other dimension"),
                         centerX, labelY, 0xAAAAAA);
                 labelY += 10;
                 continue;
@@ -165,12 +165,12 @@ public final class CompanionRadarHud {
             // Bearing relative to where the player is facing (MC yaw convention).
             double angleTo = Math.toDegrees(Math.atan2(snap.z() - player.getZ(),
                     snap.x() - player.getX())) - 90.0;
-            double rel = MathHelper.wrapDegrees(angleTo - player.getYaw());
+            double rel = Mth.wrapDegrees(angleTo - player.getYaw());
             if (rel < -90.0) {
                 // Behind and to the left — chevron at the left edge meaning "turn left".
-                ctx.drawShadowedText(tr, Text.literal("«"), barLeft - 7, barY - 2, markerColor);
+                ctx.drawString(tr, Component.literal("«"), barLeft - 7, barY - 2, markerColor);
             } else if (rel > 90.0) {
-                ctx.drawShadowedText(tr, Text.literal("»"), barRight + 2, barY - 2, markerColor);
+                ctx.drawString(tr, Component.literal("»"), barRight + 2, barY - 2, markerColor);
             } else {
                 int markerX = barLeft + (int) Math.round((rel + 90.0) / 180.0 * BAR_WIDTH);
                 ctx.fill(markerX - 1, barY - 2, markerX + 2, barY + BAR_HEIGHT + 2, markerColor);
@@ -186,7 +186,7 @@ public final class CompanionRadarHud {
             if (r.stale()) {
                 label += " (last seen)";
             }
-            ctx.drawCenteredShadowedText(tr, Text.literal(label), centerX, labelY,
+            ctx.drawCenteredString(tr, Component.literal(label), centerX, labelY,
                     dim ? 0xAAAAAA : 0xFFFFFF);
             labelY += 10;
         }

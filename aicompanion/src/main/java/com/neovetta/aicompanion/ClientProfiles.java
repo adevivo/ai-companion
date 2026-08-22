@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 
 /**
  * What each connected player's client says about itself: its companions, and its trigger prefix.
@@ -53,7 +53,7 @@ public final class ClientProfiles {
      *
      * @param payload the client's {@code companions} array and {@code triggerPrefix}, as sent
      */
-    public static List<String> announce(ServerPlayerEntity player, JsonObject payload) {
+    public static List<String> announce(ServerPlayer player, JsonObject payload) {
         if (player == null || payload == null) {
             return List.of();
         }
@@ -129,7 +129,7 @@ public final class ClientProfiles {
     private static Set<String> onlineNames(MinecraftServer server) {
         Set<String> names = new LinkedHashSet<>();
         if (server != null) {
-            for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+            for (ServerPlayer p : server.getPlayerList().getPlayerList()) {
                 names.add(p.getName().getString());
             }
         }

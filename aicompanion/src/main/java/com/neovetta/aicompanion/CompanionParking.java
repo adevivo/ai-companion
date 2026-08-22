@@ -11,15 +11,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.RegistryKeys;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.Level;
 
 /**
  * Putting a player's companions away while they are not here, and taking them out again when they
@@ -77,10 +77,10 @@ public final class CompanionParking {
         }
         int parked = 0;
         int failed = 0;
-        for (ServerWorld world : server.getWorlds()) {
+        for (ServerLevel world : server.getWorlds()) {
             // Copied first: discarding while iterating the world's entity view is asking for trouble.
             List<CompanionEntity> mine = new ArrayList<>();
-            for (net.minecraft.entity.Entity entity : world.iterateEntities()) {
+            for (net.minecraft.world.entity.Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion
                         && owner.equals(companion.getOwnerUuid())) {
                     mine.add(companion);
@@ -101,13 +101,13 @@ public final class CompanionParking {
     }
 
     /** @return true only if the companion was safely stored AND removed. */
-    private static boolean parkOne(CompanionEntity companion, ServerWorld world, UUID owner) {
+    private static boolean parkOne(CompanionEntity companion, ServerLevel world, UUID owner) {
         String name = companion.displayName();
         try {
-            NbtCompound tag = new NbtCompound();
+            CompoundTag tag = new CompoundTag();
             // saveSelfNbt writes the entity id alongside its state, and returns false for anything
             // that must not be saved on its own (a passenger, something already removed). Believe it.
-            if (!companion.saveSelfNbt(tag)) {
+            if (!companion.saveAsPassenger(tag)) {
                 AiCompanion.LOGGER.warn("[{}] not parking {} — it declined to be saved (riding "
                         + "something, or already gone). Leaving it where it is.",
                         AiCompanion.MOD_ID, name);
@@ -123,7 +123,7 @@ public final class CompanionParking {
             // ⚠️ Read it back before removing anything. A write that reported success but produced
             // an unreadable file is exactly the case that would cost somebody their inventory, and
             // it is cheap to rule out.
-            NbtCompound check = NbtIo.readCompressed(file);
+            CompoundTag check = NbtIo.readCompressed(file);
             if (check == null || !check.contains(DIMENSION_KEY)) {
                 AiCompanion.LOGGER.error("[{}] parked file for {} did not read back — leaving the "
                         + "companion in the world rather than risk its inventory.",
@@ -149,7 +149,7 @@ public final class CompanionParking {
      * <p>Failure here is recoverable in a way parking is not: the file stays, and the next join tries
      * again. So a companion is never deleted from disk unless it was successfully put back.
      */
-    public static void restore(MinecraftServer server, ServerPlayerEntity owner) {
+    public static void restore(MinecraftServer server, ServerPlayer owner) {
         if (server == null || owner == null) {
             return;
         }
@@ -174,13 +174,13 @@ public final class CompanionParking {
         }
     }
 
-    private static boolean restoreOne(MinecraftServer server, ServerPlayerEntity owner, Path file) {
+    private static boolean restoreOne(MinecraftServer server, ServerPlayer owner, Path file) {
         try {
-            NbtCompound tag = NbtIo.readCompressed(file.toFile());
+            CompoundTag tag = NbtIo.readCompressed(file.toFile());
             if (tag == null) {
                 return false;
             }
-            ServerWorld world = worldOf(server, tag);
+            ServerLevel world = worldOf(server, tag);
             if (world == null) {
                 // The dimension is gone — a datapack removed it, or the save moved. Keep the file:
                 // deleting it is the one irreversible option, and the world may come back.
@@ -212,7 +212,7 @@ public final class CompanionParking {
         }
     }
 
-    private static ServerWorld worldOf(MinecraftServer server, NbtCompound tag) {
+    private static ServerLevel worldOf(MinecraftServer server, CompoundTag tag) {
         String id = tag.getString(DIMENSION_KEY);
         if (id == null || id.isBlank()) {
             return server.getOverworld();
@@ -221,8 +221,8 @@ public final class CompanionParking {
         if (parsed == null) {
             return server.getOverworld();
         }
-        RegistryKey<World> key = RegistryKey.of(RegistryKeys.WORLD, parsed);
-        ServerWorld world = server.getWorld(key);
+        ResourceKey<Level> key = ResourceKey.of(Registries.WORLD, parsed);
+        ServerLevel world = server.getWorld(key);
         return world;
     }
 

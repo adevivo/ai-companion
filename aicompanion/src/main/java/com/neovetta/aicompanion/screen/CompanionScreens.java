@@ -3,10 +3,10 @@ package com.neovetta.aicompanion.screen;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerType;
-import net.minecraft.entity.Entity;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.screen.ScreenHandlerType;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.Registry;
+import net.minecraft.world.inventory.MenuType;
 
 /** Registration for the companion inventory screen. Called from {@link AiCompanion#onInitialize()}. */
 public final class CompanionScreens {
@@ -20,9 +20,9 @@ public final class CompanionScreens {
      * looking at — the handler is built independently on both sides, and with more than one companion
      * out "the nearest one" is not an answer. The entity id travels in the opening packet.
      */
-    public static final ScreenHandlerType<CompanionScreenHandler> TYPE =
+    public static final MenuType<CompanionScreenHandler> TYPE =
             new ExtendedScreenHandlerType<>((syncId, playerInventory, buf) -> {
-                Entity entity = playerInventory.player.getWorld().getEntityById(buf.readVarInt());
+                Entity entity = playerInventory.player.getWorld().getEntity(buf.readVarInt());
                 if (!(entity instanceof CompanionEntity companion)) {
                     return null; // the companion left the client's view between opening and reading
                 }
@@ -30,6 +30,6 @@ public final class CompanionScreens {
             });
 
     public static void register() {
-        Registry.register(Registries.SCREEN_HANDLER_TYPE, AiCompanion.id("companion_inventory"), TYPE);
+        Registry.register(BuiltInRegistries.MENU, AiCompanion.id("companion_inventory"), TYPE);
     }
 }

@@ -1,11 +1,11 @@
 package com.neovetta.aicompanion.client;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -123,9 +123,9 @@ public final class CompanionStatusHud {
         if (mode == Mode.OFF || SNAPSHOTS.isEmpty()) {
             return;
         }
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null || client.options.hudHidden) {
+        Minecraft client = Minecraft.getInstance();
+        LocalPlayer player = client.player;
+        if (player == null || client.world == null || client.options.hideGui) {
             return;
         }
 
@@ -164,7 +164,7 @@ public final class CompanionStatusHud {
         // Stable ordering, so rows do not swap places under the cursor as packets arrive.
         rows.sort(Comparator.comparing(r -> r.snapshot().name()));
 
-        TextRenderer tr = client.textRenderer;
+        Font tr = client.textRenderer;
         int nameWidth = 0;
         for (Row r : rows) {
             nameWidth = Math.max(nameWidth, tr.getWidth(r.snapshot().name()));
@@ -177,7 +177,7 @@ public final class CompanionStatusHud {
         // other however long the names are, instead of ragged against the right edge.
         int panelWidth = nameWidth + GAP + BAR_WIDTH + GAP + NUMBER_WIDTH + GAP
                 + BAR_WIDTH + GAP + NUMBER_WIDTH;
-        int panelLeft = ctx.getScaledWindowWidth() - MARGIN_X - panelWidth;
+        int panelLeft = ctx.guiWidth() - MARGIN_X - panelWidth;
 
         int healthBarX = panelLeft + nameWidth + GAP;
         int healthNumX = healthBarX + BAR_WIDTH + GAP;
@@ -201,12 +201,12 @@ public final class CompanionStatusHud {
             while (tr.getWidth(name) > NAME_MAX_WIDTH && name.length() > 1) {
                 name = name.substring(0, name.length() - 1);
             }
-            ctx.drawShadowedText(tr, Text.literal(name), panelLeft, y, textColor);
+            ctx.drawString(tr, Component.literal(name), panelLeft, y, textColor);
 
             int healthColor = r.healthFraction() > 0.6f ? COLOR_HEALTH_OK
                     : r.healthFraction() > 0.3f ? COLOR_HEALTH_MID : COLOR_HEALTH_LOW;
             drawBar(ctx, healthBarX, barTop, r.healthFraction(), healthColor, dim);
-            ctx.drawShadowedText(tr, Text.literal(String.valueOf(Math.round(snap.health()))),
+            ctx.drawString(tr, Component.literal(String.valueOf(Math.round(snap.health()))),
                     healthNumX, y, textColor);
 
             float foodFrac = Math.min(1f, snap.food() / 20f);
@@ -219,14 +219,14 @@ public final class CompanionStatusHud {
                 int satW = Math.max(1, Math.round(BAR_WIDTH * satFrac));
                 ctx.fill(foodBarX, barTop, foodBarX + satW, barTop + 1, COLOR_SATURATION);
             }
-            ctx.drawShadowedText(tr, Text.literal(String.valueOf(snap.food())), foodNumX, y, textColor);
+            ctx.drawString(tr, Component.literal(String.valueOf(snap.food())), foodNumX, y, textColor);
 
             // Marker to the left of the name, not past the right edge — that would hang off screen
             // now the panel is right-aligned.
             if (r.crossDim()) {
-                ctx.drawShadowedText(tr, Text.literal("↗"), panelLeft - 10, y, COLOR_TEXT_DIM);
+                ctx.drawString(tr, Component.literal("↗"), panelLeft - 10, y, COLOR_TEXT_DIM);
             } else if (r.stale()) {
-                ctx.drawShadowedText(tr, Text.literal("?"), panelLeft - 10, y, COLOR_TEXT_DIM);
+                ctx.drawString(tr, Component.literal("?"), panelLeft - 10, y, COLOR_TEXT_DIM);
             }
 
             y += ROW_HEIGHT;

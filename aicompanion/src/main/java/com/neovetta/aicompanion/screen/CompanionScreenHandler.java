@@ -1,16 +1,16 @@
 package com.neovetta.aicompanion.screen;
 
 import com.neovetta.aicompanion.entity.CompanionEntity;
-import net.minecraft.enchantment.EnchantmentHelper;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.Container;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.Slot;
 
 /**
  * The companion's inventory, side by side with your own.
@@ -24,7 +24,7 @@ import net.minecraft.screen.slot.Slot;
  * from the entity tick, so the two cannot interleave mid-transfer. Taking the sword out of a
  * companion's hand while it is fighting will confuse it — that is the owner's business, not a race.
  */
-public class CompanionScreenHandler extends ScreenHandler {
+public class CompanionScreenHandler extends AbstractContainerMenu {
 
     /** How far you can walk before an open screen closes itself. Vanilla's container reach. */
     private static final double MAX_REACH_SQUARED = 64.0D;
@@ -39,14 +39,14 @@ public class CompanionScreenHandler extends ScreenHandler {
     private static final EquipmentSlot[] ARMOR_ORDER = {
             EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
 
-    private final Inventory companionInventory;
+    private final Container companionInventory;
     private final CompanionEntity companion;
 
-    public CompanionScreenHandler(int syncId, PlayerInventory playerInventory, CompanionEntity companion) {
+    public CompanionScreenHandler(int syncId, Inventory playerInventory, CompanionEntity companion) {
         super(CompanionScreens.TYPE, syncId);
         this.companion = companion;
         this.companionInventory = companion.getLivingInventory();
-        this.companionInventory.onOpen(playerInventory.player);
+        this.companionInventory.startOpen(playerInventory.player);
 
         // Armour across the top, helmet first. A 9-wide storage grid needs the full width of the
         // panel, so armour cannot sit in a column beside it as it does on the player's own screen.
@@ -54,7 +54,7 @@ public class CompanionScreenHandler extends ScreenHandler {
         // getEntitySlotId), so the index is derived per piece rather than from the loop counter.
         for (int col = 0; col < ARMOR_ORDER.length; col++) {
             final EquipmentSlot equipment = ARMOR_ORDER[col];
-            int index = ARMOR_START + equipment.getEntitySlotId();
+            int index = ARMOR_START + equipment.getIndex();
             this.addSlot(new ArmorSlot(this.companionInventory, index, 8 + col * 18, 18, equipment));
         }
         // Offhand, set apart from the armour so it does not read as a fifth piece.
@@ -87,7 +87,7 @@ public class CompanionScreenHandler extends ScreenHandler {
     private static class ArmorSlot extends Slot {
         private final EquipmentSlot equipment;
 
-        ArmorSlot(Inventory inventory, int index, int x, int y, EquipmentSlot equipment) {
+        ArmorSlot(Container inventory, int index, int x, int y, EquipmentSlot equipment) {
             super(inventory, index, x, y);
             this.equipment = equipment;
         }
@@ -99,11 +99,11 @@ public class CompanionScreenHandler extends ScreenHandler {
 
         @Override
         public boolean canInsert(ItemStack stack) {
-            return LivingEntity.getPreferredEquipmentSlot(stack) == this.equipment;
+            return LivingEntity.getEquipmentSlotForItem(stack) == this.equipment;
         }
 
         @Override
-        public boolean canTakeItems(PlayerEntity player) {
+        public boolean canTakeItems(Player player) {
             // Cursed armour cannot be taken off a player; the same should hold for a companion, or
             // the curse is trivially undone by handing the piece over and taking it back.
             ItemStack stack = this.getStack();
@@ -114,7 +114,7 @@ public class CompanionScreenHandler extends ScreenHandler {
 
     /** Offhand slot: one stack of anything, like a player's. Shields are the point of it. */
     private static class OffhandSlot extends Slot {
-        OffhandSlot(Inventory inventory, int index, int x, int y) {
+        OffhandSlot(Container inventory, int index, int x, int y) {
             super(inventory, index, x, y);
         }
     }
@@ -131,9 +131,9 @@ public class CompanionScreenHandler extends ScreenHandler {
      * loop; getting that wrong is how shift-click hangs a server.
      */
     @Override
-    public ItemStack quickTransfer(PlayerEntity player, int index) {
+    public ItemStack quickTransfer(Player player, int index) {
         Slot slot = this.slots.get(index);
-        if (slot == null || !slot.hasStack()) {
+        if (slot == null || !slot.hasItem()) {
             return ItemStack.EMPTY;
         }
         ItemStack inSlot = slot.getStack();
@@ -145,22 +145,22 @@ public class CompanionScreenHandler extends ScreenHandler {
 
         if (index < companionEnd) {
             // Companion → player.
-            if (!this.insertItem(inSlot, companionEnd, playerEnd, true)) {
+            if (!this.moveItemStackTo(inSlot, companionEnd, playerEnd, true)) {
                 return ItemStack.EMPTY;
             }
         } else {
             // Player → companion: try to wear it first, then the storage rows, then the hotbar row.
-            EquipmentSlot preferred = LivingEntity.getPreferredEquipmentSlot(inSlot);
+            EquipmentSlot preferred = LivingEntity.getEquipmentSlotForItem(inSlot);
             int armorIndex = armorSlotIndexFor(preferred);
             boolean moved = false;
-            if (armorIndex >= 0 && !this.slots.get(armorIndex).hasStack()) {
-                moved = this.insertItem(inSlot, armorIndex, armorIndex + 1, false);
+            if (armorIndex >= 0 && !this.slots.get(armorIndex).hasItem()) {
+                moved = this.moveItemStackTo(inSlot, armorIndex, armorIndex + 1, false);
             }
-            if (!moved && inSlot.isOf(Items.SHIELD) && !this.slots.get(4).hasStack()) {
-                moved = this.insertItem(inSlot, 4, 5, false); // the offhand slot
+            if (!moved && inSlot.isOf(Items.SHIELD) && !this.slots.get(4).hasItem()) {
+                moved = this.moveItemStackTo(inSlot, 4, 5, false); // the offhand slot
             }
             if (!moved) {
-                moved = this.insertItem(inSlot, 5, companionEnd, false); // storage, then hotbar row
+                moved = this.moveItemStackTo(inSlot, 5, companionEnd, false); // storage, then hotbar row
             }
             if (!moved) {
                 return ItemStack.EMPTY;
@@ -175,7 +175,7 @@ public class CompanionScreenHandler extends ScreenHandler {
         if (inSlot.getCount() == original.getCount()) {
             return ItemStack.EMPTY; // nothing actually moved
         }
-        slot.onTakeItem(player, inSlot);
+        slot.onTake(player, inSlot);
         return original;
     }
 
@@ -197,7 +197,7 @@ public class CompanionScreenHandler extends ScreenHandler {
      * across the world, including into chunks that are no longer loaded.
      */
     @Override
-    public boolean canUse(PlayerEntity player) {
+    public boolean canUse(Player player) {
         if (!this.companion.isAlive() || this.companion.isRemoved()) {
             return false;
         }
@@ -210,7 +210,7 @@ public class CompanionScreenHandler extends ScreenHandler {
     }
 
     @Override
-    public void close(PlayerEntity player) {
+    public void close(Player player) {
         super.close(player);
         // Armour and held items are read straight off this inventory (see
         // CompanionEntity#getEquippedStack), so anything just handed over takes effect on the next

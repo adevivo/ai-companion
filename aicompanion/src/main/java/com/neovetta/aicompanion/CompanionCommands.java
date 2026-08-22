@@ -14,21 +14,21 @@ import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.command.argument.BlockPosArgumentType;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -65,17 +65,17 @@ public final class CompanionCommands {
      * at restart. Locking the mod down raises these to 2 rather than removing them — one predicate
      * with two levels, instead of a second gate that can disagree with the first.
      */
-    private static java.util.function.Predicate<ServerCommandSource> player(String node) {
+    private static java.util.function.Predicate<CommandSourceStack> player(String node) {
         return src -> Permissions.check(src, NODE + node, ServerPolicy.allowPlayerCommands ? 0 : 2);
     }
 
     /** A subcommand that changes the server for everybody: config, skill files, a global reload. */
-    private static java.util.function.Predicate<ServerCommandSource> operator(String node) {
+    private static java.util.function.Predicate<CommandSourceStack> operator(String node) {
         return src -> isWorldHost(src) || Permissions.check(src, NODE + node, 2);
     }
 
     /** Whether this caller may act on companions that are not theirs. */
-    private static boolean isAdmin(ServerCommandSource source) {
+    private static boolean isAdmin(CommandSourceStack source) {
         return isWorldHost(source) || Permissions.check(source, ADMIN_NODE, 2);
     }
 
@@ -93,80 +93,80 @@ public final class CompanionCommands {
      * improvement on the original. An integrated server opened to LAN still reports itself as
      * singleplayer, so the old test would have handed operator rights to every guest who joined.
      */
-    private static boolean isWorldHost(ServerCommandSource source) {
+    private static boolean isWorldHost(CommandSourceStack source) {
         MinecraftServer server = source.getServer();
-        ServerPlayerEntity player = source.getPlayer();
+        ServerPlayer player = source.getPlayer();
         if (server == null || player == null) {
             return false;
         }
-        return server.isHost(player.getGameProfile());
+        return server.isSingleplayerOwner(player.getGameProfile());
     }
 
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-                dispatcher.register(CommandManager.literal("companion")
+                dispatcher.register(Commands.literal("companion")
                         // Deliberately no gate on the root. Permissions are per-node now, and a root
                         // requirement would silently veto every one of them — which is exactly what
                         // it was doing.
-                        .then(CommandManager.literal("spawn").requires(player("spawn"))
+                        .then(Commands.literal("spawn").requires(player("spawn"))
                                 .executes(ctx -> spawn(ctx.getSource(), null))
-                                .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                                .then(Commands.argument("name", StringArgumentType.greedyString())
                                         .suggests(ROSTER_SUGGESTIONS)
                                         .executes(ctx -> spawn(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "name")))))
-                        .then(CommandManager.literal("goto").requires(player("goto"))
-                                .then(CommandManager.argument("pos", BlockPosArgumentType.blockPos())
+                        .then(Commands.literal("goto").requires(player("goto"))
+                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
                                         .executes(ctx -> goTo(ctx.getSource(),
-                                                BlockPosArgumentType.getBlockPos(ctx, "pos"), null))
-                                        .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                                                BlockPosArgument.getBlockPos(ctx, "pos"), null))
+                                        .then(Commands.argument("name", StringArgumentType.greedyString())
                                                 .suggests(LIVE_SUGGESTIONS)
                                                 .executes(ctx -> goTo(ctx.getSource(),
-                                                        BlockPosArgumentType.getBlockPos(ctx, "pos"),
+                                                        BlockPosArgument.getBlockPos(ctx, "pos"),
                                                         StringArgumentType.getString(ctx, "name"))))))
                         .then(withOptionalName("come", CompanionCommands::come))
                         .then(withOptionalName("where", CompanionCommands::where))
                         .then(withOptionalName("stats", CompanionCommands::stats))
                         .then(withOptionalName("despawn", CompanionCommands::despawn))
-                        .then(CommandManager.literal("remember").requires(player("remember"))
-                                .then(CommandManager.argument("fact", StringArgumentType.greedyString())
+                        .then(Commands.literal("remember").requires(player("remember"))
+                                .then(Commands.argument("fact", StringArgumentType.greedyString())
                                         .executes(ctx -> remember(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "fact"), false))))
-                        .then(CommandManager.literal("rememberhere").requires(player("rememberhere"))
-                                .then(CommandManager.argument("fact", StringArgumentType.greedyString())
+                        .then(Commands.literal("rememberhere").requires(player("rememberhere"))
+                                .then(Commands.argument("fact", StringArgumentType.greedyString())
                                         .executes(ctx -> remember(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "fact"), true))))
-                        .then(CommandManager.literal("list").requires(player("list"))
+                        .then(Commands.literal("list").requires(player("list"))
                                 .executes(ctx -> list(ctx.getSource())))
                         // Open to everyone, and split inside: reload does the caller's OWN half
                         // unconditionally (their file, their endpoints, nobody else affected) and
                         // the SERVER's half only for an operator. Gating the whole command left a
                         // non-operator with no way to apply an edit to settings only they read.
-                        .then(CommandManager.literal("reload").requires(player("reload"))
+                        .then(Commands.literal("reload").requires(player("reload"))
                                 .executes(ctx -> reload(ctx.getSource())))
-                        .then(CommandManager.literal("config").requires(player("config"))
+                        .then(Commands.literal("config").requires(player("config"))
                                 .executes(ctx -> config(ctx.getSource())))
-                        .then(CommandManager.literal("radar").requires(player("radar"))
+                        .then(Commands.literal("radar").requires(player("radar"))
                                 .executes(ctx -> radar(ctx.getSource())))
-                        .then(CommandManager.literal("hud").requires(player("hud"))
+                        .then(Commands.literal("hud").requires(player("hud"))
                                 .executes(ctx -> hud(ctx.getSource())))
-                        .then(CommandManager.literal("tokens").requires(player("tokens"))
+                        .then(Commands.literal("tokens").requires(player("tokens"))
                                 .executes(ctx -> tokens(ctx.getSource())))
-                        .then(CommandManager.literal("skills").requires(player("skills"))
+                        .then(Commands.literal("skills").requires(player("skills"))
                                 .executes(ctx -> skills(ctx.getSource()))
                             // Overwrites files in the server's skills directory, so operator-only
                             // even though listing them is not.
-                            .then(CommandManager.literal("reset").requires(operator("skills.reset"))
+                            .then(Commands.literal("reset").requires(operator("skills.reset"))
                                     .executes(ctx -> skillsReset(ctx.getSource(), null))
-                                    .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                                    .then(Commands.argument("name", StringArgumentType.greedyString())
                                             .suggests(BUNDLED_SUGGESTIONS)
                                             .executes(ctx -> skillsReset(ctx.getSource(),
                                                     StringArgumentType.getString(ctx, "name"))))))
-                        .then(CommandManager.literal("skill").requires(player("skill"))
-                                .then(CommandManager.argument("first", StringArgumentType.word())
+                        .then(Commands.literal("skill").requires(player("skill"))
+                                .then(Commands.argument("first", StringArgumentType.word())
                                         .suggests(SKILL_OR_COMPANION_SUGGESTIONS)
                                         .executes(ctx -> skill(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "first"), null))
-                                        .then(CommandManager.argument("rest", StringArgumentType.greedyString())
+                                        .then(Commands.argument("rest", StringArgumentType.greedyString())
                                                 .suggests(SKILL_SUGGESTIONS)
                                                 .executes(ctx -> skill(ctx.getSource(),
                                                         StringArgumentType.getString(ctx, "first"),
@@ -180,23 +180,23 @@ public final class CompanionCommands {
      * With two companions out that is a coin flip, and the feedback did not even say which one it
      * picked — so {@code /companion stats} could report the inventory of the one across the valley.
      */
-    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> withOptionalName(
-            String literal, java.util.function.BiFunction<ServerCommandSource, String, Integer> action) {
-        return CommandManager.literal(literal)
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> withOptionalName(
+            String literal, java.util.function.BiFunction<CommandSourceStack, String, Integer> action) {
+        return Commands.literal(literal)
                 .requires(player(literal))
                 .executes(ctx -> action.apply(ctx.getSource(), null))
-                .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                .then(Commands.argument("name", StringArgumentType.greedyString())
                         .suggests(LIVE_SUGGESTIONS)
                         .executes(ctx -> action.apply(ctx.getSource(),
                                 StringArgumentType.getString(ctx, "name"))));
     }
 
     /** Every companion loaded in the caller's world, nearest first. */
-    private static List<CompanionEntity> liveCompanions(ServerCommandSource source) {
-        ServerWorld world = source.getWorld();
-        Vec3d origin = source.getPosition();
-        List<CompanionEntity> companions = new ArrayList<>(world.getEntitiesByClass(CompanionEntity.class,
-                Box.of(origin, 20000, 20000, 20000), e -> true));
+    private static List<CompanionEntity> liveCompanions(CommandSourceStack source) {
+        ServerLevel world = source.getWorld();
+        Vec3 origin = source.getPosition();
+        List<CompanionEntity> companions = new ArrayList<>(world.getEntitiesOfClass(CompanionEntity.class,
+                AABB.of(origin, 20000, 20000, 20000), e -> true));
         companions.sort(Comparator.comparingDouble(e -> e.squaredDistanceTo(origin)));
         return companions;
     }
@@ -215,8 +215,8 @@ public final class CompanionCommands {
      * visible only to an operator. Letting whoever walks past claim it is how a companion nobody
      * owns becomes a companion everybody owns.
      */
-    private static List<CompanionEntity> ownedCompanions(ServerCommandSource source) {
-        ServerPlayerEntity player = source.getPlayer();
+    private static List<CompanionEntity> ownedCompanions(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
         if (player == null) {
             // Console or a command block: it owns nothing, so "yours" is meaningless. An operator
             // source sees everything; anything else sees nothing.
@@ -254,8 +254,8 @@ public final class CompanionCommands {
         if (server == null || name == null || owner == null) {
             return null;
         }
-        for (ServerWorld world : server.getWorlds()) {
-            for (Entity entity : world.iterateEntities()) {
+        for (ServerLevel world : server.getWorlds()) {
+            for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion
                         && owner.equals(companion.getOwnerUuid())
                         && companion.displayName().equalsIgnoreCase(name)) {
@@ -272,8 +272,8 @@ public final class CompanionCommands {
             return 0;
         }
         int count = 0;
-        for (ServerWorld world : server.getWorlds()) {
-            for (Entity entity : world.iterateEntities()) {
+        for (ServerLevel world : server.getWorlds()) {
+            for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion
                         && owner.equals(companion.getOwnerUuid())) {
                     count++;
@@ -294,11 +294,11 @@ public final class CompanionCommands {
             return 0;
         }
         int count = 0;
-        for (ServerWorld world : server.getWorlds()) {
-            for (Entity entity : world.iterateEntities()) {
+        for (ServerLevel world : server.getWorlds()) {
+            for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion) {
                     UUID owner = companion.getOwnerUuid();
-                    if (owner == null || server.getPlayerManager().getPlayer(owner) == null) {
+                    if (owner == null || server.getPlayerList().getPlayer(owner) == null) {
                         count++;
                     }
                 }
@@ -313,8 +313,8 @@ public final class CompanionCommands {
             return 0;
         }
         int count = 0;
-        for (ServerWorld world : server.getWorlds()) {
-            for (Entity entity : world.iterateEntities()) {
+        for (ServerLevel world : server.getWorlds()) {
+            for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity) {
                     count++;
                 }
@@ -333,7 +333,7 @@ public final class CompanionCommands {
      * owner-matching entity in {@code getEntitiesByClass} order, which is arbitrary, so with two
      * companions owned by the same player every command was a coin flip between them.
      */
-    private static CompanionEntity findCompanion(ServerCommandSource source, String name) {
+    private static CompanionEntity findCompanion(CommandSourceStack source, String name) {
         // Only ever the caller's own — see ownedCompanions. Nothing below can return somebody
         // else's companion, which is the property that makes the level-0 permissions safe.
         List<CompanionEntity> companions = ownedCompanions(source);
@@ -370,7 +370,7 @@ public final class CompanionCommands {
      * every caller would otherwise have to remember to say so. One place that cannot be forgotten
      * beats six that can.
      */
-    private static CompanionEntity adminReach(ServerCommandSource source, String wanted) {
+    private static CompanionEntity adminReach(CommandSourceStack source, String wanted) {
         if (!isAdmin(source)) {
             return null;
         }
@@ -382,9 +382,9 @@ public final class CompanionCommands {
             return null;
         }
         String owner = other.ownerName();
-        source.sendFeedback(() -> Text.literal(
+        source.sendFeedback(() -> Component.literal(
                 other.displayName() + " belongs to " + owner + " — acting on it as an operator.")
-                .formatted(Formatting.YELLOW), false);
+                .formatted(ChatFormatting.YELLOW), false);
         AiCompanion.LOGGER.info("[{}] {} acted on {}'s companion {} as an operator",
                 AiCompanion.MOD_ID, source.getName(), owner, other.displayName());
         return other;
@@ -397,7 +397,7 @@ public final class CompanionCommands {
      * unloaded chunk, or the name was simply misspelt — three different problems with three different
      * fixes. Listing the live ones distinguishes them at a glance.
      */
-    private static int noCompanion(ServerCommandSource source, String name) {
+    private static int noCompanion(CommandSourceStack source, String name) {
         // "It belongs to someone else" is a fourth cause, and the one that would otherwise read as
         // "no companion called Vetta" while Vetta is standing in front of you. Checked first,
         // against every companion in the world rather than only the caller's.
@@ -408,21 +408,21 @@ public final class CompanionCommands {
                     .findFirst()
                     .orElse(null);
             if (other != null) {
-                source.sendError(Text.literal(
+                source.sendFailure(Component.literal(
                         other.displayName() + " belongs to " + other.ownerName() + "."));
                 return 0;
             }
         }
         List<CompanionEntity> companions = ownedCompanions(source);
         if (companions.isEmpty()) {
-            source.sendError(Text.literal(
+            source.sendFailure(Component.literal(
                     "You have no companion out (none spawned, or it drifted into an unloaded area). "
                             + "/companion spawn to call one."));
             return 0;
         }
         String live = companions.stream().map(CompanionEntity::displayName)
                 .collect(java.util.stream.Collectors.joining(", "));
-        source.sendError(Text.literal("You have no companion called '" + name.strip()
+        source.sendFailure(Component.literal("You have no companion called '" + name.strip()
                 + "'. Yours right now: " + live));
         return 0;
     }
@@ -431,8 +431,8 @@ public final class CompanionCommands {
      * Tab-completion over the identities the CALLER's client announced — what {@code spawn} accepts
      * from them. Falls back to the server's own roster for the console and singleplayer.
      */
-    private static final SuggestionProvider<ServerCommandSource> ROSTER_SUGGESTIONS = (ctx, builder) -> {
-        ServerPlayerEntity caller = ctx.getSource().getPlayer();
+    private static final SuggestionProvider<CommandSourceStack> ROSTER_SUGGESTIONS = (ctx, builder) -> {
+        ServerPlayer caller = ctx.getSource().getPlayer();
         for (CompanionConfig.RosterEntry entry
                 : ClientProfiles.rosterFor(caller == null ? null : caller.getUuid())) {
             builder.suggest(entry.name());
@@ -441,7 +441,7 @@ public final class CompanionCommands {
     };
 
     /** Tab-completion over the companions actually in the world — what the targeting commands accept. */
-    private static final SuggestionProvider<ServerCommandSource> LIVE_SUGGESTIONS = (ctx, builder) -> {
+    private static final SuggestionProvider<CommandSourceStack> LIVE_SUGGESTIONS = (ctx, builder) -> {
         for (CompanionEntity companion : ownedCompanions(ctx.getSource())) {
             builder.suggest(companion.displayName());
         }
@@ -458,12 +458,12 @@ public final class CompanionCommands {
      * command an owner reaches for precisely when a companion has gone too far, it has to work at any
      * distance — arriving is the contract and walking is the flavour.
      */
-    private static int come(ServerCommandSource source, String name) {
+    private static int come(CommandSourceStack source, String name) {
         CompanionEntity companion = findCompanion(source, name);
         if (companion == null) {
             return noCompanion(source, name);
         }
-        ServerPlayerEntity player = source.getPlayer();
+        ServerPlayer player = source.getPlayer();
         BlockPos target = player != null ? player.getBlockPos() : companion.getBlockPos();
         String who = companion.displayName();
 
@@ -486,7 +486,7 @@ public final class CompanionCommands {
         } else {
             companion.goTo(target);
         }
-        source.sendFeedback(() -> Text.literal(stranded
+        source.sendFeedback(() -> Component.literal(stranded
                 ? who + " was too far away to walk back and has been brought to "
                         + target.toShortString()
                 : who + " coming to " + target.toShortString()), false);
@@ -511,16 +511,16 @@ public final class CompanionCommands {
      *
      * <p>Runs off the server thread: embedding is a network call and persisting writes files.
      */
-    private static int remember(ServerCommandSource source, String fact, boolean thisWorldOnly) {
-        ServerPlayerEntity player;
+    private static int remember(CommandSourceStack source, String fact, boolean thisWorldOnly) {
+        ServerPlayer player;
         try {
-            player = source.getPlayerOrThrow();
+            player = source.getPlayerOrException();
         } catch (Exception e) {
-            source.sendError(Text.literal("Only a player can teach a companion something."));
+            source.sendFailure(Component.literal("Only a player can teach a companion something."));
             return 0;
         }
         if (fact == null || fact.isBlank()) {
-            source.sendError(Text.literal("Give it something to remember."));
+            source.sendFailure(Component.literal("Give it something to remember."));
             return 0;
         }
 
@@ -561,7 +561,7 @@ public final class CompanionCommands {
                                 place == null ? null : place.x(),
                                 place == null ? null : place.y(),
                                 place == null ? null : place.z());
-                net.minecraft.network.PacketByteBuf buf = PacketByteBufs.create();
+                net.minecraft.network.FriendlyByteBuf buf = PacketByteBufs.create();
                 adris.altoclef.player2api.brain.BrainWire.writeRemember(buf, request);
                 ServerPlayNetworking.send(player,
                         adris.altoclef.player2api.brain.BrainWire.MEMORY_REMEMBER, buf);
@@ -569,7 +569,7 @@ public final class CompanionCommands {
             } catch (Throwable e) {
                 // Falling through to the server-side write would put the memory on the wrong
                 // machine, which is the bug. Saying so is the honest outcome.
-                source.sendError(Text.literal(
+                source.sendFailure(Component.literal(
                         "Could not reach your client to store that: " + e));
                 AiCompanion.LOGGER.warn("[{}] could not send a remember to {}", AiCompanion.MOD_ID,
                         owner, e);
@@ -593,37 +593,37 @@ public final class CompanionCommands {
                         : "  @ " + saved.place().x() + ", " + saved.place().y()
                                 + ", " + saved.place().z();
                 // Back to the server thread to talk: sendFeedback is not safe off it.
-                server.execute(() -> source.sendFeedback(() -> Text.literal(
+                server.execute(() -> source.sendFeedback(() -> Component.literal(
                         (thisWorldOnly
                                 ? "Remembered, here in this world: "
                                 : "Remembered: ")
                                 + fact.strip() + where)
-                        .formatted(Formatting.GREEN)
-                        .append(Text.literal("  (" + held + " stored)")
-                                .formatted(Formatting.DARK_GRAY)), false));
+                        .formatted(ChatFormatting.GREEN)
+                        .append(Component.literal("  (" + held + " stored)")
+                                .formatted(ChatFormatting.DARK_GRAY)), false));
             } catch (Throwable e) {
                 String why = e.getMessage() == null ? e.toString() : e.getMessage();
-                server.execute(() -> source.sendError(Text.literal("Could not remember that: " + why)));
+                server.execute(() -> source.sendFailure(Component.literal("Could not remember that: " + why)));
                 AiCompanion.LOGGER.warn("[{}] /companion remember failed", AiCompanion.MOD_ID, e);
             }
         });
         return 1;
     }
 
-    private static int list(ServerCommandSource source) {
+    private static int list(CommandSourceStack source) {
         // Yours, or everyone's for an operator. Listing every companion within a 20000-block box to
         // any player is both spam and a position readout for somebody else's base.
         List<CompanionEntity> companions = ownedCompanions(source);
         if (companions.isEmpty()) {
-            source.sendFeedback(() -> Text.literal(
+            source.sendFeedback(() -> Component.literal(
                     "You have no companions out. /companion spawn to call one.")
-                    .formatted(Formatting.GRAY), false);
+                    .formatted(ChatFormatting.GRAY), false);
             return 1;
         }
-        ServerPlayerEntity player = source.getPlayer();
-        source.sendFeedback(() -> Text.literal("Companions (" + companions.size() + "):")
-                .formatted(Formatting.GOLD, Formatting.BOLD), false);
-        Vec3d origin = source.getPosition();
+        ServerPlayer player = source.getPlayer();
+        source.sendFeedback(() -> Component.literal("Companions (" + companions.size() + "):")
+                .formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        Vec3 origin = source.getPosition();
         for (CompanionEntity companion : companions) {
             double dist = Math.sqrt(companion.squaredDistanceTo(origin));
             boolean mine = player != null && player.getUuid().equals(companion.getOwnerUuid());
@@ -632,7 +632,7 @@ public final class CompanionCommands {
             String line = String.format("  %s — %.0f blocks, %.0f/%.0f hp, %s%s",
                     companion.displayName(), dist, companion.getHealth(), companion.getMaxHealth(),
                     task, mine ? "" : " (not yours)");
-            source.sendFeedback(() -> Text.literal(line).formatted(Formatting.GRAY), false);
+            source.sendFeedback(() -> Component.literal(line).formatted(ChatFormatting.GRAY), false);
         }
         return 1;
     }
@@ -661,7 +661,7 @@ public final class CompanionCommands {
      * terrain, or pathing somewhere unreachable) can only be cleared with {@code /kill}, which needs
      * cheats and takes the wrong entity as easily as the right one.
      */
-    private static int despawn(ServerCommandSource source, String name) {
+    private static int despawn(CommandSourceStack source, String name) {
         CompanionEntity companion = findCompanion(source, name);
         if (companion == null) {
             return noCompanion(source, name);
@@ -671,7 +671,7 @@ public final class CompanionCommands {
         ConversationManager.forget(companion.getUuid());
         String who = companion.displayName();
         companion.discard();
-        source.sendFeedback(() -> Text.literal(who + " despawned."), false);
+        source.sendFeedback(() -> Component.literal(who + " despawned."), false);
         AiCompanion.LOGGER.info("[{}] despawned companion {} (id {})", AiCompanion.MOD_ID, who,
                 companion.getId());
         return 1;
@@ -684,12 +684,12 @@ public final class CompanionCommands {
      * {@code AIPersistantData.updateSystemPrompt()}. Only name/description/skin stay baked into the
      * entity — those need a despawn/spawn cycle, which the feedback says explicitly.
      */
-    private static int reload(ServerCommandSource source) {
+    private static int reload(CommandSourceStack source) {
         // The caller's own machine first, and without asking anyone's permission: these are the
         // settings only that client ever reads, and on a dedicated server the server has never even
         // seen the file they live in. Skipped for the world host, where the client and the server
         // are one JVM and reloadAndApply below already re-reads the very same file.
-        final ServerPlayerEntity caller = source.getPlayer();
+        final ServerPlayer caller = source.getPlayer();
         boolean toldClient = false;
         if (caller != null && !isWorldHost(source)
                 && ServerPlayNetworking.canSend(caller, AiCompanion.RELOAD_CLIENT_CONFIG)) {
@@ -701,13 +701,13 @@ public final class CompanionCommands {
             // Not an error: they reloaded everything that was theirs to reload. Saying which half ran
             // matters, because the half that did not is the one an operator would have expected.
             if (toldClient) {
-                source.sendFeedback(() -> Text.literal(
+                source.sendFeedback(() -> Component.literal(
                         "Reloading your own settings — your companions, your endpoints, your memory "
                                 + "switches. This server's rules are the operator's and are unchanged.")
-                        .formatted(Formatting.GREEN), false);
+                        .formatted(ChatFormatting.GREEN), false);
                 return 1;
             }
-            source.sendError(Text.literal(
+            source.sendFailure(Component.literal(
                     "Nothing to reload here: this server's config is the operator's, and your client "
                             + "did not answer. Update the mod, or edit your own config in "
                             + "/companion config."));
@@ -716,10 +716,10 @@ public final class CompanionCommands {
 
         final int count = CompanionConfig.reloadAndApply(source.getServer());
         final int skillCount = CompanionSkills.all().size();
-        source.sendFeedback(() -> Text.literal(String.format(
+        source.sendFeedback(() -> Component.literal(String.format(
                 "Config reloaded. LLM/TTS/behavior settings apply from the next reply; persona re-applied to %d live companion(s); %d skill(s) loaded.",
                 count, skillCount)), false);
-        source.sendFeedback(() -> Text.literal(
+        source.sendFeedback(() -> Component.literal(
                 "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
         // Whatever reloadAndApply just found out about memory, said here rather than saved for the
         // next conversation turn. Someone who ran this command has usually just changed a memory or
@@ -727,8 +727,8 @@ public final class CompanionCommands {
         // Silent when memory is off or nothing changed, which is almost always.
         for (adris.altoclef.player2api.MemoryHealth.Notice notice
                 : adris.altoclef.player2api.MemoryHealth.drain()) {
-            source.sendFeedback(() -> Text.literal(notice.text())
-                    .formatted(notice.problem() ? Formatting.RED : Formatting.GREEN), false);
+            source.sendFeedback(() -> Component.literal(notice.text())
+                    .formatted(notice.problem() ? ChatFormatting.RED : ChatFormatting.GREEN), false);
         }
         AiCompanion.LOGGER.info("[{}] config reloaded via /companion reload ({} live companion(s) updated)",
                 AiCompanion.MOD_ID, count);
@@ -740,10 +740,10 @@ public final class CompanionCommands {
      * {@link AiCompanion#OPEN_CONFIG_SCREEN} for why it can't be a client command), so it just sends
      * the empty S2C packet; the client receiver opens the Cloth Config screen.
      */
-    private static int config(ServerCommandSource source) {
-        ServerPlayerEntity player = source.getPlayer();
+    private static int config(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendError(Text.literal("/companion config must be run by a player (it opens a screen)."));
+            source.sendFailure(Component.literal("/companion config must be run by a player (it opens a screen)."));
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.OPEN_CONFIG_SCREEN, PacketByteBufs.empty());
@@ -755,10 +755,10 @@ public final class CompanionCommands {
      * client-side; this just sends the empty toggle packet and the client cycles + echoes the new mode
      * in chat. A client keybind cycles the same state.
      */
-    private static int radar(ServerCommandSource source) {
-        ServerPlayerEntity player = source.getPlayer();
+    private static int radar(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendError(Text.literal("/companion radar must be run by a player (it toggles a HUD)."));
+            source.sendFailure(Component.literal("/companion radar must be run by a player (it toggles a HUD)."));
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.RADAR_TOGGLE, PacketByteBufs.empty());
@@ -772,10 +772,10 @@ public final class CompanionCommands {
      * empty toggle packet and the client echoes the new value. AUTO is the default and keeps the panel
      * hidden while every companion is healthy and fed; OFF is the way to be rid of it entirely.
      */
-    private static int hud(ServerCommandSource source) {
-        ServerPlayerEntity player = source.getPlayer();
+    private static int hud(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendError(Text.literal("/companion hud must be run by a player (it toggles a HUD)."));
+            source.sendFailure(Component.literal("/companion hud must be run by a player (it toggles a HUD)."));
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.STATUS_HUD_TOGGLE, PacketByteBufs.empty());
@@ -789,10 +789,10 @@ public final class CompanionCommands {
      * they are ~30 bytes a second and keeping them flowing means the burn graph is still accurate
      * when the panel comes back on.
      */
-    private static int tokens(ServerCommandSource source) {
-        ServerPlayerEntity player = source.getPlayer();
+    private static int tokens(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendError(Text.literal("/companion tokens must be run by a player (it toggles a HUD)."));
+            source.sendFailure(Component.literal("/companion tokens must be run by a player (it toggles a HUD)."));
             return 0;
         }
         ServerPlayNetworking.send(player, AiCompanion.TOKEN_HUD_TOGGLE, PacketByteBufs.empty());
@@ -800,7 +800,7 @@ public final class CompanionCommands {
     }
 
     /** Tab-completion for {@code /companion skill <name>}: the loaded skill keys. */
-    private static final SuggestionProvider<ServerCommandSource> SKILL_SUGGESTIONS = (ctx, builder) -> {
+    private static final SuggestionProvider<CommandSourceStack> SKILL_SUGGESTIONS = (ctx, builder) -> {
         for (String key : CompanionSkills.keys()) {
             builder.suggest(key);
         }
@@ -812,7 +812,7 @@ public final class CompanionCommands {
      * the companion to send it to. Companions first, since they are the shorter list and the reason
      * you would be typing a name at all.
      */
-    private static final SuggestionProvider<ServerCommandSource> SKILL_OR_COMPANION_SUGGESTIONS =
+    private static final SuggestionProvider<CommandSourceStack> SKILL_OR_COMPANION_SUGGESTIONS =
             (ctx, builder) -> {
                 for (CompanionEntity companion : liveCompanions(ctx.getSource())) {
                     builder.suggest(companion.displayName());
@@ -824,7 +824,7 @@ public final class CompanionCommands {
             };
 
     /** Tab-completion for {@code /companion skills reset [name]}: only the jar-bundled skills. */
-    private static final SuggestionProvider<ServerCommandSource> BUNDLED_SUGGESTIONS = (ctx, builder) -> {
+    private static final SuggestionProvider<CommandSourceStack> BUNDLED_SUGGESTIONS = (ctx, builder) -> {
         for (String key : CompanionSkills.bundledKeys()) {
             builder.suggest(key);
         }
@@ -836,22 +836,22 @@ public final class CompanionCommands {
      * Needed because the unpack-on-first-run path never overwrites, so a mod update otherwise leaves
      * everyone silently running the old skill text.
      */
-    private static int skillsReset(ServerCommandSource source, String rawName) {
+    private static int skillsReset(CommandSourceStack source, String rawName) {
         String key = rawName == null ? null : CompanionSkills.key(rawName);
         if (key != null && !CompanionSkills.bundledKeys().contains(key)) {
-            source.sendError(Text.literal("'" + rawName.strip() + "' is not a bundled skill. Resettable: "
+            source.sendFailure(Component.literal("'" + rawName.strip() + "' is not a bundled skill. Resettable: "
                     + String.join(", ", CompanionSkills.bundledKeys())));
             return 0;
         }
         var results = CompanionSkills.resetBundled(key);
         if (results.isEmpty()) {
-            source.sendError(Text.literal("Nothing to reset."));
+            source.sendFailure(Component.literal("Nothing to reset."));
             return 0;
         }
-        source.sendFeedback(() -> Text.literal("Skill reset:").formatted(Formatting.GOLD, Formatting.BOLD), false);
+        source.sendFeedback(() -> Component.literal("Skill reset:").formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         for (CompanionSkills.ResetResult r : results) {
-            source.sendFeedback(() -> Text.literal("  " + r.fileName() + " — " + r.detail())
-                    .formatted(r.restored() ? Formatting.GRAY : Formatting.RED), false);
+            source.sendFeedback(() -> Component.literal("  " + r.fileName() + " — " + r.detail())
+                    .formatted(r.restored() ? ChatFormatting.GRAY : ChatFormatting.RED), false);
         }
         // Names/descriptions are advertised in the persona, so refresh live companions too.
         CompanionConfig.reloadAndApply(source.getServer());
@@ -859,21 +859,21 @@ public final class CompanionCommands {
     }
 
     /** List the loaded skills, the directory to edit, and the reload hint. */
-    private static int skills(ServerCommandSource source) {
+    private static int skills(CommandSourceStack source) {
         var loaded = CompanionSkills.all();
         if (loaded.isEmpty()) {
-            source.sendFeedback(() -> Text.literal("No skills loaded. Drop .md files into "
+            source.sendFeedback(() -> Component.literal("No skills loaded. Drop .md files into "
                     + CompanionSkills.skillsDir() + " and run /companion reload.")
-                    .formatted(Formatting.GRAY), false);
+                    .formatted(ChatFormatting.GRAY), false);
             return 1;
         }
-        source.sendFeedback(() -> Text.literal("Loaded skills:").formatted(Formatting.GOLD, Formatting.BOLD), false);
+        source.sendFeedback(() -> Component.literal("Loaded skills:").formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         for (CompanionSkills.Skill s : loaded) {
-            source.sendFeedback(() -> Text.literal("  " + s.key()
-                    + (s.description().isEmpty() ? "" : " — " + s.description())).formatted(Formatting.GRAY), false);
+            source.sendFeedback(() -> Component.literal("  " + s.key()
+                    + (s.description().isEmpty() ? "" : " — " + s.description())).formatted(ChatFormatting.GRAY), false);
         }
-        source.sendFeedback(() -> Text.literal("Files: " + CompanionSkills.skillsDir()
-                + " — edit, then /companion reload to update.").formatted(Formatting.GRAY), false);
+        source.sendFeedback(() -> Component.literal("Files: " + CompanionSkills.skillsDir()
+                + " — edit, then /companion reload to update.").formatted(ChatFormatting.GRAY), false);
         return 1;
     }
 
@@ -883,7 +883,7 @@ public final class CompanionCommands {
      * reuses the same queue/lock the chat path uses, so there are no threading concerns. The companion's
      * spoken reply is the real acknowledgement.
      */
-    private static int skill(ServerCommandSource source, String first, String rest) {
+    private static int skill(CommandSourceStack source, String first, String rest) {
         // "/companion skill <skill>" and "/companion skill <companion> <skill>" are the same shape to
         // Brigadier, because skill names have spaces in them ("Home Guard"). Resolve by looking: if
         // the first word names a companion that is actually out, it is the target; otherwise it is
@@ -906,13 +906,13 @@ public final class CompanionCommands {
         }
         AltoClefController ctrl = companion.getController();
         if (ctrl == null) {
-            source.sendError(Text.literal(companion.displayName()
+            source.sendFailure(Component.literal(companion.displayName()
                     + " has no active brain yet — nothing to send a skill to."));
             return 0;
         }
         CompanionSkills.Skill sk = CompanionSkills.get(CompanionSkills.key(rawName));
         if (sk == null) {
-            source.sendError(Text.literal("No skill named '" + rawName.strip() + "'. Try /companion skills."));
+            source.sendFailure(Component.literal("No skill named '" + rawName.strip() + "'. Try /companion skills."));
             return 0;
         }
         AgentConversationData data = ConversationManager.getOrCreateEventQueueData(ctrl);
@@ -920,12 +920,12 @@ public final class CompanionCommands {
                 "Execute this skill now, step by step, using your available commands:\n\n" + sk.body(),
                 source.getName()));
         String who = companion.displayName();
-        source.sendFeedback(() -> Text.literal("Skill '" + sk.name() + "' sent to " + who + "."), false);
+        source.sendFeedback(() -> Component.literal("Skill '" + sk.name() + "' sent to " + who + "."), false);
         return 1;
     }
 
     /** Report where the companion is and how far, so you can find one that wandered off. */
-    private static int where(ServerCommandSource source, String name) {
+    private static int where(CommandSourceStack source, String name) {
         CompanionEntity companion = findCompanion(source, name);
         if (companion == null) {
             return noCompanion(source, name);
@@ -934,7 +934,7 @@ public final class CompanionCommands {
         double dist = Math.sqrt(companion.squaredDistanceTo(source.getPosition()));
         String who = companion.displayName();
         source.sendFeedback(
-                () -> Text.literal(String.format("%s at %s (%.0f blocks away)", who, pos.toShortString(), dist)),
+                () -> Component.literal(String.format("%s at %s (%.0f blocks away)", who, pos.toShortString(), dist)),
                 false);
         return 1;
     }
@@ -945,7 +945,7 @@ public final class CompanionCommands {
      * engine drives), so it's available even before a brain/controller is attached. The companion has
      * no XP — it's a {@link net.minecraft.entity.LivingEntity}, not a player — so none is shown.
      */
-    private static int stats(ServerCommandSource source, String requested) {
+    private static int stats(CommandSourceStack source, String requested) {
         CompanionEntity companion = findCompanion(source, requested);
         if (companion == null) {
             return noCompanion(source, requested);
@@ -953,13 +953,13 @@ public final class CompanionCommands {
 
         // Header: this companion's name, gold + bold.
         String name = companion.displayName();
-        source.sendFeedback(() -> Text.literal("— " + name + " —")
-                .formatted(Formatting.GOLD, Formatting.BOLD), false);
+        source.sendFeedback(() -> Component.literal("— " + name + " —")
+                .formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
 
         // Health + food on one line.
         int food = companion.getHungerManager().getFoodLevel();
         float sat = companion.getHungerManager().getSaturationLevel();
-        source.sendFeedback(() -> Text.literal(String.format("Health: %.1f/%.0f   Food: %d/20 (sat %.1f)",
+        source.sendFeedback(() -> Component.literal(String.format("Health: %.1f/%.0f   Food: %d/20 (sat %.1f)",
                 companion.getHealth(), companion.getMaxHealth(), food, sat)), false);
 
         // Armor: helmet → boots, non-empty only.
@@ -971,13 +971,13 @@ public final class CompanionCommands {
                 armor.add(d);
             }
         }
-        source.sendFeedback(() -> Text.literal(
+        source.sendFeedback(() -> Component.literal(
                 "Armor: " + (armor.isEmpty() ? "none" : String.join(", ", armor))), false);
 
         // Hands.
         String main = describe(companion.getEquippedStack(EquipmentSlot.MAINHAND));
         String off = describe(companion.getEquippedStack(EquipmentSlot.OFFHAND));
-        source.sendFeedback(() -> Text.literal("Hands: main = " + (main == null ? "empty" : main)
+        source.sendFeedback(() -> Component.literal("Hands: main = " + (main == null ? "empty" : main)
                 + ", off = " + (off == null ? "empty" : off)), false);
 
         // Inventory: aggregate counts per item, most first.
@@ -989,18 +989,18 @@ public final class CompanionCommands {
                 continue;
             }
             usedSlots++;
-            String path = Registries.ITEM.getId(stack.getItem()).getPath();
+            String path = BuiltInRegistries.ITEM.getId(stack.getItem()).getPath();
             counts.merge(path, stack.getCount(), Integer::sum);
         }
         final int used = usedSlots;
-        source.sendFeedback(() -> Text.literal(
+        source.sendFeedback(() -> Component.literal(
                 String.format("Inventory (%d/%d slots):", used, totalSlots)), false);
         if (!counts.isEmpty()) {
             String list = counts.entrySet().stream()
                     .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
                     .map(e -> e.getValue() + "× " + e.getKey())
                     .reduce((a, b) -> a + ", " + b).orElse("");
-            source.sendFeedback(() -> Text.literal("  " + list).formatted(Formatting.GRAY), false);
+            source.sendFeedback(() -> Component.literal("  " + list).formatted(ChatFormatting.GRAY), false);
         }
         return 1;
     }
@@ -1013,22 +1013,22 @@ public final class CompanionCommands {
         if (stack == null || stack.isEmpty()) {
             return null;
         }
-        String path = Registries.ITEM.getId(stack.getItem()).getPath();
-        if (stack.isDamageable()) {
-            return path + " (" + (stack.getMaxDamage() - stack.getDamage()) + "/" + stack.getMaxDamage() + ")";
+        String path = BuiltInRegistries.ITEM.getId(stack.getItem()).getPath();
+        if (stack.isDamageableItem()) {
+            return path + " (" + (stack.getMaxDamage() - stack.getDamageValue()) + "/" + stack.getMaxDamage() + ")";
         }
         return path;
     }
 
     /** Send a companion walking to a block position — named, or the caller's nearest. */
-    private static int goTo(ServerCommandSource source, BlockPos target, String name) {
+    private static int goTo(CommandSourceStack source, BlockPos target, String name) {
         CompanionEntity companion = findCompanion(source, name);
         if (companion == null) {
             return noCompanion(source, name);
         }
         companion.goTo(target);
         String who = companion.displayName();
-        source.sendFeedback(() -> Text.literal(who + " pathing to " + target.toShortString()), false);
+        source.sendFeedback(() -> Component.literal(who + " pathing to " + target.toShortString()), false);
         AiCompanion.LOGGER.info("[{}] goto {} for companion {} (id {})", AiCompanion.MOD_ID, target, who,
                 companion.getId());
         return 1;
@@ -1041,8 +1041,8 @@ public final class CompanionCommands {
      * duplicate of one already standing there: two bodies answering to one name is the exact problem
      * the roster exists to solve, and it defeats every way of telling them apart.
      */
-    private static int spawn(ServerCommandSource source, String requested) {
-        ServerPlayerEntity player = source.getPlayer();
+    private static int spawn(CommandSourceStack source, String requested) {
+        ServerPlayer player = source.getPlayer();
         final UUID owner = player == null ? null : player.getUuid();
         MinecraftServer server = source.getServer();
 
@@ -1051,7 +1051,7 @@ public final class CompanionCommands {
         if (owner != null && !isAdmin(source)) {
             int mine = countOwnedAnywhere(server, owner);
             if (!ServerPolicy.withinCap(mine, ServerPolicy.maxCompanionsPerPlayer)) {
-                source.sendError(Text.literal("You already have " + mine + " companion(s) out, which is "
+                source.sendFailure(Component.literal("You already have " + mine + " companion(s) out, which is "
                         + "this server's limit. /companion despawn to put one away."));
                 return 0;
             }
@@ -1071,7 +1071,7 @@ public final class CompanionCommands {
             int abandoned = countAbandoned(server);
             String detail = abandoned == 0 ? ""
                     : " " + abandoned + " of them belong to players who are offline";
-            source.sendError(Text.literal("This server is at its limit of "
+            source.sendFailure(Component.literal("This server is at its limit of "
                     + ServerPolicy.globalCompanionCap + " companions." + detail
                     + ". Try again when someone despawns one, or ask an operator."));
             return 0;
@@ -1094,7 +1094,7 @@ public final class CompanionCommands {
                     .orElse(null);
             if (entry == null) {
                 int count = available.size();
-                source.sendError(Text.literal(count == 1
+                source.sendFailure(Component.literal(count == 1
                         ? "Your only configured companion is already out. /companion list to find them, "
                                 + "or add another under \"companions\" in /companion config."
                         : "All " + count + " of your configured companions are already out. "
@@ -1111,7 +1111,7 @@ public final class CompanionCommands {
                 String known = available.stream()
                         .map(CompanionConfig.RosterEntry::name)
                         .collect(java.util.stream.Collectors.joining(", "));
-                source.sendError(Text.literal("No companion called '" + wanted
+                source.sendFailure(Component.literal("No companion called '" + wanted
                         + "' in your config. Configured: " + known
                         + " — add another in /companion config, Companions tab."));
                 return 0;
@@ -1126,19 +1126,19 @@ public final class CompanionCommands {
                 String where = sameWorld
                         ? Math.round(Math.sqrt(existing.squaredDistanceTo(source.getPosition()))) + " blocks away"
                         : "in " + existing.getWorld().getRegistryKey().getValue().getPath();
-                source.sendError(Text.literal(entry.name() + " is already out, " + where
+                source.sendFailure(Component.literal(entry.name() + " is already out, " + where
                         + ". /companion come " + entry.name()
                         + " to call them, or /companion list to see everyone."));
                 return 0;
             }
         }
 
-        ServerWorld world = source.getWorld();
-        Vec3d pos = source.getPosition();
+        ServerLevel world = source.getWorld();
+        Vec3 pos = source.getPosition();
         float yaw = player != null ? player.getYaw() : 0f;
 
         CompanionEntity companion = new CompanionEntity(AiCompanion.COMPANION, world);
-        companion.refreshPositionAndAngles(pos.x, pos.y, pos.z, yaw, 0f);
+        companion.snapTo(pos.x, pos.y, pos.z, yaw, 0f);
         // Name, skin and the whole identity, persisted in NBT rather than looked up by name later:
         // a client-owned identity has to survive its owner logging off, and re-resolving it from the
         // server's roster is how a companion would silently turn back into the operator's.
@@ -1152,7 +1152,7 @@ public final class CompanionCommands {
             companion.initBrain(CompanionConfig.character(entry), player);
         }
 
-        source.sendFeedback(() -> Text.literal("Spawned " + entry.name()
+        source.sendFeedback(() -> Component.literal("Spawned " + entry.name()
                 + " (id " + companion.getId() + ")"), false);
         AiCompanion.LOGGER.info("[{}] spawned companion {} at {} {} {}", AiCompanion.MOD_ID, entry.name(),
                 pos.x, pos.y, pos.z);

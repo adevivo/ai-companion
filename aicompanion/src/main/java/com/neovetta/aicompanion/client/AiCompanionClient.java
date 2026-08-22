@@ -3,17 +3,17 @@ package com.neovetta.aicompanion.client;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.screen.CompanionScreens;
 import net.fabricmc.api.ClientModInitializer;
-import net.minecraft.client.gui.screen.ingame.HandledScreens;
+import net.minecraft.client.gui.screens.MenuScreens;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
-import com.mojang.blaze3d.platform.InputUtil;
-import net.minecraft.client.option.KeyBind;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 
 /** Client entrypoint: register the companion's renderer, the config-screen opener, and the radar HUD. */
 public class AiCompanionClient implements ClientModInitializer {
@@ -21,7 +21,7 @@ public class AiCompanionClient implements ClientModInitializer {
     public void onInitializeClient() {
         EntityRendererRegistry.register(AiCompanion.COMPANION, CompanionRenderer::new);
         // Right-click a companion with an empty hand to open its inventory (see CompanionEntity#interact).
-        HandledScreens.register(CompanionScreens.TYPE, CompanionScreen::new);
+        MenuScreens.register(CompanionScreens.TYPE, CompanionScreen::new);
         // /companion config → server sends this packet → open the Cloth Config screen. Must hop to
         // the client thread: network handlers run on netty threads, and screens are main-thread only.
         // Thinking for our own companion when the server asks. Registers a JOIN handshake plus one
@@ -41,7 +41,7 @@ public class AiCompanionClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(AiCompanion.OPEN_CONFIG_SCREEN,
                 (client, handler, buf, responseSender) ->
-                        client.execute(() -> client.setScreen(CompanionConfigScreen.create(client.currentScreen))));
+                        client.execute(() -> client.setScreen(CompanionConfigScreen.create(client.screen))));
 
         // Radar position/health snapshot. Read the buf synchronously (it's freed after the handler
         // returns); update() only stores primitives, so no client-thread hop is needed.
@@ -102,11 +102,11 @@ public class AiCompanionClient implements ClientModInitializer {
 
         // Client keybind that cycles the same mode. Default unbound to avoid conflicts — the user can
         // assign it in Controls, or just use /companion radar.
-        KeyBind radarKey = KeyBindingHelper.registerKeyBinding(new KeyBind(
-                "key.aicompanion.radar", InputUtil.Type.KEYSYM,
-                InputUtil.UNKNOWN_KEY.getKeyCode(), "key.category.aicompanion"));
+        KeyMapping radarKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.aicompanion.radar", InputConstants.Type.KEYSYM,
+                InputConstants.UNKNOWN_KEY.getKeyCode(), "key.category.aicompanion"));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            while (radarKey.wasPressed()) {
+            while (radarKey.consumeClick()) {
                 cycleRadarAndEcho();
             }
         });
@@ -115,32 +115,32 @@ public class AiCompanionClient implements ClientModInitializer {
     /** Flip the token usage panel and print the new state to the local chat. */
     private static void toggleTokenHudAndEcho() {
         boolean on = CompanionTokenHud.toggle();
-        var client = net.minecraft.client.MinecraftClient.getInstance();
+        var client = net.minecraft.client.Minecraft.getInstance();
         if (client.player != null) {
-            client.player.sendMessage(Text.literal("Companion token HUD: " + (on ? "ON" : "OFF")), false);
+            client.player.sendMessage(Component.literal("Companion token HUD: " + (on ? "ON" : "OFF")), false);
         }
     }
 
     /** Advance the status panel mode and print the new value to the local chat. */
     private static void cycleStatusHudAndEcho() {
         CompanionStatusHud.Mode next = CompanionStatusHud.cycleMode();
-        var client = net.minecraft.client.MinecraftClient.getInstance();
+        var client = net.minecraft.client.Minecraft.getInstance();
         if (client.player != null) {
             String hint = switch (next) {
                 case AUTO -> " (shown only when one is hurt or hungry)";
                 case ON -> " (always shown)";
                 case OFF -> " (hidden)";
             };
-            client.player.sendMessage(Text.literal("Companion status HUD: " + next + hint), false);
+            client.player.sendMessage(Component.literal("Companion status HUD: " + next + hint), false);
         }
     }
 
     /** Advance the radar mode and print the new value to the local chat. */
     private static void cycleRadarAndEcho() {
         CompanionRadarHud.Mode next = CompanionRadarHud.cycleMode();
-        var client = net.minecraft.client.MinecraftClient.getInstance();
+        var client = net.minecraft.client.Minecraft.getInstance();
         if (client.player != null) {
-            client.player.sendMessage(Text.literal("Companion radar: " + next), false);
+            client.player.sendMessage(Component.literal("Companion radar: " + next), false);
         }
     }
 }

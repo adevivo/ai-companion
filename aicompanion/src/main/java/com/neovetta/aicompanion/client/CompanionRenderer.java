@@ -1,14 +1,14 @@
 package com.neovetta.aicompanion.client;
 
 import com.neovetta.aicompanion.entity.CompanionEntity;
-import net.minecraft.client.render.VertexConsumerProvider;
-import net.minecraft.client.render.entity.EntityRendererFactory;
-import net.minecraft.client.render.entity.LivingEntityRenderer;
-import net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer;
-import net.minecraft.client.render.entity.model.EntityModelLayers;
-import net.minecraft.client.render.entity.model.PlayerEntityModel;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.renderer.entity.layers.ItemInHandLayer;
+import net.minecraft.client.model.geom.ModelLayers;
+import net.minecraft.client.model.player.PlayerModel;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.resources.Identifier;
 
 /**
  * Draws the companion with the vanilla player model. The held-item feature layer is required for
@@ -17,7 +17,7 @@ import net.minecraft.util.Identifier;
  * {@code config/aicompanion/skins/} (see {@link CompanionSkin}), falling back to the default Steve
  * texture.
  */
-public class CompanionRenderer extends LivingEntityRenderer<CompanionEntity, PlayerEntityModel<CompanionEntity>> {
+public class CompanionRenderer extends LivingEntityRenderer<CompanionEntity, PlayerModel<CompanionEntity>> {
 
     private static final Identifier DEFAULT_TEXTURE =
             new Identifier("minecraft", "textures/entity/player/wide/steve.png");
@@ -31,20 +31,20 @@ public class CompanionRenderer extends LivingEntityRenderer<CompanionEntity, Pla
      * round it: rendering is single-threaded, and every path that reads the field runs inside the
      * {@code super.render} call below.
      */
-    private final PlayerEntityModel<CompanionEntity> wideModel;
-    private final PlayerEntityModel<CompanionEntity> slimModel;
+    private final PlayerModel<CompanionEntity> wideModel;
+    private final PlayerModel<CompanionEntity> slimModel;
 
-    public CompanionRenderer(EntityRendererFactory.Context ctx) {
-        super(ctx, new PlayerEntityModel<>(ctx.getPart(EntityModelLayers.PLAYER), false), 0.5f);
+    public CompanionRenderer(EntityRendererProvider.Context ctx) {
+        super(ctx, new PlayerModel<>(ctx.bakeLayer(ModelLayers.PLAYER), false), 0.5f);
         this.wideModel = this.model;
-        this.slimModel = new PlayerEntityModel<>(ctx.getPart(EntityModelLayers.PLAYER_SLIM), true);
+        this.slimModel = new PlayerModel<>(ctx.bakeLayer(ModelLayers.PLAYER_SLIM), true);
         // Render whatever is in the main hand / offhand (axe, sword, etc.).
-        this.addFeature(new HeldItemFeatureRenderer<>(this, ctx.getHeldItemRenderer()));
+        this.addLayer(new ItemInHandLayer<>(this, ctx.getItemInHandRenderer()));
     }
 
     @Override
-    public void render(CompanionEntity entity, float yaw, float tickDelta, MatrixStack matrices,
-                       VertexConsumerProvider vertices, int light) {
+    public void render(CompanionEntity entity, float yaw, float tickDelta, PoseStack matrices,
+                       MultiBufferSource vertices, int light) {
         this.model = entity.isSkinSlim() ? this.slimModel : this.wideModel;
         super.render(entity, yaw, tickDelta, matrices, vertices, light);
     }

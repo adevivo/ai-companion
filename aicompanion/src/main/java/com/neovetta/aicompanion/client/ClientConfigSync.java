@@ -10,10 +10,10 @@ import java.nio.file.Files;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.network.PacketByteBuf;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
 
 /**
  * The two halves of configuration that have to cross the wire.
@@ -72,27 +72,27 @@ public final class ClientConfigSync {
      * otherwise stay silent about a problem that is still there.
      */
     public static void reloadOwnConfig() {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         try {
             CompanionConfig.reloadClientOwned();
             adris.altoclef.player2api.MemoryHealth.rearm();
             announce();
-            say(client, Text.literal("Your own companion settings reloaded from " + CompanionConfig.configPath())
-                    .formatted(Formatting.GREEN));
+            say(client, Component.literal("Your own companion settings reloaded from " + CompanionConfig.configPath())
+                    .formatted(ChatFormatting.GREEN));
         } catch (Throwable e) {
             AiCompanion.LOGGER.warn("[{}] could not reload this client's config", AiCompanion.MOD_ID, e);
-            say(client, Text.literal("Could not reload your config: " + e).formatted(Formatting.RED));
+            say(client, Component.literal("Could not reload your config: " + e).formatted(ChatFormatting.RED));
         }
         // Whatever the reload just found out, in the chat of the person who asked for it — the same
         // contract the server's reload has, pointed at the queue on this machine.
         for (adris.altoclef.player2api.MemoryHealth.Notice notice
                 : adris.altoclef.player2api.MemoryHealth.drain()) {
-            say(client, Text.literal("[memory] " + notice.text())
-                    .formatted(notice.problem() ? Formatting.RED : Formatting.GREEN));
+            say(client, Component.literal("[memory] " + notice.text())
+                    .formatted(notice.problem() ? ChatFormatting.RED : ChatFormatting.GREEN));
         }
     }
 
-    private static void say(MinecraftClient client, Text text) {
+    private static void say(Minecraft client, Component text) {
         client.execute(() -> {
             if (client.player != null) {
                 client.player.sendMessage(text, false);
@@ -134,7 +134,7 @@ public final class ClientConfigSync {
             JsonObject local = JsonParser
                     .parseString(Files.readString(CompanionConfig.configPath()))
                     .getAsJsonObject();
-            PacketByteBuf buf = PacketByteBufs.create();
+            FriendlyByteBuf buf = PacketByteBufs.create();
             buf.writeByteArray(ClientProfiles.buildAnnouncement(local).toString()
                     .getBytes(StandardCharsets.UTF_8));
             ClientPlayNetworking.send(AiCompanion.CLIENT_PROFILE, buf);

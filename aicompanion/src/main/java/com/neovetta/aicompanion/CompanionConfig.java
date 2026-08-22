@@ -18,10 +18,10 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.entity.Entity;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -322,13 +322,13 @@ public final class CompanionConfig {
         // going to conclude the setting does not work.
         //
         // Their rules go out on the same pass, so the Server tab stops showing stale values too.
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            server.getPlayerManager().sendCommandTree(player);
+        for (ServerPlayer player : server.getPlayerList().getPlayerList()) {
+            server.getPlayerList().sendCommandTree(player);
             AiCompanion.sendServerPolicy(player);
         }
         int updated = 0;
-        for (ServerWorld world : server.getWorlds()) {
-            for (Entity entity : world.iterateEntities()) {
+        for (ServerLevel world : server.getWorlds()) {
+            for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion) {
                     // Also the way back from an AI that switched itself off after repeated failures —
                     // the message it prints tells the owner to run exactly this command.

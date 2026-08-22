@@ -4,10 +4,10 @@ import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.SkinProfileResolver;
 import com.mojang.authlib.minecraft.MinecraftProfileTexture;
-import com.mojang.blaze3d.texture.NativeImage;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.util.Identifier;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.resources.Identifier;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -90,7 +90,7 @@ public final class CompanionSkin {
             // Arm width is not read from here: it travels separately as tracked data, decoded
             // server-side, so the metadata map this constructor takes can stay empty.
             MinecraftProfileTexture texture = new MinecraftProfileTexture(url.get(), Map.of());
-            Identifier id = MinecraftClient.getInstance().getSkinProvider()
+            Identifier id = Minecraft.getInstance().getSkinManager()
                     .loadSkin(texture, MinecraftProfileTexture.Type.SKIN);
             AiCompanion.LOGGER.info("[{}] loaded companion skin from {}", AiCompanion.MOD_ID, url.get());
             return id;
@@ -113,8 +113,8 @@ public final class CompanionSkin {
             // Identifier paths only allow [a-z0-9/._-]; sanitize the filename so any name is valid.
             String safe = file.toLowerCase().replaceAll("[^a-z0-9_.-]", "_");
             Identifier id = new Identifier(AiCompanion.MOD_ID, "skin/" + safe);
-            MinecraftClient.getInstance().getTextureManager().registerTexture(id,
-                    new NativeImageBackedTexture(image));
+            Minecraft.getInstance().getTextureManager().register(id,
+                    new DynamicTexture(image));
             AiCompanion.LOGGER.info("[{}] loaded companion skin from {}", AiCompanion.MOD_ID, path);
             return id;
         } catch (Exception e) {

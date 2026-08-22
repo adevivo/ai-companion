@@ -42,3 +42,4 @@ docs/brain-contract.md
 docs/spike-playerengine.md
 docs/spike-fakeplayer.md
 docs/plan-realistic-player-behaviors.md
+tools/__pycache__/

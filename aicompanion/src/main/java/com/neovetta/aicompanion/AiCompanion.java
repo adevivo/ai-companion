@@ -8,15 +8,15 @@ import com.neovetta.aicompanion.screen.CompanionScreens;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
-import net.minecraft.entity.EntityDimensions;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnGroup;
-import net.minecraft.entity.attribute.DefaultAttributeContainer;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.mob.ZombieEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
+import net.minecraft.world.entity.EntityDimensions;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.monster.zombie.Zombie;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +45,7 @@ public class AiCompanion implements ModInitializer {
         ServerPlayNetworking.registerGlobalReceiver(
                 adris.altoclef.player2api.brain.BrainWire.TURN_RESULT,
                 (server, player, handler, buf, sender) -> {
-                    java.util.UUID requestId = buf.readUuid();
+                    java.util.UUID requestId = buf.readUUID();
                     String reply = new String(buf.readByteArray(), java.nio.charset.StandardCharsets.UTF_8);
                     String error = buf.readString(512);
                     // Off the network thread and onto the server thread: delivering a result resumes
@@ -97,8 +97,8 @@ public class AiCompanion implements ModInitializer {
                             com.google.gson.JsonObject payload = com.google.gson.JsonParser
                                     .parseString(json).getAsJsonObject();
                             for (String problem : ClientProfiles.announce(player, payload)) {
-                                player.sendMessage(net.minecraft.text.Text.literal("[companion] " + problem)
-                                        .formatted(net.minecraft.util.Formatting.YELLOW), false);
+                                player.sendMessage(net.minecraft.text.Component.literal("[companion] " + problem)
+                                        .formatted(net.minecraft.util.ChatFormatting.YELLOW), false);
                             }
                         } catch (Throwable e) {
                             // A malformed announcement means a broken or hostile client, not a
@@ -106,9 +106,9 @@ public class AiCompanion implements ModInitializer {
                             // are told so, rather than finding /companion spawn mysteriously empty.
                             LOGGER.warn("[{}] unreadable roster announcement from {}", MOD_ID,
                                     player.getName().getString(), e);
-                            player.sendMessage(net.minecraft.text.Text.literal(
+                            player.sendMessage(net.minecraft.text.Component.literal(
                                     "[companion] your companion config could not be read — using this "
-                                            + "server's defaults").formatted(net.minecraft.util.Formatting.YELLOW),
+                                            + "server's defaults").formatted(net.minecraft.util.ChatFormatting.YELLOW),
                                     false);
                         }
                         sendServerPolicy(player);
@@ -123,9 +123,9 @@ public class AiCompanion implements ModInitializer {
      * chat routing all run here — but a config screen that showed the client's own copy of the block
      * would be showing values nobody reads, which is worse than showing nothing.
      */
-    public static void sendServerPolicy(net.minecraft.server.network.ServerPlayerEntity player) {
+    public static void sendServerPolicy(net.minecraft.server.level.ServerPlayer player) {
         try {
-            net.minecraft.network.PacketByteBuf out = PacketByteBufs.create();
+            net.minecraft.network.FriendlyByteBuf out = PacketByteBufs.create();
             out.writeByteArray(CompanionConfig.serverPolicyJson().toString()
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8));
             ServerPlayNetworking.send(player, SERVER_POLICY, out);
@@ -239,17 +239,17 @@ public class AiCompanion implements ModInitializer {
      * {@link CompanionEntity#applyCombatConfig()}, which has the further advantage of taking effect
      * on {@code /companion reload} instead of only at restart.
      */
-    public static DefaultAttributeContainer.Builder createCompanionAttributes() {
-        return ZombieEntity.createAttributes()
-                .add(EntityAttributes.GENERIC_ATTACK_SPEED, 4.0)
-                .add(EntityAttributes.GENERIC_ATTACK_DAMAGE, CombatConfig.DEFAULT_ATTACK_DAMAGE)
-                .add(EntityAttributes.GENERIC_ARMOR, CombatConfig.DEFAULT_ARMOR);
+    public static AttributeSupplier.Builder createCompanionAttributes() {
+        return Zombie.createAttributes()
+                .add(Attributes.ATTACK_SPEED, 4.0)
+                .add(Attributes.ATTACK_DAMAGE, CombatConfig.DEFAULT_ATTACK_DAMAGE)
+                .add(Attributes.ARMOR, CombatConfig.DEFAULT_ARMOR);
     }
 
     /** Our companion entity type — a player-sized LivingEntity, tracked like a nearby player. */
     public static final EntityType<CompanionEntity> COMPANION = FabricEntityTypeBuilder
             .<CompanionEntity>createLiving()
-            .spawnGroup(SpawnGroup.MISC)
+            .category(MobCategory.MISC)
             .entityFactory(CompanionEntity::new)
             .defaultAttributes(AiCompanion::createCompanionAttributes)
             .dimensions(EntityDimensions.changing(EntityType.PLAYER.getWidth(), EntityType.PLAYER.getHeight()))
@@ -265,7 +265,7 @@ public class AiCompanion implements ModInitializer {
         CompanionSkills.load();
         // Load sysadmin config first so LlmConfig (endpoint/model/sampling) + persona are set before spawn.
         CompanionConfig.load();
-        Registry.register(Registries.ENTITY_TYPE, id("companion"), COMPANION);
+        Registry.register(BuiltInRegistries.ENTITY_TYPE, id("companion"), COMPANION);
         FabricDefaultAttributeRegistry.register(COMPANION, createCompanionAttributes());
         CompanionScreens.register();
         CompanionCommands.register();
