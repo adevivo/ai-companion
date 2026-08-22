@@ -3,6 +3,7 @@ package adris.altoclef.player2api;
 import adris.altoclef.player2api.status.ObjectStatus;
 import adris.altoclef.player2api.utils.Utils;
 import baritone.utils.DirUtil;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -245,21 +246,38 @@ public class ConversationHistory {
       }
    }
 
+   /**
+    * Content that is safe to store, because a null one is not.
+    *
+    * <p>⚠️ {@code JsonObject.addProperty(key, (String) null)} does not skip the key — it writes
+    * {@link com.google.gson.JsonNull}, and {@code JsonNull.getAsString()} throws. So a single null
+    * reply poisons the history: it is stored on one turn and thrown by whoever reads it on a LATER
+    * turn, which is how this presented — a crash in the server tick loop with nothing wrong in the
+    * turn that crashed. It also goes out on the wire as {@code "content": null}, which some
+    * OpenAI-compatible providers reject outright.
+    *
+    * <p>Empty rather than dropped: the role still belongs in the transcript. A command-only turn is
+    * a companion that acted without speaking, not a companion that said nothing at all.
+    */
+   private static String safeContent(String text) {
+      return text == null ? "" : text;
+   }
+
    public void addUserMessage(String userText, Player2APIService player2apiService) {
       JsonObject objectToAdd = new JsonObject();
       objectToAdd.addProperty("role", "user");
-      objectToAdd.addProperty("content", userText);
+      objectToAdd.addProperty("content", safeContent(userText));
       this.addHistory(objectToAdd, false, player2apiService);
    }
 
    public void setBaseSystemPrompt(String newPrompt) {
       if (!this.conversationHistory.isEmpty()
             && "system".equals(this.conversationHistory.get(0).get("role").getAsString())) {
-         this.conversationHistory.get(0).addProperty("content", newPrompt);
+         this.conversationHistory.get(0).addProperty("content", safeContent(newPrompt));
       } else {
          JsonObject systemMessage = new JsonObject();
          systemMessage.addProperty("role", "system");
-         systemMessage.addProperty("content", newPrompt);
+         systemMessage.addProperty("content", safeContent(newPrompt));
          this.conversationHistory.add(0, systemMessage);
       }
    }
@@ -267,14 +285,14 @@ public class ConversationHistory {
    public void addSystemMessage(String systemText, Player2APIService player2apiService) {
       JsonObject objectToAdd = new JsonObject();
       objectToAdd.addProperty("role", "system");
-      objectToAdd.addProperty("content", systemText);
+      objectToAdd.addProperty("content", safeContent(systemText));
       this.addHistory(objectToAdd, false, player2apiService);
    }
 
    public void addAssistantMessage(String messageText, Player2APIService player2apiService) {
       JsonObject objectToAdd = new JsonObject();
       objectToAdd.addProperty("role", "assistant");
-      objectToAdd.addProperty("content", messageText);
+      objectToAdd.addProperty("content", safeContent(messageText));
       this.addHistory(objectToAdd, true, player2apiService);
    }
 
@@ -461,13 +479,25 @@ public class ConversationHistory {
       sb.append("ConversationHistory {\n");
 
       for (JsonObject message : this.conversationHistory) {
-         String role = message.has("role") ? message.get("role").getAsString() : "unknown";
-         String content = message.has("content") ? message.get("content").getAsString() : "";
-         sb.append("  [").append(role).append("] ").append(content).append("\n");
+         // has() is true for a key whose value is JsonNull, and getAsString() throws on it — see
+         // safeContent. This runs inside a LOGGER.info on the server thread, so reading it
+         // unsafely turned a diagnostic into "Exception in server tick loop" and took the world
+         // down. A dump of the history is never worth a crash; unreadable parts say so instead.
+         sb.append("  [").append(str(message, "role", "unknown")).append("] ")
+               .append(str(message, "content", "")).append("\n");
       }
 
       sb.append("}");
       return sb.toString();
+   }
+
+   /** A field as text, tolerating absent, null, and non-string values alike. For logging only. */
+   private static String str(JsonObject obj, String key, String fallback) {
+      if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
+         return fallback;
+      }
+      JsonElement value = obj.get(key);
+      return value.isJsonPrimitive() ? value.getAsString() : value.toString();
    }
 
    public void clear() {

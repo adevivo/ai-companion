@@ -51,7 +51,7 @@ dependencies {
     // debugging sessions, once as a runtime NoSuchMethodError that vanished into a swallowed
     // Error. An exact version fails loudly at compile time instead. Bump this together with
     // ../engine/gradle.properties.
-    include(modImplementation("libs:PlayerEngine:1.1.16"))
+    include(modImplementation("libs:PlayerEngine:1.1.17"))
 
     // The memory engine from ../../ai-companion-memory (built there, staged into libs/). Plain
     // Java 17 + Gson, no Minecraft and no Fabric, so Loom wraps the non-mod jar for JiJ. Gson is

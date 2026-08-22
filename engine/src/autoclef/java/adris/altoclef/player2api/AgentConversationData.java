@@ -241,7 +241,13 @@ public class AgentConversationData {
                     llmMessage, command);
             try {
                 if (llmMessage != null || command != null) {
-                    mod.getAIPersistantData().addAssistantMessage(llmMessage, mod.getPlayer2APIService());
+                    // ⚠️ The condition is an OR, so a command with no message reaches here with
+                    // llmMessage still null — which is an ordinary turn, a companion acting without
+                    // speaking, and exactly what a build issues dozens of. Storing that null wrote a
+                    // JsonNull into the transcript that killed the NEXT turn's logging, and with it
+                    // the server tick loop. Store the absence as an empty message instead.
+                    mod.getAIPersistantData().addAssistantMessage(
+                            llmMessage == null ? "" : llmMessage, mod.getPlayer2APIService());
                     onCharacterEvent.accept(new Event.CharacterMessage(llmMessage, command, this));
                     // Learn from the exchange only after the player has their answer, so a slow or dead
                     // extractor can never delay a reply. Returns immediately and does its own work

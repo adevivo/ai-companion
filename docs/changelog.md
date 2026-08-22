@@ -5,6 +5,40 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.3.1 — A silent turn no longer crashes the world
+
+Bundles PlayerEngine 1.1.17. One fix, and it is the kind worth shipping on its own.
+
+### A companion that acted without speaking took the server down
+
+A build issues dozens of turns that carry a command and no chat line — the companion is working, not
+talking. The reply for one of those has a `command` and no `message`, and the guard that decides
+whether to record it is an OR, so it recorded the missing message as a null. Gson does not skip a null
+here: `addProperty("content", null)` stores a JSON null, and reading one as text throws.
+
+Nothing failed at that point. The next turn logged the conversation history, `toString()` read that
+stored null, and `UnsupportedOperationException: JsonNull` came out of a logging call **inside the
+server tick loop** — so the world went down on a turn where nothing was wrong, because of one stored
+on a turn that also looked fine. Observed 2026-08-22 in singleplayer, immediately after
+`Ran out of birch_planks partway through building`.
+
+Fixed in three places, because any one of them alone would have prevented it and a future writer that
+forgets should not be able to bring it back:
+
+- A command-only turn now stores an empty message. A companion that acted without speaking is an
+  ordinary turn, not a missing one, and the role stays in the transcript.
+- No adder can write a JSON null into history at all. Besides crashing readers, it goes out on the
+  wire as `"content": null`, which some OpenAI-compatible providers reject.
+- `toString()` tolerates one anyway. It is a logging helper on the server thread; a dump of the
+  history is never worth a crash.
+
+Five regression tests cover it, verified to fail against the old code.
+
+**Nothing was written to disk**, so no save is carrying a bad record and no world needs repairing —
+the poisoned entry lived in memory for the rest of a session and went away with it.
+
+---
+
 ## 0.3.0 — It remembers, it thinks on your machine, and it works for everyone on the server
 
 Bundles PlayerEngine 1.1.16. Self-contained jar as always — don't install a standalone engine
