@@ -1,16 +1,16 @@
 package com.neovetta.aicompanion;
 
-import adris.altoclef.player2api.BehaviorConfig;
-import adris.altoclef.player2api.Character;
-import adris.altoclef.player2api.EmbeddingsConfig;
-import adris.altoclef.player2api.LlmConfig;
-import adris.altoclef.player2api.MemoryConfig;
-import adris.altoclef.player2api.Prompts;
-import adris.altoclef.player2api.ServerPolicy;
-import adris.altoclef.player2api.TtsConfig;
-import adris.altoclef.player2api.manager.ConversationManager;
-import adris.altoclef.player2api.manager.TTSManager;
-import adris.altoclef.AltoClefController;
+import com.neovetta.aicompanion.core.BehaviorConfig;
+import com.player2.playerengine.player2api.Character;
+import com.neovetta.aicompanion.core.EmbeddingsConfig;
+import com.neovetta.aicompanion.core.LlmConfig;
+import com.neovetta.aicompanion.core.MemoryConfig;
+import com.player2.playerengine.player2api.Prompts;
+import com.neovetta.aicompanion.core.ServerPolicy;
+import com.neovetta.aicompanion.core.TtsConfig;
+import com.player2.playerengine.player2api.manager.ConversationManager;
+import com.player2.playerengine.player2api.manager.TTSManager;
+import com.player2.playerengine.PlayerEngineController;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
@@ -301,14 +301,14 @@ public final class CompanionConfig {
         CompanionSkills.reload(); // pick up edited/added .md files before apply() re-advertises them
         load();
         // Build (or retry) the memory index. /companion reload updates the config statics but never
-        // constructs a new AltoClefController, so without this, turning memory on and reloading
+        // constructs a new PlayerEngineController, so without this, turning memory on and reloading
         // would appear to do nothing at all. Idempotent once it has succeeded, and a no-op when
         // memory is off.
         // Before warm(), not after: reload is "I have fixed it, try again", and warm() is what
         // re-checks the config and stages a fresh verdict. Clearing the latches afterwards would
         // throw that verdict away.
-        adris.altoclef.player2api.MemoryHealth.rearm();
-        adris.altoclef.player2api.CompanionMemory.warm(server);
+        com.neovetta.aicompanion.core.MemoryHealth.rearm();
+        com.player2.playerengine.player2api.CompanionMemory.warm(server);
         // A player who just started their Kokoro container is in the TTS back-off until it expires.
         // Reload is the obvious "I have fixed it, try again" signal, so honour it as one.
         TTSManager.clearUnavailable();
@@ -323,11 +323,11 @@ public final class CompanionConfig {
         //
         // Their rules go out on the same pass, so the Server tab stops showing stale values too.
         for (ServerPlayer player : server.getPlayerList().getPlayerList()) {
-            server.getPlayerList().sendCommandTree(player);
+            server.getPlayerList().sendPlayerPermissionLevel(player);
             AiCompanion.sendServerPolicy(player);
         }
         int updated = 0;
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion) {
                     // Also the way back from an AI that switched itself off after repeated failures —
@@ -340,7 +340,7 @@ public final class CompanionConfig {
                     // Retune combat without a restart. Base values, so this is idempotent across
                     // repeated reloads and equipment modifiers still stack on top.
                     companion.applyCombatConfig();
-                    AltoClefController ctrl = companion.getController();
+                    PlayerEngineController ctrl = companion.getController();
                     if (ctrl != null && ctrl.getAIPersistantData() != null) {
                         ctrl.getAIPersistantData().updateSystemPrompt();
                         updated++;

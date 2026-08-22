@@ -1,5 +1,9 @@
 package com.neovetta.aicompanion.client;
 
+import dev.architectury.networking.NetworkManager;
+import io.netty.buffer.Unpooled;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neovetta.aicompanion.AiCompanion;
@@ -8,8 +12,6 @@ import com.neovetta.aicompanion.CompanionConfig;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -44,8 +46,8 @@ public final class ClientConfigSync {
         // they were this one's — the failure mode a stale cache always has.
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> serverPolicy = null);
 
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.SERVER_POLICY,
-                (client, handler, buf, responseSender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.SERVER_POLICY,
+                (buf, context) -> {
                     String json = new String(buf.readByteArray(), StandardCharsets.UTF_8);
                     try {
                         serverPolicy = JsonParser.parseString(json).getAsJsonObject();
@@ -75,27 +77,27 @@ public final class ClientConfigSync {
         Minecraft client = Minecraft.getInstance();
         try {
             CompanionConfig.reloadClientOwned();
-            adris.altoclef.player2api.MemoryHealth.rearm();
+            com.neovetta.aicompanion.core.MemoryHealth.rearm();
             announce();
             say(client, Component.literal("Your own companion settings reloaded from " + CompanionConfig.configPath())
-                    .formatted(ChatFormatting.GREEN));
+                    .withStyle(ChatFormatting.GREEN));
         } catch (Throwable e) {
             AiCompanion.LOGGER.warn("[{}] could not reload this client's config", AiCompanion.MOD_ID, e);
-            say(client, Component.literal("Could not reload your config: " + e).formatted(ChatFormatting.RED));
+            say(client, Component.literal("Could not reload your config: " + e).withStyle(ChatFormatting.RED));
         }
         // Whatever the reload just found out, in the chat of the person who asked for it — the same
         // contract the server's reload has, pointed at the queue on this machine.
-        for (adris.altoclef.player2api.MemoryHealth.Notice notice
-                : adris.altoclef.player2api.MemoryHealth.drain()) {
+        for (com.neovetta.aicompanion.core.MemoryHealth.Notice notice
+                : com.neovetta.aicompanion.core.MemoryHealth.drain()) {
             say(client, Component.literal("[memory] " + notice.text())
-                    .formatted(notice.problem() ? ChatFormatting.RED : ChatFormatting.GREEN));
+                    .withStyle(notice.problem() ? ChatFormatting.RED : ChatFormatting.GREEN));
         }
     }
 
     private static void say(Minecraft client, Component text) {
         client.execute(() -> {
             if (client.player != null) {
-                client.player.sendMessage(text, false);
+                client.player.displayClientMessage(text, false);
             }
         });
     }
@@ -128,16 +130,17 @@ public final class ClientConfigSync {
             // loaded at startup, which may since have been edited and saved by the config screen.
             // Nothing to announce to, or nothing that would listen. Not an error: singleplayer and
             // a vanilla server both land here, and both are ordinary.
-            if (!ClientPlayNetworking.canSend(AiCompanion.CLIENT_PROFILE)) {
+            if (!NetworkManager.canServerReceive(AiCompanion.CLIENT_PROFILE)) {
                 return;
             }
             JsonObject local = JsonParser
                     .parseString(Files.readString(CompanionConfig.configPath()))
                     .getAsJsonObject();
-            FriendlyByteBuf buf = PacketByteBufs.create();
+            RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(),
+                    Minecraft.getInstance().level.registryAccess());
             buf.writeByteArray(ClientProfiles.buildAnnouncement(local).toString()
                     .getBytes(StandardCharsets.UTF_8));
-            ClientPlayNetworking.send(AiCompanion.CLIENT_PROFILE, buf);
+            NetworkManager.sendToServer(AiCompanion.CLIENT_PROFILE, buf);
         } catch (Throwable e) {
             // Never fatal: without this the player simply gets the server's own roster, which is
             // exactly what happened before any of this existed.

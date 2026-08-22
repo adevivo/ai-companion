@@ -1,8 +1,9 @@
 package com.neovetta.aicompanion;
 
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import adris.altoclef.player2api.manager.ConversationManager;
+import dev.architectury.networking.NetworkManager;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import com.neovetta.aicompanion.screen.CompanionScreens;
 import net.fabricmc.api.ModInitializer;
@@ -36,21 +37,25 @@ public class AiCompanion implements ModInitializer {
      * be turned on at runtime without anyone reconnecting.
      */
     private static void registerBrainReceivers() {
-        ServerPlayNetworking.registerGlobalReceiver(
-                adris.altoclef.player2api.brain.BrainWire.HELLO,
-                (server, player, handler, buf, sender) ->
-                        adris.altoclef.player2api.brain.NetworkBrainTransport
-                                .markCapable(player.getUuid()));
+        NetworkManager.registerReceiver(NetworkManager.Side.C2S,
+                com.player2.playerengine.player2api.brain.BrainWire.HELLO,
+                (buf, context) -> {
+                    java.util.UUID id = context.getPlayer().getUUID();
+                    context.queue(() -> com.player2.playerengine.player2api.brain.NetworkBrainTransport
+                            .markCapable(id));
+                });
 
-        ServerPlayNetworking.registerGlobalReceiver(
-                adris.altoclef.player2api.brain.BrainWire.TURN_RESULT,
-                (server, player, handler, buf, sender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.C2S,
+                com.player2.playerengine.player2api.brain.BrainWire.TURN_RESULT,
+                (buf, context) -> {
+                    // Read here, on the network thread. The buffer is released once this returns, so
+                    // the queued work below closes over values and never over the buf.
                     java.util.UUID requestId = buf.readUUID();
                     String reply = new String(buf.readByteArray(), java.nio.charset.StandardCharsets.UTF_8);
-                    String error = buf.readString(512);
-                    // Off the network thread and onto the server thread: delivering a result resumes
-                    // a conversation turn, which touches companion state.
-                    server.execute(() -> adris.altoclef.player2api.brain.NetworkBrainTransport
+                    String error = buf.readUtf(512);
+                    // Onto the server thread: delivering a result resumes a conversation turn, which
+                    // touches companion state.
+                    context.queue(() -> com.player2.playerengine.player2api.brain.NetworkBrainTransport
                             .deliver(requestId, reply, error));
                 });
 
@@ -58,8 +63,8 @@ public class AiCompanion implements ModInitializer {
         // the same companion is reused on reconnect — so it would look permanently mute, not late.
         net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.DISCONNECT.register(
                 (handler, server) -> {
-                    java.util.UUID id = handler.getPlayer().getUuid();
-                    adris.altoclef.player2api.brain.NetworkBrainTransport.forget(id);
+                    java.util.UUID id = handler.getPlayer().getUUID();
+                    com.player2.playerengine.player2api.brain.NetworkBrainTransport.forget(id);
                     // Their roster and trigger prefix leave with them. Keeping either would let a
                     // player who has gone go on shaping a server they are no longer connected to.
                     ClientProfiles.forget(id);
@@ -86,19 +91,21 @@ public class AiCompanion implements ModInitializer {
      * server spawns them; an operator owns the rules but the player needs to see them.
      */
     private static void registerConfigReceivers() {
-        ServerPlayNetworking.registerGlobalReceiver(CLIENT_PROFILE,
-                (server, player, handler, buf, sender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.C2S, CLIENT_PROFILE,
+                (buf, context) -> {
                     String json = new String(buf.readByteArray(),
                             java.nio.charset.StandardCharsets.UTF_8);
+                    net.minecraft.server.level.ServerPlayer player =
+                            (net.minecraft.server.level.ServerPlayer) context.getPlayer();
                     // Onto the server thread: this reads the player list for the impersonation check
                     // and talks to the player, neither of which is safe off it.
-                    server.execute(() -> {
+                    context.queue(() -> {
                         try {
                             com.google.gson.JsonObject payload = com.google.gson.JsonParser
                                     .parseString(json).getAsJsonObject();
                             for (String problem : ClientProfiles.announce(player, payload)) {
-                                player.sendMessage(net.minecraft.text.Component.literal("[companion] " + problem)
-                                        .formatted(net.minecraft.util.ChatFormatting.YELLOW), false);
+                                player.sendMessage(net.minecraft.network.chat.Component.literal("[companion] " + problem)
+                                        .withStyle(net.minecraft.ChatFormatting.YELLOW), false);
                             }
                         } catch (Throwable e) {
                             // A malformed announcement means a broken or hostile client, not a
@@ -106,14 +113,38 @@ public class AiCompanion implements ModInitializer {
                             // are told so, rather than finding /companion spawn mysteriously empty.
                             LOGGER.warn("[{}] unreadable roster announcement from {}", MOD_ID,
                                     player.getName().getString(), e);
-                            player.sendMessage(net.minecraft.text.Component.literal(
+                            player.sendMessage(net.minecraft.network.chat.Component.literal(
                                     "[companion] your companion config could not be read — using this "
-                                            + "server's defaults").formatted(net.minecraft.util.ChatFormatting.YELLOW),
+                                            + "server's defaults").withStyle(net.minecraft.ChatFormatting.YELLOW),
                                     false);
                         }
                         sendServerPolicy(player);
                     });
                 });
+    }
+
+    /**
+     * Declare the channels this side only ever sends on, so its packets carry a real payload type.
+     *
+     * <p>Architectury learns a channel's payload type as a side effect of registering a
+     * <em>receiver</em> for it, and the receivers for every channel below live on the client. In
+     * single player that is enough, because both sides share a JVM and the client's registration
+     * populates the same map. A dedicated server never runs client init, so without this its
+     * lookup finds nothing and every packet on these channels goes out typed {@code null} — no
+     * exception, no log line, just a HUD that never updates and a config screen that never opens.
+     *
+     * <p>The mirror case needs no call and must not get one: {@link #CLIENT_PROFILE},
+     * {@code BrainWire.HELLO} and {@code BrainWire.TURN_RESULT} are C2S, and the client learns
+     * their types because {@link #registerBrainReceivers()} and {@link #registerConfigReceivers()}
+     * run from this entrypoint, which Fabric runs on the client too. Moving either behind a
+     * dedicated-server check would break sending from the client, at a distance.
+     */
+    private static void registerServerToClientChannels() {
+        for (Identifier channel : new Identifier[]{
+                SERVER_POLICY, RADAR_UPDATE, RADAR_TOGGLE, TOKEN_USAGE, TOKEN_HUD_TOGGLE,
+                STATUS_HUD_TOGGLE, OPEN_CONFIG_SCREEN, RELOAD_CLIENT_CONFIG}) {
+            NetworkManager.registerS2CPayloadType(channel);
+        }
     }
 
     /**
@@ -125,10 +156,11 @@ public class AiCompanion implements ModInitializer {
      */
     public static void sendServerPolicy(net.minecraft.server.level.ServerPlayer player) {
         try {
-            net.minecraft.network.FriendlyByteBuf out = PacketByteBufs.create();
+            RegistryFriendlyByteBuf out =
+                    new RegistryFriendlyByteBuf(Unpooled.buffer(), player.registryAccess());
             out.writeByteArray(CompanionConfig.serverPolicyJson().toString()
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            ServerPlayNetworking.send(player, SERVER_POLICY, out);
+            NetworkManager.sendToPlayer(player, SERVER_POLICY, out);
         } catch (Throwable e) {
             LOGGER.warn("[{}] could not send the server policy to {}", MOD_ID,
                     player.getName().getString(), e);
@@ -136,7 +168,7 @@ public class AiCompanion implements ModInitializer {
     }
 
     public static Identifier id(String path) {
-        return new Identifier(MOD_ID, path);
+        return Identifier.fromNamespaceAndPath(MOD_ID, path);
     }
 
     /**
@@ -252,7 +284,7 @@ public class AiCompanion implements ModInitializer {
             .category(MobCategory.MISC)
             .entityFactory(CompanionEntity::new)
             .defaultAttributes(AiCompanion::createCompanionAttributes)
-            .dimensions(EntityDimensions.changing(EntityType.PLAYER.getWidth(), EntityType.PLAYER.getHeight()))
+            .dimensions(EntityDimensions.scalable(EntityType.PLAYER.getWidth(), EntityType.PLAYER.getHeight()))
             .trackRangeBlocks(64)
             .trackedUpdateRate(1)
             .forceTrackedVelocityUpdates(true)
@@ -273,6 +305,7 @@ public class AiCompanion implements ModInitializer {
         ConversationManager.init();
         registerBrainReceivers();
         registerConfigReceivers();
+        registerServerToClientChannels();
         LOGGER.info("[{}] initialized — entity {}, /companion command, chat hook", MOD_ID, id("companion"));
     }
 }

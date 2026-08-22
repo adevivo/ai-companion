@@ -1,6 +1,11 @@
 pluginManagement {
     repositories {
         maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+        maven { name = 'Architectury'; url = 'https://maven.architectury.dev/' }
+        // Architectury Loom resolves mcinjector and DiffPatch from Forge's maven even when the
+        // build targets Fabric alone. Without this the plugin cannot resolve at all, and the
+        // failure reads as a broken repository rather than a missing one.
+        maven { name = 'Forge'; url = 'https://files.minecraftforge.net/maven/' }
         gradlePluginPortal()
         mavenCentral()
     }

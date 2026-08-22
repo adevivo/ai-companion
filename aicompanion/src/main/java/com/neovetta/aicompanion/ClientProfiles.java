@@ -1,8 +1,8 @@
 package com.neovetta.aicompanion;
 
-import adris.altoclef.player2api.PlayerPreferences;
-import adris.altoclef.player2api.RosterGuard;
-import adris.altoclef.player2api.ServerPolicy;
+import com.neovetta.aicompanion.core.PlayerPreferences;
+import com.neovetta.aicompanion.core.RosterGuard;
+import com.neovetta.aicompanion.core.ServerPolicy;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -57,7 +57,7 @@ public final class ClientProfiles {
         if (player == null || payload == null) {
             return List.of();
         }
-        UUID id = player.getUuid();
+        UUID id = player.getUUID();
 
         // Their prefix travels with their roster because it has the same shape of problem: it is a
         // client-owned setting that only the server can act on, since chat routing is server-side.

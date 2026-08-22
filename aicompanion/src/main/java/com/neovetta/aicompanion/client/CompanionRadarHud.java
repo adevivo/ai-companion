@@ -95,12 +95,12 @@ public final class CompanionRadarHud {
         }
         Minecraft client = Minecraft.getInstance();
         LocalPlayer player = client.player;
-        if (player == null || client.world == null || client.options.hideGui) {
+        if (player == null || client.level == null || client.options.hideGui) {
             return;
         }
 
         long now = System.currentTimeMillis();
-        Identifier here = client.world.getRegistryKey().getValue();
+        Identifier here = client.level.dimension().getValue();
 
         // Decide what to draw before drawing any of it: the bar itself is shared, so it must not be
         // painted at all if every companion turns out to be hidden by AUTO or aged out.
@@ -137,7 +137,7 @@ public final class CompanionRadarHud {
         int barLeft = centerX - BAR_WIDTH / 2;
         int barRight = barLeft + BAR_WIDTH;
         int barY = screenH - BAR_BOTTOM_OFFSET;
-        Font tr = client.textRenderer;
+        Font tr = client.font;
 
         // Bar background + border + center tick.
         ctx.fill(barLeft - 1, barY - 1, barRight + 1, barY + BAR_HEIGHT + 1, (allDim ? 0x40 : 0x80) << 24);
@@ -165,7 +165,7 @@ public final class CompanionRadarHud {
             // Bearing relative to where the player is facing (MC yaw convention).
             double angleTo = Math.toDegrees(Math.atan2(snap.z() - player.getZ(),
                     snap.x() - player.getX())) - 90.0;
-            double rel = Mth.wrapDegrees(angleTo - player.getYaw());
+            double rel = Mth.wrapDegrees(angleTo - player.getYRot());
             if (rel < -90.0) {
                 // Behind and to the left — chevron at the left edge meaning "turn left".
                 ctx.drawString(tr, Component.literal("«"), barLeft - 7, barY - 2, markerColor);

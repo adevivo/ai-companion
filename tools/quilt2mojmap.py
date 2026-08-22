@@ -223,13 +223,31 @@ def mask_qualified(src):
     return "".join(out)
 
 
-def substitute(src, pattern, resolve, masker=mask):
-    """Match against the masked text, splice into the real text."""
-    edits = [(m.start(), m.end(), r) for m in pattern.finditer(masker(src))
-             if (r := resolve(m)) is not None]
-    for start, end, repl in reversed(edits):
+def rewrite(src, passes):
+    """Apply every pass to the *original* text at once, then splice.
+
+    Running the passes one after another is wrong, and wrong in a way that compiles. Quilt's
+    `PlayerInventory` is Mojmap's `Inventory`, and Quilt's `Inventory` is Mojmap's `Container`, so
+    a qualified-name pass that produces `...player.Inventory` hands a perfectly good Mojmap name to
+    a later simple-name pass, which recognises it as a Quilt name and turns it into
+    `...player.Container` — a real type, in the right package, and not the one that was meant.
+
+    So: every pass matches the text as it arrived, earlier passes win any overlap, and the edits
+    are spliced once. A name this pass produced is never a name the next pass reads.
+    """
+    edits, counts = [], collections.Counter()
+    for rank, (pattern, resolve, masker) in enumerate(passes):
+        for m in pattern.finditer(masker(src)):
+            repl = resolve(m)
+            if repl is None or repl == m.group(0):
+                continue
+            if any(m.start() < e and m.end() > s for s, e, _ in edits):
+                continue
+            edits.append((m.start(), m.end(), repl))
+            counts[rank] += 1
+    for start, end, repl in sorted(edits, reverse=True):
         src = src[:start] + repl + src[end:]
-    return src, len(edits)
+    return src, counts
 
 
 def main():
@@ -281,7 +299,7 @@ def main():
     print(f"  class names AMBIGUOUS    : {len(cls_ambig)}  (skipped)")
     print(f"  members renamed          : {len(mem)}")
     print(f"  member names AMBIGUOUS   : {len(mem_ambig)}  (skipped)")
-    print(f"  members the tree declares itself, held out: {len(mem_local)}")
+    print(f"  members held out (ours, or a dependency's): {len(mem_local)}")
 
     # What the source actually asks for, and what has no answer — the genuine redesigns.
     wanted, unmapped = set(), set()
@@ -304,6 +322,26 @@ def main():
     # and it is renamed there — Quilt's `InputUtil` is Mojmap's `InputConstants`. Anything outside
     # the map resolves to None and is left alone, so a wider pattern costs nothing.
     qual_re = re.compile(r"\b((?:net\.minecraft|com\.mojang)(?:\.\w+)+)\b")
+    by_length = sorted(fqn, key=len, reverse=True)
+
+    def qualified(m):
+        """Longest matching prefix, so a trailing member access rides along.
+
+        The match is greedy, so `net.minecraft.text.Text.literal` arrives whole and is not itself a
+        class. Looking only for an exact hit leaves it untranslated, the simple-name pass then
+        rewrites `Text` on its own, and the result is `net.minecraft.text.Component` — a class name
+        that does not exist, in a package that does not either. Resolve the type prefix and keep
+        whatever followed it.
+        """
+        s = m.group(1)
+        if s in fqn:
+            return fqn[s]
+        if s in inner:
+            return inner[s]
+        for k in by_length:
+            if s.startswith(k + "."):
+                return fqn[k] + s[len(k):]
+        return None
     ref_re = re.compile(r"\b([A-Z]\w*)\b")
     mem_re = re.compile(r"(?<=\.)(\w+)\b")
 
@@ -321,24 +359,24 @@ def main():
             print(f"  {c:4}  {k:32} -> {mem[k]}")
         return
 
-    files = n_qual = n_ref = n_mem = 0
+    # Order is priority: a qualified name is rewritten whole, and the simple name inside it is not
+    # then reconsidered on its own. See `rewrite`.
+    passes = [(qual_re, qualified, mask),
+              (ref_re, lambda m: simple_ok.get(m.group(1)), mask)]
+    if a.members:
+        passes.append((mem_re, lambda m: mem.get(m.group(1)), mask_qualified))
+
+    files, totals = 0, collections.Counter()
     for p in root.rglob("*.java"):
-        text = original = p.read_text(errors="replace")
-
-        text, c = substitute(text, qual_re, lambda m: fqn.get(m.group(1)) or inner.get(m.group(1)))
-        n_qual += c
-        text, c = substitute(text, ref_re, lambda m: simple_ok.get(m.group(1)))
-        n_ref += c
-        if a.members:
-            text, c = substitute(text, mem_re, lambda m: mem.get(m.group(1)), mask_qualified)
-            n_mem += c
-
+        original = p.read_text(errors="replace")
+        text, counts = rewrite(original, passes)
+        totals.update(counts)
         if text != original:
             p.write_text(text)
             files += 1
 
-    print(f"\nrewrote {files} files: {n_qual} qualified names, {n_ref} type references, "
-          f"{n_mem} members")
+    print(f"\nrewrote {files} files: {totals[0]} qualified names, {totals[1]} type references, "
+          f"{totals[2]} members")
 
 
 if __name__ == "__main__":

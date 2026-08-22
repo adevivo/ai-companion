@@ -1,12 +1,15 @@
 package com.neovetta.aicompanion.client;
 
-import adris.altoclef.player2api.CompanionMemory;
-import adris.altoclef.player2api.ConversationHistory;
-import adris.altoclef.player2api.EmbeddingsConfig;
-import adris.altoclef.player2api.LlmConfig;
-import adris.altoclef.player2api.MemoryLearner;
-import adris.altoclef.player2api.Player2APIService;
-import adris.altoclef.player2api.brain.BrainWire;
+import dev.architectury.networking.NetworkManager;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import com.player2.playerengine.player2api.CompanionMemory;
+import com.player2.playerengine.player2api.ConversationHistory;
+import com.neovetta.aicompanion.core.EmbeddingsConfig;
+import com.neovetta.aicompanion.core.LlmConfig;
+import com.player2.playerengine.player2api.MemoryLearner;
+import com.player2.playerengine.player2api.Player2APIService;
+import com.player2.playerengine.player2api.brain.BrainWire;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -17,8 +20,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 
@@ -50,7 +51,7 @@ public final class ClientBrain {
      * Whether the server has actually asked this client to think, at least once this session.
      *
      * <p>⚠️ The only honest answer to "does the brain run here?", and it cannot be read from config.
-     * {@code llm.clientBrain} in THIS file is a wish; {@link adris.altoclef.player2api.brain.NetworkBrainTransport#canThink}
+     * {@code llm.clientBrain} in THIS file is a wish; {@link com.player2.playerengine.player2api.brain.NetworkBrainTransport#canThink}
      * evaluates the SERVER's copy, so a client with the switch off can still be the machine doing
      * every turn — which is exactly what a session on 2026-08-22 logged, reporting "brain=server" on
      * the client that was running the brain and holding the corpus. A diagnostic that confidently
@@ -66,12 +67,13 @@ public final class ClientBrain {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             // Per connection: the previous server may have delegated and this one may not.
             markThinkingHere(false);
-            FriendlyByteBuf buf = PacketByteBufs.create();
-            ClientPlayNetworking.send(BrainWire.HELLO, buf);
+            RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(),
+                    handler.registryAccess());
+            NetworkManager.sendToServer(BrainWire.HELLO, buf);
         });
 
-        ClientPlayNetworking.registerGlobalReceiver(BrainWire.TURN_REQUEST,
-                (client, handler, buf, responseSender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, BrainWire.TURN_REQUEST,
+                (buf, context) -> {
                     markThinkingHere(true);
                     UUID requestId = buf.readUUID();
                     buf.readUUID(); // companion uuid — not needed here, the server tracks the turn
@@ -85,8 +87,8 @@ public final class ClientBrain {
         // is printed from what was actually stored, and printed here — the server cannot report on a
         // write it did not make, and reporting what was submitted would claim success even when the
         // store kept an older record and dropped this one.
-        ClientPlayNetworking.registerGlobalReceiver(BrainWire.MEMORY_REMEMBER,
-                (client, handler, buf, responseSender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, BrainWire.MEMORY_REMEMBER,
+                (buf, context) -> {
                     JsonObject request = BrainWire.readRemember(buf);
                     CompletableFuture.runAsync(() -> remember(request));
                 });
@@ -121,19 +123,19 @@ public final class ClientBrain {
             int held = CompanionMemory.countFor(owner);
             String where = saved.place() == null ? ""
                     : "  @ " + saved.place().x() + ", " + saved.place().y() + ", " + saved.place().z();
-            say(net.minecraft.text.Component.literal(
+            say(net.minecraft.network.chat.Component.literal(
                     (thisWorldOnly ? "Remembered, here in this world: " : "Remembered: ")
                             + saved.text() + where)
-                    .formatted(net.minecraft.util.ChatFormatting.GREEN)
-                    .append(net.minecraft.text.Component.literal("  (" + held + " stored on your machine)")
-                            .formatted(net.minecraft.util.ChatFormatting.DARK_GRAY)));
+                    .withStyle(net.minecraft.ChatFormatting.GREEN)
+                    .append(net.minecraft.network.chat.Component.literal("  (" + held + " stored on your machine)")
+                            .withStyle(net.minecraft.ChatFormatting.DARK_GRAY)));
         } catch (Throwable e) {
             // Throwable for the same reason think() uses it: a linkage error between mod and engine
             // arrives as an Error, and swallowing it here would leave the player staring at a command
             // that printed nothing at all.
             AiCompanion.LOGGER.warn("[{}] could not store a remembered fact", AiCompanion.MOD_ID, e);
-            say(net.minecraft.text.Component.literal("Could not remember that: " + e)
-                    .formatted(net.minecraft.util.ChatFormatting.RED));
+            say(net.minecraft.network.chat.Component.literal("Could not remember that: " + e)
+                    .withStyle(net.minecraft.ChatFormatting.RED));
         }
     }
 
@@ -145,12 +147,12 @@ public final class ClientBrain {
      * {@code /companion reload}, just pointed at the queue that actually has anything in it.
      */
     private static void reportMemoryHealth() {
-        for (adris.altoclef.player2api.MemoryHealth.Notice notice
-                : adris.altoclef.player2api.MemoryHealth.drain()) {
-            say(net.minecraft.text.Component.literal("[memory] " + notice.text())
-                    .formatted(notice.problem()
-                            ? net.minecraft.util.ChatFormatting.RED
-                            : net.minecraft.util.ChatFormatting.GREEN));
+        for (com.neovetta.aicompanion.core.MemoryHealth.Notice notice
+                : com.neovetta.aicompanion.core.MemoryHealth.drain()) {
+            say(net.minecraft.network.chat.Component.literal("[memory] " + notice.text())
+                    .withStyle(notice.problem()
+                            ? net.minecraft.ChatFormatting.RED
+                            : net.minecraft.ChatFormatting.GREEN));
         }
     }
 
@@ -159,7 +161,7 @@ public final class ClientBrain {
         Minecraft client = Minecraft.getInstance();
         client.execute(() -> {
             if (client.player != null) {
-                client.player.sendMessage(text, false);
+                client.player.displayClientMessage(text, false);
             }
         });
     }
@@ -241,9 +243,10 @@ public final class ClientBrain {
 
     private static void send(UUID requestId, String replyJson, String error) {
         try {
-            FriendlyByteBuf buf = PacketByteBufs.create();
+            RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(),
+                    Minecraft.getInstance().level.registryAccess());
             BrainWire.writeTurnResult(buf, requestId, replyJson, error);
-            ClientPlayNetworking.send(BrainWire.TURN_RESULT, buf);
+            NetworkManager.sendToServer(BrainWire.TURN_RESULT, buf);
         } catch (Throwable e) {
             AiCompanion.LOGGER.error("[{}] could not return a brain result; the companion will wait "
                     + "for the server's timeout", AiCompanion.MOD_ID, e);
@@ -252,7 +255,7 @@ public final class ClientBrain {
 
     private static UUID localPlayerUuid() {
         return Minecraft.getInstance().player == null
-                ? null : Minecraft.getInstance().player.getUuid();
+                ? null : Minecraft.getInstance().player.getUUID();
     }
 
     private static Player2APIService service() {

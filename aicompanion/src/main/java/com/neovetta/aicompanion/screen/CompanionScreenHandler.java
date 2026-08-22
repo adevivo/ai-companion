@@ -106,9 +106,9 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
         public boolean canTakeItems(Player player) {
             // Cursed armour cannot be taken off a player; the same should hold for a companion, or
             // the curse is trivially undone by handing the piece over and taking it back.
-            ItemStack stack = this.getStack();
+            ItemStack stack = this.getItem();
             return (stack.isEmpty() || player.isCreative() || !EnchantmentHelper.hasBindingCurse(stack))
-                    && super.canTakeItems(player);
+                    && super.mayPickup(player);
         }
     }
 
@@ -136,7 +136,7 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
         if (slot == null || !slot.hasItem()) {
             return ItemStack.EMPTY;
         }
-        ItemStack inSlot = slot.getStack();
+        ItemStack inSlot = slot.getItem();
         ItemStack original = inSlot.copy();
 
         // Slot ranges in the order they were added above.
@@ -156,7 +156,7 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
             if (armorIndex >= 0 && !this.slots.get(armorIndex).hasItem()) {
                 moved = this.moveItemStackTo(inSlot, armorIndex, armorIndex + 1, false);
             }
-            if (!moved && inSlot.isOf(Items.SHIELD) && !this.slots.get(4).hasItem()) {
+            if (!moved && inSlot.is(Items.SHIELD) && !this.slots.get(4).hasItem()) {
                 moved = this.moveItemStackTo(inSlot, 4, 5, false); // the offhand slot
             }
             if (!moved) {
@@ -168,9 +168,9 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
         }
 
         if (inSlot.isEmpty()) {
-            slot.setStack(ItemStack.EMPTY);
+            slot.set(ItemStack.EMPTY);
         } else {
-            slot.markDirty();
+            slot.setChanged();
         }
         if (inSlot.getCount() == original.getCount()) {
             return ItemStack.EMPTY; // nothing actually moved
@@ -202,20 +202,20 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
             return false;
         }
         if (this.companion.getOwnerUuid() != null
-                && !this.companion.getOwnerUuid().equals(player.getUuid())) {
+                && !this.companion.getOwnerUuid().equals(player.getUUID())) {
             return false;
         }
-        return player.squaredDistanceTo(this.companion) <= MAX_REACH_SQUARED
-                && this.companionInventory.canPlayerUse(player);
+        return player.distanceToSqr(this.companion) <= MAX_REACH_SQUARED
+                && this.companionInventory.stillValid(player);
     }
 
     @Override
     public void close(Player player) {
-        super.close(player);
+        super.removed(player);
         // Armour and held items are read straight off this inventory (see
         // CompanionEntity#getEquippedStack), so anything just handed over takes effect on the next
         // tick with no extra plumbing — including the attribute modifiers of a weapon or a helmet.
-        this.companionInventory.onClose(player);
+        this.companionInventory.stopOpen(player);
     }
 
     /** The companion this screen belongs to — the client screen uses it for the title. */

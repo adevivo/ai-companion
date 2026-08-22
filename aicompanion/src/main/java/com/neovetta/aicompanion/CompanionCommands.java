@@ -1,19 +1,20 @@
 package com.neovetta.aicompanion;
 
-import adris.altoclef.AltoClefController;
-import adris.altoclef.player2api.AgentConversationData;
-import adris.altoclef.player2api.Event;
-import adris.altoclef.player2api.manager.ConversationManager;
-import adris.altoclef.player2api.status.StatusUtils;
-import adris.altoclef.player2api.ServerPolicy;
-import adris.altoclef.tasks.movement.GetToBlockTask;
+import dev.architectury.networking.NetworkManager;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import com.player2.playerengine.PlayerEngineController;
+import com.player2.playerengine.player2api.AgentConversationData;
+import com.player2.playerengine.player2api.Event;
+import com.player2.playerengine.player2api.manager.ConversationManager;
+import com.player2.playerengine.player2api.status.StatusUtils;
+import com.neovetta.aicompanion.core.ServerPolicy;
+import com.player2.playerengine.tasks.movement.GetToBlockTask;
 import me.lucko.fabric.api.permissions.v0.Permissions;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -41,7 +42,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Dev/admin commands for the companion. Phase 1: {@code /companion spawn} drops a companion at the
  * caller's feet so we can watch it in-world. Navigation ({@code /companion goto}) is added with the
- * AltoClefController wiring.
+ * PlayerEngineController wiring.
  */
 public final class CompanionCommands {
 
@@ -193,11 +194,11 @@ public final class CompanionCommands {
 
     /** Every companion loaded in the caller's world, nearest first. */
     private static List<CompanionEntity> liveCompanions(CommandSourceStack source) {
-        ServerLevel world = source.getWorld();
+        ServerLevel world = source.getLevel();
         Vec3 origin = source.getPosition();
         List<CompanionEntity> companions = new ArrayList<>(world.getEntitiesOfClass(CompanionEntity.class,
                 AABB.of(origin, 20000, 20000, 20000), e -> true));
-        companions.sort(Comparator.comparingDouble(e -> e.squaredDistanceTo(origin)));
+        companions.sort(Comparator.comparingDouble(e -> e.distanceToSqr(origin)));
         return companions;
     }
 
@@ -232,7 +233,7 @@ public final class CompanionCommands {
         // It also matters because a family server ops everyone: if admin widened the default,
         // ownership would be enforced against almost nobody. Reaching another player's companion is
         // still possible, but it has to be asked for by name — see findCompanion.
-        UUID me = player.getUuid();
+        UUID me = player.getUUID();
         return liveCompanions(source).stream().filter(c -> me.equals(c.getOwnerUuid())).toList();
     }
 
@@ -254,7 +255,7 @@ public final class CompanionCommands {
         if (server == null || name == null || owner == null) {
             return null;
         }
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion
                         && owner.equals(companion.getOwnerUuid())
@@ -272,7 +273,7 @@ public final class CompanionCommands {
             return 0;
         }
         int count = 0;
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion
                         && owner.equals(companion.getOwnerUuid())) {
@@ -294,7 +295,7 @@ public final class CompanionCommands {
             return 0;
         }
         int count = 0;
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion) {
                     UUID owner = companion.getOwnerUuid();
@@ -313,7 +314,7 @@ public final class CompanionCommands {
             return 0;
         }
         int count = 0;
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity) {
                     count++;
@@ -382,11 +383,11 @@ public final class CompanionCommands {
             return null;
         }
         String owner = other.ownerName();
-        source.sendFeedback(() -> Component.literal(
+        source.sendSuccess(() -> Component.literal(
                 other.displayName() + " belongs to " + owner + " — acting on it as an operator.")
-                .formatted(ChatFormatting.YELLOW), false);
+                .withStyle(ChatFormatting.YELLOW), false);
         AiCompanion.LOGGER.info("[{}] {} acted on {}'s companion {} as an operator",
-                AiCompanion.MOD_ID, source.getName(), owner, other.displayName());
+                AiCompanion.MOD_ID, source.getTextName(), owner, other.displayName());
         return other;
     }
 
@@ -434,7 +435,7 @@ public final class CompanionCommands {
     private static final SuggestionProvider<CommandSourceStack> ROSTER_SUGGESTIONS = (ctx, builder) -> {
         ServerPlayer caller = ctx.getSource().getPlayer();
         for (CompanionConfig.RosterEntry entry
-                : ClientProfiles.rosterFor(caller == null ? null : caller.getUuid())) {
+                : ClientProfiles.rosterFor(caller == null ? null : caller.getUUID())) {
             builder.suggest(entry.name());
         }
         return builder.buildFuture();
@@ -464,14 +465,14 @@ public final class CompanionCommands {
             return noCompanion(source, name);
         }
         ServerPlayer player = source.getPlayer();
-        BlockPos target = player != null ? player.getBlockPos() : companion.getBlockPos();
+        BlockPos target = player != null ? player.blockPosition() : companion.blockPosition();
         String who = companion.displayName();
 
         boolean stranded = !companion.isTicking();
         if (stranded) {
             // Teleport BEFORE handing over a task. Arriving next to the owner is what puts the companion
             // back inside the simulated area, and only then can anything it is asked to do actually run.
-            double distance = player != null ? Math.sqrt(companion.squaredDistanceTo(player)) : -1;
+            double distance = player != null ? Math.sqrt(companion.distanceToSqr(player)) : -1;
             long idleMs = companion.millisSinceTick();
             AiCompanion.LOGGER.warn("[{}] {} has not ticked for {} ms at {} blocks — outside simulation "
                     + "distance, so it cannot walk back. Teleporting instead of pathing.",
@@ -479,14 +480,14 @@ public final class CompanionCommands {
             companion.teleport(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, false);
         }
 
-        AltoClefController ctrl = companion.getController();
+        PlayerEngineController ctrl = companion.getController();
         if (ctrl != null) {
             // Controller-aware: replaces the current task so it stops "running off" and comes back.
             ctrl.runUserTask(new GetToBlockTask(target));
         } else {
             companion.goTo(target);
         }
-        source.sendFeedback(() -> Component.literal(stranded
+        source.sendSuccess(() -> Component.literal(stranded
                 ? who + " was too far away to walk back and has been brought to "
                         + target.toShortString()
                 : who + " coming to " + target.toShortString()), false);
@@ -524,9 +525,9 @@ public final class CompanionCommands {
             return 0;
         }
 
-        final UUID owner = player.getUuid();
+        final UUID owner = player.getUUID();
         final String worldId = thisWorldOnly
-                ? adris.altoclef.player2api.WorldIdentity.idOf(source.getWorld())
+                ? com.player2.playerengine.player2api.WorldIdentity.idOf(source.getLevel())
                 : null;
         final MinecraftServer server = source.getServer();
 
@@ -536,10 +537,10 @@ public final class CompanionCommands {
         // Captured on the server thread, before the async write.
         final com.neovetta.aicompanion.memory.Place place = thisWorldOnly
                 ? new com.neovetta.aicompanion.memory.Place(
-                        source.getWorld().getRegistryKey().getValue().toString(),
-                        player.getBlockPos().getX(),
-                        player.getBlockPos().getY(),
-                        player.getBlockPos().getZ())
+                        source.getLevel().dimension().getValue().toString(),
+                        player.blockPosition().getX(),
+                        player.blockPosition().getY(),
+                        player.blockPosition().getZ())
                 : null;
 
         // ⚠️ When the owning client holds the corpus, the write belongs THERE.
@@ -553,18 +554,19 @@ public final class CompanionCommands {
         //
         // The client prints its own confirmation, from the record it actually stored. It is also the
         // only side that can count the corpus once it owns it.
-        if (adris.altoclef.player2api.brain.NetworkBrainTransport.canThink(owner)) {
+        if (com.player2.playerengine.player2api.brain.NetworkBrainTransport.canThink(owner)) {
             try {
-                com.google.gson.JsonObject request = adris.altoclef.player2api.brain.BrainWire
+                com.google.gson.JsonObject request = com.player2.playerengine.player2api.brain.BrainWire
                         .rememberRequest(fact.strip(), thisWorldOnly, worldId,
                                 place == null ? null : place.dimension(),
                                 place == null ? null : place.x(),
                                 place == null ? null : place.y(),
                                 place == null ? null : place.z());
-                net.minecraft.network.FriendlyByteBuf buf = PacketByteBufs.create();
-                adris.altoclef.player2api.brain.BrainWire.writeRemember(buf, request);
-                ServerPlayNetworking.send(player,
-                        adris.altoclef.player2api.brain.BrainWire.MEMORY_REMEMBER, buf);
+                RegistryFriendlyByteBuf buf =
+                        new RegistryFriendlyByteBuf(Unpooled.buffer(), player.registryAccess());
+                com.player2.playerengine.player2api.brain.BrainWire.writeRemember(buf, request);
+                NetworkManager.sendToPlayer(player,
+                        com.player2.playerengine.player2api.brain.BrainWire.MEMORY_REMEMBER, buf);
                 return 1;
             } catch (Throwable e) {
                 // Falling through to the server-side write would put the memory on the wrong
@@ -583,24 +585,24 @@ public final class CompanionCommands {
                 // claim success even when the store kept an older record and dropped it — which is
                 // exactly what happened the first time this shipped.
                 com.neovetta.aicompanion.memory.MemoryRecord saved =
-                        adris.altoclef.player2api.CompanionMemory.remember(owner, fact.strip(),
+                        com.player2.playerengine.player2api.CompanionMemory.remember(owner, fact.strip(),
                         thisWorldOnly
                                 ? com.neovetta.aicompanion.memory.MemoryScope.WORLD
                                 : com.neovetta.aicompanion.memory.MemoryScope.PERSON,
                         worldId, place);
-                int held = adris.altoclef.player2api.CompanionMemory.countFor(owner);
+                int held = com.player2.playerengine.player2api.CompanionMemory.countFor(owner);
                 final String where = saved.place() == null ? ""
                         : "  @ " + saved.place().x() + ", " + saved.place().y()
                                 + ", " + saved.place().z();
                 // Back to the server thread to talk: sendFeedback is not safe off it.
-                server.execute(() -> source.sendFeedback(() -> Component.literal(
+                server.execute(() -> source.sendSuccess(() -> Component.literal(
                         (thisWorldOnly
                                 ? "Remembered, here in this world: "
                                 : "Remembered: ")
                                 + fact.strip() + where)
-                        .formatted(ChatFormatting.GREEN)
+                        .withStyle(ChatFormatting.GREEN)
                         .append(Component.literal("  (" + held + " stored)")
-                                .formatted(ChatFormatting.DARK_GRAY)), false));
+                                .withStyle(ChatFormatting.DARK_GRAY)), false));
             } catch (Throwable e) {
                 String why = e.getMessage() == null ? e.toString() : e.getMessage();
                 server.execute(() -> source.sendFailure(Component.literal("Could not remember that: " + why)));
@@ -615,24 +617,24 @@ public final class CompanionCommands {
         // any player is both spam and a position readout for somebody else's base.
         List<CompanionEntity> companions = ownedCompanions(source);
         if (companions.isEmpty()) {
-            source.sendFeedback(() -> Component.literal(
+            source.sendSuccess(() -> Component.literal(
                     "You have no companions out. /companion spawn to call one.")
-                    .formatted(ChatFormatting.GRAY), false);
+                    .withStyle(ChatFormatting.GRAY), false);
             return 1;
         }
         ServerPlayer player = source.getPlayer();
-        source.sendFeedback(() -> Component.literal("Companions (" + companions.size() + "):")
-                .formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        source.sendSuccess(() -> Component.literal("Companions (" + companions.size() + "):")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         Vec3 origin = source.getPosition();
         for (CompanionEntity companion : companions) {
-            double dist = Math.sqrt(companion.squaredDistanceTo(origin));
-            boolean mine = player != null && player.getUuid().equals(companion.getOwnerUuid());
-            AltoClefController ctrl = companion.getController();
+            double dist = Math.sqrt(companion.distanceToSqr(origin));
+            boolean mine = player != null && player.getUUID().equals(companion.getOwnerUuid());
+            PlayerEngineController ctrl = companion.getController();
             String task = ctrl == null ? "no brain attached" : describeTask(ctrl);
             String line = String.format("  %s — %.0f blocks, %.0f/%.0f hp, %s%s",
                     companion.displayName(), dist, companion.getHealth(), companion.getMaxHealth(),
                     task, mine ? "" : " (not yours)");
-            source.sendFeedback(() -> Component.literal(line).formatted(ChatFormatting.GRAY), false);
+            source.sendSuccess(() -> Component.literal(line).withStyle(ChatFormatting.GRAY), false);
         }
         return 1;
     }
@@ -641,7 +643,7 @@ public final class CompanionCommands {
      * One-line summary of what a companion is currently working on — the same string the model is
      * shown as {@code taskStatus}, so what you read here is what it thinks it is doing.
      */
-    private static String describeTask(AltoClefController ctrl) {
+    private static String describeTask(PlayerEngineController ctrl) {
         try {
             String status = StatusUtils.getTaskStatusString(ctrl);
             if (status == null || status.isBlank()) {
@@ -668,13 +670,25 @@ public final class CompanionCommands {
         }
         // Drop its brain state too — ConversationManager keys on the entity UUID and never cleans up
         // on its own, so a spawn/despawn cycle would otherwise leak conversation data.
-        ConversationManager.forget(companion.getUuid());
+        ConversationManager.forget(companion.getUUID());
         String who = companion.displayName();
         companion.discard();
-        source.sendFeedback(() -> Component.literal(who + " despawned."), false);
+        source.sendSuccess(() -> Component.literal(who + " despawned."), false);
         AiCompanion.LOGGER.info("[{}] despawned companion {} (id {})", AiCompanion.MOD_ID, who,
                 companion.getId());
         return 1;
+    }
+
+    /**
+     * A payload-free buffer for the toggle channels.
+     *
+     * <p>Several of these packets say only "this happened" — open the config screen, flip a HUD —
+     * and carry nothing. Architectury still wants a real buffer with the registries attached, and
+     * an empty one is not a shared constant: a netty buffer is released after it is sent, so a
+     * reused instance is a use-after-free the second time.
+     */
+    private static RegistryFriendlyByteBuf emptyBuf(ServerPlayer player) {
+        return new RegistryFriendlyByteBuf(Unpooled.buffer(), player.registryAccess());
     }
 
     /**
@@ -692,8 +706,8 @@ public final class CompanionCommands {
         final ServerPlayer caller = source.getPlayer();
         boolean toldClient = false;
         if (caller != null && !isWorldHost(source)
-                && ServerPlayNetworking.canSend(caller, AiCompanion.RELOAD_CLIENT_CONFIG)) {
-            ServerPlayNetworking.send(caller, AiCompanion.RELOAD_CLIENT_CONFIG, PacketByteBufs.create());
+                && NetworkManager.canPlayerReceive(caller, AiCompanion.RELOAD_CLIENT_CONFIG)) {
+            NetworkManager.sendToPlayer(caller, AiCompanion.RELOAD_CLIENT_CONFIG, emptyBuf(caller));
             toldClient = true;
         }
 
@@ -701,10 +715,10 @@ public final class CompanionCommands {
             // Not an error: they reloaded everything that was theirs to reload. Saying which half ran
             // matters, because the half that did not is the one an operator would have expected.
             if (toldClient) {
-                source.sendFeedback(() -> Component.literal(
+                source.sendSuccess(() -> Component.literal(
                         "Reloading your own settings — your companions, your endpoints, your memory "
                                 + "switches. This server's rules are the operator's and are unchanged.")
-                        .formatted(ChatFormatting.GREEN), false);
+                        .withStyle(ChatFormatting.GREEN), false);
                 return 1;
             }
             source.sendFailure(Component.literal(
@@ -716,19 +730,19 @@ public final class CompanionCommands {
 
         final int count = CompanionConfig.reloadAndApply(source.getServer());
         final int skillCount = CompanionSkills.all().size();
-        source.sendFeedback(() -> Component.literal(String.format(
+        source.sendSuccess(() -> Component.literal(String.format(
                 "Config reloaded. LLM/TTS/behavior settings apply from the next reply; persona re-applied to %d live companion(s); %d skill(s) loaded.",
                 count, skillCount)), false);
-        source.sendFeedback(() -> Component.literal(
+        source.sendSuccess(() -> Component.literal(
                 "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
         // Whatever reloadAndApply just found out about memory, said here rather than saved for the
         // next conversation turn. Someone who ran this command has usually just changed a memory or
         // embeddings setting, and this is the moment they are waiting to hear whether it took.
         // Silent when memory is off or nothing changed, which is almost always.
-        for (adris.altoclef.player2api.MemoryHealth.Notice notice
-                : adris.altoclef.player2api.MemoryHealth.drain()) {
-            source.sendFeedback(() -> Component.literal(notice.text())
-                    .formatted(notice.problem() ? ChatFormatting.RED : ChatFormatting.GREEN), false);
+        for (com.neovetta.aicompanion.core.MemoryHealth.Notice notice
+                : com.neovetta.aicompanion.core.MemoryHealth.drain()) {
+            source.sendSuccess(() -> Component.literal(notice.text())
+                    .withStyle(notice.problem() ? ChatFormatting.RED : ChatFormatting.GREEN), false);
         }
         AiCompanion.LOGGER.info("[{}] config reloaded via /companion reload ({} live companion(s) updated)",
                 AiCompanion.MOD_ID, count);
@@ -746,7 +760,7 @@ public final class CompanionCommands {
             source.sendFailure(Component.literal("/companion config must be run by a player (it opens a screen)."));
             return 0;
         }
-        ServerPlayNetworking.send(player, AiCompanion.OPEN_CONFIG_SCREEN, PacketByteBufs.empty());
+        NetworkManager.sendToPlayer(player, AiCompanion.OPEN_CONFIG_SCREEN, emptyBuf(player));
         return 1;
     }
 
@@ -761,7 +775,7 @@ public final class CompanionCommands {
             source.sendFailure(Component.literal("/companion radar must be run by a player (it toggles a HUD)."));
             return 0;
         }
-        ServerPlayNetworking.send(player, AiCompanion.RADAR_TOGGLE, PacketByteBufs.empty());
+        NetworkManager.sendToPlayer(player, AiCompanion.RADAR_TOGGLE, emptyBuf(player));
         return 1;
     }
 
@@ -778,7 +792,7 @@ public final class CompanionCommands {
             source.sendFailure(Component.literal("/companion hud must be run by a player (it toggles a HUD)."));
             return 0;
         }
-        ServerPlayNetworking.send(player, AiCompanion.STATUS_HUD_TOGGLE, PacketByteBufs.empty());
+        NetworkManager.sendToPlayer(player, AiCompanion.STATUS_HUD_TOGGLE, emptyBuf(player));
         return 1;
     }
 
@@ -795,7 +809,7 @@ public final class CompanionCommands {
             source.sendFailure(Component.literal("/companion tokens must be run by a player (it toggles a HUD)."));
             return 0;
         }
-        ServerPlayNetworking.send(player, AiCompanion.TOKEN_HUD_TOGGLE, PacketByteBufs.empty());
+        NetworkManager.sendToPlayer(player, AiCompanion.TOKEN_HUD_TOGGLE, emptyBuf(player));
         return 1;
     }
 
@@ -848,10 +862,10 @@ public final class CompanionCommands {
             source.sendFailure(Component.literal("Nothing to reset."));
             return 0;
         }
-        source.sendFeedback(() -> Component.literal("Skill reset:").formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        source.sendSuccess(() -> Component.literal("Skill reset:").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         for (CompanionSkills.ResetResult r : results) {
-            source.sendFeedback(() -> Component.literal("  " + r.fileName() + " — " + r.detail())
-                    .formatted(r.restored() ? ChatFormatting.GRAY : ChatFormatting.RED), false);
+            source.sendSuccess(() -> Component.literal("  " + r.fileName() + " — " + r.detail())
+                    .withStyle(r.restored() ? ChatFormatting.GRAY : ChatFormatting.RED), false);
         }
         // Names/descriptions are advertised in the persona, so refresh live companions too.
         CompanionConfig.reloadAndApply(source.getServer());
@@ -862,18 +876,18 @@ public final class CompanionCommands {
     private static int skills(CommandSourceStack source) {
         var loaded = CompanionSkills.all();
         if (loaded.isEmpty()) {
-            source.sendFeedback(() -> Component.literal("No skills loaded. Drop .md files into "
+            source.sendSuccess(() -> Component.literal("No skills loaded. Drop .md files into "
                     + CompanionSkills.skillsDir() + " and run /companion reload.")
-                    .formatted(ChatFormatting.GRAY), false);
+                    .withStyle(ChatFormatting.GRAY), false);
             return 1;
         }
-        source.sendFeedback(() -> Component.literal("Loaded skills:").formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        source.sendSuccess(() -> Component.literal("Loaded skills:").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         for (CompanionSkills.Skill s : loaded) {
-            source.sendFeedback(() -> Component.literal("  " + s.key()
-                    + (s.description().isEmpty() ? "" : " — " + s.description())).formatted(ChatFormatting.GRAY), false);
+            source.sendSuccess(() -> Component.literal("  " + s.key()
+                    + (s.description().isEmpty() ? "" : " — " + s.description())).withStyle(ChatFormatting.GRAY), false);
         }
-        source.sendFeedback(() -> Component.literal("Files: " + CompanionSkills.skillsDir()
-                + " — edit, then /companion reload to update.").formatted(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("Files: " + CompanionSkills.skillsDir()
+                + " — edit, then /companion reload to update.").withStyle(ChatFormatting.GRAY), false);
         return 1;
     }
 
@@ -904,7 +918,7 @@ public final class CompanionCommands {
         if (companion == null) {
             return noCompanion(source, companionName);
         }
-        AltoClefController ctrl = companion.getController();
+        PlayerEngineController ctrl = companion.getController();
         if (ctrl == null) {
             source.sendFailure(Component.literal(companion.displayName()
                     + " has no active brain yet — nothing to send a skill to."));
@@ -918,9 +932,9 @@ public final class CompanionCommands {
         AgentConversationData data = ConversationManager.getOrCreateEventQueueData(ctrl);
         data.onEvent(new Event.UserMessage(
                 "Execute this skill now, step by step, using your available commands:\n\n" + sk.body(),
-                source.getName()));
+                source.getTextName()));
         String who = companion.displayName();
-        source.sendFeedback(() -> Component.literal("Skill '" + sk.name() + "' sent to " + who + "."), false);
+        source.sendSuccess(() -> Component.literal("Skill '" + sk.name() + "' sent to " + who + "."), false);
         return 1;
     }
 
@@ -930,10 +944,10 @@ public final class CompanionCommands {
         if (companion == null) {
             return noCompanion(source, name);
         }
-        BlockPos pos = companion.getBlockPos();
-        double dist = Math.sqrt(companion.squaredDistanceTo(source.getPosition()));
+        BlockPos pos = companion.blockPosition();
+        double dist = Math.sqrt(companion.distanceToSqr(source.getPosition()));
         String who = companion.displayName();
-        source.sendFeedback(
+        source.sendSuccess(
                 () -> Component.literal(String.format("%s at %s (%.0f blocks away)", who, pos.toShortString(), dist)),
                 false);
         return 1;
@@ -943,7 +957,7 @@ public final class CompanionCommands {
      * Print a readout of the companion's vitals and gear: HP, food, armor, hands, and an aggregated
      * inventory list. Food comes straight off the entity's own hunger manager (the same instance the
      * engine drives), so it's available even before a brain/controller is attached. The companion has
-     * no XP — it's a {@link net.minecraft.entity.LivingEntity}, not a player — so none is shown.
+     * no XP — it's a {@link net.minecraft.world.entity.LivingEntity}, not a player — so none is shown.
      */
     private static int stats(CommandSourceStack source, String requested) {
         CompanionEntity companion = findCompanion(source, requested);
@@ -953,13 +967,13 @@ public final class CompanionCommands {
 
         // Header: this companion's name, gold + bold.
         String name = companion.displayName();
-        source.sendFeedback(() -> Component.literal("— " + name + " —")
-                .formatted(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        source.sendSuccess(() -> Component.literal("— " + name + " —")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
 
         // Health + food on one line.
         int food = companion.getHungerManager().getFoodLevel();
         float sat = companion.getHungerManager().getSaturationLevel();
-        source.sendFeedback(() -> Component.literal(String.format("Health: %.1f/%.0f   Food: %d/20 (sat %.1f)",
+        source.sendSuccess(() -> Component.literal(String.format("Health: %.1f/%.0f   Food: %d/20 (sat %.1f)",
                 companion.getHealth(), companion.getMaxHealth(), food, sat)), false);
 
         // Armor: helmet → boots, non-empty only.
@@ -971,13 +985,13 @@ public final class CompanionCommands {
                 armor.add(d);
             }
         }
-        source.sendFeedback(() -> Component.literal(
+        source.sendSuccess(() -> Component.literal(
                 "Armor: " + (armor.isEmpty() ? "none" : String.join(", ", armor))), false);
 
         // Hands.
         String main = describe(companion.getEquippedStack(EquipmentSlot.MAINHAND));
         String off = describe(companion.getEquippedStack(EquipmentSlot.OFFHAND));
-        source.sendFeedback(() -> Component.literal("Hands: main = " + (main == null ? "empty" : main)
+        source.sendSuccess(() -> Component.literal("Hands: main = " + (main == null ? "empty" : main)
                 + ", off = " + (off == null ? "empty" : off)), false);
 
         // Inventory: aggregate counts per item, most first.
@@ -993,14 +1007,14 @@ public final class CompanionCommands {
             counts.merge(path, stack.getCount(), Integer::sum);
         }
         final int used = usedSlots;
-        source.sendFeedback(() -> Component.literal(
+        source.sendSuccess(() -> Component.literal(
                 String.format("Inventory (%d/%d slots):", used, totalSlots)), false);
         if (!counts.isEmpty()) {
             String list = counts.entrySet().stream()
                     .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
                     .map(e -> e.getValue() + "× " + e.getKey())
                     .reduce((a, b) -> a + ", " + b).orElse("");
-            source.sendFeedback(() -> Component.literal("  " + list).formatted(ChatFormatting.GRAY), false);
+            source.sendSuccess(() -> Component.literal("  " + list).withStyle(ChatFormatting.GRAY), false);
         }
         return 1;
     }
@@ -1028,7 +1042,7 @@ public final class CompanionCommands {
         }
         companion.goTo(target);
         String who = companion.displayName();
-        source.sendFeedback(() -> Component.literal(who + " pathing to " + target.toShortString()), false);
+        source.sendSuccess(() -> Component.literal(who + " pathing to " + target.toShortString()), false);
         AiCompanion.LOGGER.info("[{}] goto {} for companion {} (id {})", AiCompanion.MOD_ID, target, who,
                 companion.getId());
         return 1;
@@ -1043,7 +1057,7 @@ public final class CompanionCommands {
      */
     private static int spawn(CommandSourceStack source, String requested) {
         ServerPlayer player = source.getPlayer();
-        final UUID owner = player == null ? null : player.getUuid();
+        final UUID owner = player == null ? null : player.getUUID();
         MinecraftServer server = source.getServer();
 
         // The caps first, before any lookup: refusing after resolving an identity would be the same
@@ -1122,10 +1136,10 @@ public final class CompanionCommands {
             // problem and does not block you.
             CompanionEntity existing = findOwnedAnywhere(server, owner, entry.name());
             if (existing != null) {
-                boolean sameWorld = existing.getWorld() == source.getWorld();
+                boolean sameWorld = existing.level() == source.level();
                 String where = sameWorld
-                        ? Math.round(Math.sqrt(existing.squaredDistanceTo(source.getPosition()))) + " blocks away"
-                        : "in " + existing.getWorld().getRegistryKey().getValue().getPath();
+                        ? Math.round(Math.sqrt(existing.distanceToSqr(source.getPosition()))) + " blocks away"
+                        : "in " + existing.level().dimension().getValue().getPath();
                 source.sendFailure(Component.literal(entry.name() + " is already out, " + where
                         + ". /companion come " + entry.name()
                         + " to call them, or /companion list to see everyone."));
@@ -1133,9 +1147,9 @@ public final class CompanionCommands {
             }
         }
 
-        ServerLevel world = source.getWorld();
+        ServerLevel world = source.getLevel();
         Vec3 pos = source.getPosition();
-        float yaw = player != null ? player.getYaw() : 0f;
+        float yaw = player != null ? player.getYRot() : 0f;
 
         CompanionEntity companion = new CompanionEntity(AiCompanion.COMPANION, world);
         companion.snapTo(pos.x, pos.y, pos.z, yaw, 0f);
@@ -1143,7 +1157,7 @@ public final class CompanionCommands {
         // a client-owned identity has to survive its owner logging off, and re-resolving it from the
         // server's roster is how a companion would silently turn back into the operator's.
         companion.applyRosterEntry(entry);
-        world.spawnEntity(companion);
+        world.addFreshEntity(companion);
 
         // Attach the agent brain (owned by the spawning player). Talk to it in chat when nearby.
         // Identity is the caller's own, from the roster their client announced; llm/memory settings
@@ -1152,7 +1166,7 @@ public final class CompanionCommands {
             companion.initBrain(CompanionConfig.character(entry), player);
         }
 
-        source.sendFeedback(() -> Component.literal("Spawned " + entry.name()
+        source.sendSuccess(() -> Component.literal("Spawned " + entry.name()
                 + " (id " + companion.getId() + ")"), false);
         AiCompanion.LOGGER.info("[{}] spawned companion {} at {} {} {}", AiCompanion.MOD_ID, entry.name(),
                 pos.x, pos.y, pos.z);

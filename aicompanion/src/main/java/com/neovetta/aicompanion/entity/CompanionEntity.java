@@ -1,26 +1,27 @@
 package com.neovetta.aicompanion.entity;
 
-import adris.altoclef.AltoClefController;
-import adris.altoclef.player2api.Character;
-import adris.altoclef.player2api.Player2APIService;
-import adris.altoclef.player2api.manager.ConversationManager;
-import adris.altoclef.util.CompanionTickGuard;
+import dev.architectury.networking.NetworkManager;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import com.player2.playerengine.PlayerEngineController;
+import com.player2.playerengine.player2api.Character;
+import com.player2.playerengine.player2api.Player2APIService;
+import com.player2.playerengine.player2api.manager.ConversationManager;
+import com.neovetta.aicompanion.core.CompanionTickGuard;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CombatConfig;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.SkinProfileResolver;
 import com.neovetta.aicompanion.screen.CompanionScreenHandlerFactory;
-import baritone.api.IBaritone;
-import baritone.api.pathing.goals.GoalBlock;
-import baritone.api.entity.IAutomatone;
-import baritone.api.entity.IHungerManagerProvider;
-import baritone.api.entity.IInteractionManagerProvider;
-import baritone.api.entity.IInventoryProvider;
-import baritone.api.entity.LivingEntityHungerManager;
-import baritone.api.entity.LivingEntityInteractionManager;
-import baritone.api.entity.LivingEntityInventory;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import com.player2.playerengine.automaton.api.IBaritone;
+import com.player2.playerengine.automaton.api.pathing.goals.GoalBlock;
+import com.player2.playerengine.automaton.api.entity.IAutomatone;
+import com.player2.playerengine.automaton.api.entity.IHungerManagerProvider;
+import com.player2.playerengine.automaton.api.entity.IInteractionManagerProvider;
+import com.player2.playerengine.automaton.api.entity.IInventoryProvider;
+import com.player2.playerengine.automaton.api.entity.LivingEntityHungerManager;
+import com.player2.playerengine.automaton.api.entity.LivingEntityInteractionManager;
+import com.player2.playerengine.automaton.api.entity.LivingEntityInventory;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -68,7 +69,7 @@ import java.util.UUID;
  * manager so the Automatone/AltoClef engine can drive it. Modelled on the upstream concept but written
  * for our mod (Player2NPC is unlicensed and is not copied).
  *
- * <p>Phase 1: the entity exists and carries its managers. The {@link AltoClefController} (which owns
+ * <p>Phase 1: the entity exists and carries its managers. The {@link PlayerEngineController} (which owns
  * navigation + tasks) is wired in the navigation step; until then {@code controller} stays null and is
  * guarded in {@link #tick()} so the entity is a harmless, LLM-free body.
  */
@@ -80,10 +81,10 @@ public class CompanionEntity extends LivingEntity
     public LivingEntityHungerManager hungerManager;
 
     /** Owns Baritone navigation + the AltoClef task engine. Server-side only; null until the nav step. */
-    public AltoClefController controller;
+    public PlayerEngineController controller;
 
     /**
-     * Owner's UUID — the only part of the brain that survives a save. The {@link AltoClefController} is
+     * Owner's UUID — the only part of the brain that survives a save. The {@link PlayerEngineController} is
      * runtime-only, so a companion restored from disk comes back as an AI-less body; this is what lets
      * {@link #maintainBrain()} rebuild it and re-find who it belongs to.
      */
@@ -150,7 +151,7 @@ public class CompanionEntity extends LivingEntity
     public CompanionEntity(EntityType<? extends CompanionEntity> type, Level world) {
         super(type, world);
         this.setStepHeight(0.6f);
-        setMovementSpeed(0.4f);
+        setSpeed(0.4f);
         this.interactionManager = new LivingEntityInteractionManager(this);
         this.inventory = new LivingEntityInventory(this);
         this.hungerManager = new LivingEntityHungerManager();
@@ -235,7 +236,7 @@ public class CompanionEntity extends LivingEntity
         if (username == null || username.isBlank() || !entry.skinFile().isBlank()) {
             return;
         }
-        SkinProfileResolver.resolve(this.getWorld().getServer(), username, blob -> {
+        SkinProfileResolver.resolve(this.level().getServer(), username, blob -> {
             // The callback is scheduled onto the server thread, but a companion can be despawned
             // while a lookup is in flight.
             if (!this.isRemoved()) {
@@ -269,7 +270,7 @@ public class CompanionEntity extends LivingEntity
 
     /** Set one attribute's base value, ignoring attributes this entity somehow doesn't have. */
     private void setBase(Attribute attribute, double value) {
-        AttributeInstance instance = this.getAttributeInstance(attribute);
+        AttributeInstance instance = this.getAttribute(attribute);
         if (instance != null) {
             instance.setBaseValue(value);
         }
@@ -320,14 +321,14 @@ public class CompanionEntity extends LivingEntity
     // --- Persistence: keep the player-like inventory across save/load ---
     @Override
     public void readCustomDataFromNbt(CompoundTag tag) {
-        super.readCustomDataFromNbt(tag);
+        super.readAdditionalSaveData(tag);
         if (tag.contains("head_yaw")) {
             this.yHeadRot = tag.getFloat("head_yaw");
         }
         this.inventory.readNbt(tag.getList("Inventory", 10));
         this.inventory.selectedSlot = tag.getInt("SelectedItemSlot");
         if (tag.containsUuid("Owner")) {
-            this.ownerUuid = tag.getUuid("Owner");
+            this.ownerUuid = tag.getUUID("Owner");
         }
         this.rosterName = tag.getString("RosterName");
         this.metOwner = tag.getBoolean("MetOwner");
@@ -364,7 +365,7 @@ public class CompanionEntity extends LivingEntity
 
     @Override
     public void writeCustomDataToNbt(CompoundTag tag) {
-        super.writeCustomDataToNbt(tag);
+        super.addAdditionalSaveData(tag);
         tag.putFloat("head_yaw", this.yHeadRot);
         tag.put("Inventory", this.inventory.writeNbt(new ListTag()));
         tag.putInt("SelectedItemSlot", this.inventory.selectedSlot);
@@ -378,7 +379,7 @@ public class CompanionEntity extends LivingEntity
         // Read back off the brain when there is one: onGreeting flips it there, and the entity is
         // what outlives the brain. Without this the flag would reset on every restart and the
         // companion would introduce itself to its owner forever.
-        AltoClefController ctrl = this.controller;
+        PlayerEngineController ctrl = this.controller;
         boolean met = this.metOwner
                 || (ctrl != null && ctrl.getAIPersistantData() != null
                         && ctrl.getAIPersistantData().hasMetOwner());
@@ -405,7 +406,7 @@ public class CompanionEntity extends LivingEntity
      * the difference between hunger being a real resource and being decorative.
      */
     private void tickExhaustion() {
-        Vec3 now = this.getPos();
+        Vec3 now = this.position();
         if (this.lastExhaustionPos != null) {
             double dx = now.x - this.lastExhaustionPos.x;
             double dy = now.y - this.lastExhaustionPos.y;
@@ -416,9 +417,9 @@ public class CompanionEntity extends LivingEntity
             if (cm > 0) {
                 if (this.isSwimming()) {
                     this.hungerManager.addExhaustion(0.01f * cm * 0.01f);
-                } else if (this.isSubmergedInWater() || this.isInWater()) {
+                } else if (this.isUnderWater() || this.isInWater()) {
                     this.hungerManager.addExhaustion(0.01f * cm * 0.01f);
-                } else if (this.isOnGround() && this.isSprinting()) {
+                } else if (this.onGround() && this.isSprinting()) {
                     this.hungerManager.addExhaustion(0.1f * cm * 0.01f);
                 }
             }
@@ -426,8 +427,8 @@ public class CompanionEntity extends LivingEntity
         this.lastExhaustionPos = now;
 
         // Charge the take-off, not the flight: an airborne tick is not a fresh jump.
-        boolean onGround = this.isOnGround();
-        if (this.wasOnGroundForExhaustion && !onGround && this.getVelocity().y > 0.0) {
+        boolean onGround = this.onGround();
+        if (this.wasOnGroundForExhaustion && !onGround && this.getDeltaMovement().y > 0.0) {
             this.hungerManager.addExhaustion(this.isSprinting() ? 0.2f : 0.05f);
         }
         this.wasOnGroundForExhaustion = onGround;
@@ -488,13 +489,13 @@ public class CompanionEntity extends LivingEntity
 
     /** Puts a line in the owner's chat, if they are online to read it. */
     private void tellOwner(String message) {
-        MinecraftServer server = this.getWorld().getServer();
+        MinecraftServer server = this.level().getServer();
         if (server == null || this.ownerUuid == null) {
             return;
         }
         ServerPlayer owner = server.getPlayerList().getPlayer(this.ownerUuid);
         if (owner != null) {
-            owner.sendMessage(Component.literal(message).formatted(ChatFormatting.RED), false);
+            owner.displayClientMessage(Component.literal(message).withStyle(ChatFormatting.RED), false);
         }
     }
 
@@ -543,8 +544,8 @@ public class CompanionEntity extends LivingEntity
         lastTickMs = System.currentTimeMillis();
         this.interactionManager.update();
         this.inventory.updateItems();
-        lastAttackedTicks++; // LivingEntities don't tick attack cooldown by default
-        if (!this.getWorld().isClientSide && !aiDisabled && shouldTickAi()) {
+        attackStrengthTicker++; // LivingEntities don't tick attack cooldown by default
+        if (!this.level().isClientSide && !aiDisabled && shouldTickAi()) {
             // Inside this window the chunk source answers reads from memory instead of blocking on a
             // load — see CompanionTickGuard. Scoped to the AI only: super.tick() below must keep
             // vanilla's normal world access for physics and collision.
@@ -567,7 +568,7 @@ public class CompanionEntity extends LivingEntity
         }
         super.tick();
         this.updateSwingTime();
-        if (!this.getWorld().isClientSide) {
+        if (!this.level().isClientSide) {
             // Order matters: bank this tick's exertion before the hunger manager converts exhaustion
             // into saturation and food, so effort is paid for in the same tick it happens.
             tickExhaustion();
@@ -588,10 +589,10 @@ public class CompanionEntity extends LivingEntity
      * ages the snapshot out. See {@link AiCompanion#RADAR_UPDATE}.
      */
     private void maybeSendRadar() {
-        if (this.controller == null || this.ownerUuid == null || this.age % 10 != 0) {
+        if (this.controller == null || this.ownerUuid == null || this.tickCount % 10 != 0) {
             return;
         }
-        MinecraftServer server = this.getWorld().getServer();
+        MinecraftServer server = this.level().getServer();
         if (server == null) {
             return;
         }
@@ -599,15 +600,16 @@ public class CompanionEntity extends LivingEntity
         if (owner == null) {
             return; // owner offline — nothing to draw a radar for
         }
-        FriendlyByteBuf buf = PacketByteBufs.create();
+        RegistryFriendlyByteBuf buf =
+                new RegistryFriendlyByteBuf(Unpooled.buffer(), owner.registryAccess());
         // Id and name first: with more than one companion out, the client keys its snapshots on the
         // id and labels the markers with the name.
         buf.writeVarInt(this.getId());
-        buf.writeString(displayName());
+        buf.writeUtf(displayName());
         buf.writeDouble(this.getX());
         buf.writeDouble(this.getY());
         buf.writeDouble(this.getZ());
-        buf.writeIdentifier(this.getWorld().getRegistryKey().getValue());
+        buf.writeIdentifier(this.level().dimension().getValue());
         buf.writeFloat(this.getHealth());
         buf.writeFloat(this.getMaxHealth());
         // Hunger rides the same snapshot rather than getting a channel of its own: it changes on the
@@ -615,7 +617,7 @@ public class CompanionEntity extends LivingEntity
         // being sent. See CompanionStatusHud.
         buf.writeVarInt(this.hungerManager.getFoodLevel());
         buf.writeFloat(this.hungerManager.getSaturationLevel());
-        ServerPlayNetworking.send(owner, AiCompanion.RADAR_UPDATE, buf);
+        NetworkManager.sendToPlayer(owner, AiCompanion.RADAR_UPDATE, buf);
     }
 
     /**
@@ -629,10 +631,10 @@ public class CompanionEntity extends LivingEntity
      * tick so the two packets don't land together. See {@link AiCompanion#TOKEN_USAGE}.
      */
     private void maybeSendTokens() {
-        if (this.controller == null || this.ownerUuid == null || this.age % 20 != 5) {
+        if (this.controller == null || this.ownerUuid == null || this.tickCount % 20 != 5) {
             return;
         }
-        MinecraftServer server = this.getWorld().getServer();
+        MinecraftServer server = this.level().getServer();
         if (server == null) {
             return;
         }
@@ -649,16 +651,17 @@ public class CompanionEntity extends LivingEntity
         // The client feeds its own panel in that case (CompanionTokenHud#selfUpdate). When it cannot
         // think and this side answers instead, this side is the one paying and the packet is right
         // again — which is why the test is "who is thinking" rather than a config flag.
-        if (adris.altoclef.player2api.brain.NetworkBrainTransport.canThink(this.ownerUuid)) {
+        if (com.player2.playerengine.player2api.brain.NetworkBrainTransport.canThink(this.ownerUuid)) {
             return;
         }
         Player2APIService.UsageSnapshot usage = Player2APIService.usageSnapshot();
-        FriendlyByteBuf buf = PacketByteBufs.create();
+        RegistryFriendlyByteBuf buf =
+                new RegistryFriendlyByteBuf(Unpooled.buffer(), owner.registryAccess());
         buf.writeLong(usage.promptTokens());
         buf.writeLong(usage.completionTokens());
         buf.writeLong(usage.totalTokens());
         buf.writeVarInt(usage.requests());
-        ServerPlayNetworking.send(owner, AiCompanion.TOKEN_USAGE, buf);
+        NetworkManager.sendToPlayer(owner, AiCompanion.TOKEN_USAGE, buf);
     }
 
     /** Fraction of max health below which the owner is told, and above which the warning re-arms. */
@@ -680,7 +683,7 @@ public class CompanionEntity extends LivingEntity
      * it can mention being hurt in conversation.
      */
     private void maybeWarnLowHealth() {
-        if (this.controller == null || this.ownerUuid == null || this.age % 20 != 10) {
+        if (this.controller == null || this.ownerUuid == null || this.tickCount % 20 != 10) {
             return;
         }
         float max = this.getMaxHealth();
@@ -695,7 +698,7 @@ public class CompanionEntity extends LivingEntity
         if (fraction > LOW_HEALTH_WARN || lowHealthWarned) {
             return;
         }
-        MinecraftServer server = this.getWorld().getServer();
+        MinecraftServer server = this.level().getServer();
         if (server == null || this.ownerUuid == null
                 || server.getPlayerList().getPlayer(this.ownerUuid) == null) {
             return; // owner offline — warn when they next see it drop, not into the void
@@ -735,8 +738,8 @@ public class CompanionEntity extends LivingEntity
      */
     @Override
     protected void dropInventory() {
-        super.dropInventory();
-        if (this.getWorld().isClientSide) {
+        super.dropEquipment();
+        if (this.level().isClientSide) {
             return;
         }
         int stacks = dropAll(this.inventory.main)
@@ -759,7 +762,7 @@ public class CompanionEntity extends LivingEntity
                 continue;
             }
             slots.set(i, ItemStack.EMPTY);
-            this.dropStack(stack, 0.5f); // waist height, so nothing spawns inside the floor
+            this.spawnAtLocation(stack, 0.5f); // waist height, so nothing spawns inside the floor
             dropped++;
         }
         return dropped;
@@ -779,7 +782,7 @@ public class CompanionEntity extends LivingEntity
             String name = this.getCustomName() != null
                     ? this.getCustomName().getString()
                     : CompanionConfig.name();
-            BlockPos pos = this.getBlockPos();
+            BlockPos pos = this.blockPosition();
             String where = String.format("%s died at %d, %d, %d", name, pos.getX(), pos.getY(), pos.getZ());
             String note = stacks == 0
                     ? where + " — it was carrying nothing."
@@ -804,9 +807,9 @@ public class CompanionEntity extends LivingEntity
     @Override
     public void onDeath(DamageSource source) {
         boolean wasDying = this.dead; // onDeath is guarded but not documented as once-only
-        super.onDeath(source);
-        if (!this.getWorld().isClientSide && !wasDying) {
-            ConversationManager.forget(this.getUuid());
+        super.die(source);
+        if (!this.level().isClientSide && !wasDying) {
+            ConversationManager.forget(this.getUUID());
         }
     }
 
@@ -818,11 +821,11 @@ public class CompanionEntity extends LivingEntity
      * "Save and Quit" there is no one to act for, and the task engine has nothing useful to contribute.
      */
     private boolean shouldTickAi() {
-        MinecraftServer server = this.getWorld().getServer();
-        if (server == null || !server.isRunning() || server.isStopping() || server.isStopped()) {
+        MinecraftServer server = this.level().getServer();
+        if (server == null || !server.isRunning() || server.isShutdown() || server.isStopped()) {
             return false;
         }
-        return this.getWorld() instanceof ServerLevel serverWorld && !serverWorld.getPlayers().isEmpty();
+        return this.level() instanceof ServerLevel serverWorld && !serverWorld.getPlayers().isEmpty();
     }
 
     /**
@@ -848,7 +851,7 @@ public class CompanionEntity extends LivingEntity
         if (this.ownerUuid == null) {
             return true; // console-spawned and ownerless: nothing else will ever drive it
         }
-        MinecraftServer server = this.getWorld().getServer();
+        MinecraftServer server = this.level().getServer();
         if (server != null && server.getPlayerList().getPlayer(this.ownerUuid) != null) {
             return true; // owner is here — a brain is moments away, keep it responsive
         }
@@ -863,9 +866,9 @@ public class CompanionEntity extends LivingEntity
 
     /** Attach the agent brain (AltoClef controller) to this companion, owned by {@code owner}. */
     public void initBrain(Character character, Player owner) {
-        this.controller = new AltoClefController(IBaritone.KEY.get(this), character, "aicompanion");
+        this.controller = new PlayerEngineController(IBaritone.KEY.get(this), character, "aicompanion");
         this.controller.setOwner(owner);
-        this.ownerUuid = owner.getUuid();
+        this.ownerUuid = owner.getUUID();
         // The brain is rebuilt on every load; whether they have met is not. Push it in here, or the
         // companion greets its owner as a stranger every time the chunk reloads.
         if (this.controller.getAIPersistantData() != null) {
@@ -894,7 +897,7 @@ public class CompanionEntity extends LivingEntity
         }
         this.brainCheckCooldown = 20;
 
-        Player owner = this.getWorld().getPlayerByUUID(this.ownerUuid);
+        Player owner = this.level().getPlayerByUUID(this.ownerUuid);
         if (owner == null) {
             return; // wait for the real owner rather than adopting whoever is nearby
         }
@@ -913,7 +916,7 @@ public class CompanionEntity extends LivingEntity
         }
     }
 
-    public AltoClefController getController() {
+    public PlayerEngineController getController() {
         return this.controller;
     }
 
@@ -936,16 +939,16 @@ public class CompanionEntity extends LivingEntity
      */
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
-        if (hand != InteractionHand.MAIN_HAND || !player.getItemInHand(hand).isEmpty() || player.isSneaking()) {
+        if (hand != InteractionHand.MAIN_HAND || !player.getItemInHand(hand).isEmpty() || player.isShiftKeyDown()) {
             return super.interact(player, hand);
         }
-        if (this.getWorld().isClientSide) {
+        if (this.level().isClientSide) {
             // Swing and open on the server's say-so; the client cannot know who the owner is.
             return InteractionResult.SUCCESS;
         }
-        if (this.ownerUuid != null && !this.ownerUuid.equals(player.getUuid())) {
-            player.sendMessage(Component.literal(displayName() + " belongs to " + ownerName() + ".")
-                    .formatted(ChatFormatting.GRAY), true);
+        if (this.ownerUuid != null && !this.ownerUuid.equals(player.getUUID())) {
+            player.displayClientMessage(Component.literal(displayName() + " belongs to " + ownerName() + ".")
+                    .withStyle(ChatFormatting.GRAY), true);
             return InteractionResult.CONSUME;
         }
         player.openMenu(new CompanionScreenHandlerFactory(this));
@@ -959,7 +962,7 @@ public class CompanionEntity extends LivingEntity
      * wordings for one rule is how a player learns that one of them means something different.
      */
     public String ownerName() {
-        MinecraftServer server = this.getWorld().getServer();
+        MinecraftServer server = this.level().getServer();
         if (server == null || this.ownerUuid == null) {
             return "someone else";
         }
@@ -975,8 +978,8 @@ public class CompanionEntity extends LivingEntity
 
     @Override
     public void tickMovement() {
-        super.tickMovement();
-        this.yHeadRot = this.getYaw();
+        super.aiStep();
+        this.yHeadRot = this.getYRot();
         pickupItems();
     }
 
@@ -996,18 +999,18 @@ public class CompanionEntity extends LivingEntity
      * this same path and that is a much larger change.
      */
     private void pickupItems() {
-        if (this.getWorld().isClientSide || !this.isAlive() || this.dead
-                || !this.getWorld().getGameRules().getBoolean(GameRules.MOB_GRIEFING)) {
+        if (this.level().isClientSide || !this.isAlive() || this.dead
+                || !this.level().getGameRules().getBoolean(GameRules.MOB_GRIEFING)) {
             return;
         }
         boolean full = this.getLivingInventory().getEmptySlot() < 0;
         Vec3i r = new Vec3i(2, 1, 2);
-        for (ItemEntity item : this.getWorld().getEntitiesOfClass(ItemEntity.class,
-                this.getBoundingBox().expand(r.getX(), r.getY(), r.getZ()))) {
-            if (item.isRemoved() || item.getStack().isEmpty() || item.hasPickUpDelay()) {
+        for (ItemEntity item : this.level().getEntitiesOfClass(ItemEntity.class,
+                this.getBoundingBox().inflate(r.getX(), r.getY(), r.getZ()))) {
+            if (item.isRemoved() || item.getItem().isEmpty() || item.hasPickUpDelay()) {
                 continue;
             }
-            ItemStack stack = item.getStack();
+            ItemStack stack = item.getItem();
             if (full && !canMergeIntoHeldStack(stack)) {
                 continue;
             }
@@ -1027,8 +1030,8 @@ public class CompanionEntity extends LivingEntity
         LivingEntityInventory inventory = this.getLivingInventory();
         for (int i = 0; i < inventory.main.size(); i++) {
             ItemStack held = inventory.main.get(i);
-            if (!held.isEmpty() && held.getCount() < held.getMaxCount()
-                    && ItemStack.canCombine(held, stack)) {
+            if (!held.isEmpty() && held.getCount() < held.getMaxStackSize()
+                    && ItemStack.isSameItemSameComponents(held, stack)) {
                 return true;
             }
         }
@@ -1053,7 +1056,7 @@ public class CompanionEntity extends LivingEntity
 
     /** 0.0 just after a swing, 1.0 once the weapon's cooldown has fully recharged. */
     public float getAttackCooldownProgress(float baseTime) {
-        return Mth.clamp((lastAttackedTicks + baseTime) / this.getAttackCooldownProgressPerTick(), 0.0F, 1.0F);
+        return Mth.clamp((attackStrengthTicker + baseTime) / this.getAttackCooldownProgressPerTick(), 0.0F, 1.0F);
     }
 
     // --- Combat: LivingEntity has no attack of its own ---
@@ -1064,12 +1067,12 @@ public class CompanionEntity extends LivingEntity
         // Read the cooldown before resetting it: an attack landed mid-recharge does reduced damage,
         // exactly like a player spam-clicking. Without this the companion out-DPSes its own gear.
         float charge = this.getAttackCooldownProgress(0.5F);
-        lastAttackedTicks = 0;
+        attackStrengthTicker = 0;
         float damage = (float) this.getAttributeValue(Attributes.ATTACK_DAMAGE);
         float knockback = (float) this.getAttributeValue(Attributes.ATTACK_KNOCKBACK);
         float enchantBonus = 0.0F;
         if (target instanceof LivingEntity living) {
-            enchantBonus = EnchantmentHelper.getAttackDamage(this.getMainHandStack(), living.getGroup());
+            enchantBonus = EnchantmentHelper.getAttackDamage(this.getMainHandItem(), living.getGroup());
             knockback += EnchantmentHelper.getKnockback(this);
         }
         damage *= 0.2F + charge * charge * 0.8F;
@@ -1082,18 +1085,18 @@ public class CompanionEntity extends LivingEntity
         boolean hit = target.damage(this.damageSources().mobAttack(this), damage);
         if (hit) {
             if (knockback > 0.0F && target instanceof LivingEntity living) {
-                living.takeKnockback(knockback * 0.5F,
-                        Mth.sin(this.getYaw() * ((float) Math.PI / 180F)),
-                        -Mth.cos(this.getYaw() * ((float) Math.PI / 180F)));
-                this.setVelocity(this.getVelocity().multiply(0.6, 1.0, 0.6));
+                living.knockback(knockback * 0.5F,
+                        Mth.sin(this.getYRot() * ((float) Math.PI / 180F)),
+                        -Mth.cos(this.getYRot() * ((float) Math.PI / 180F)));
+                this.setVelocity(this.getDeltaMovement().multiply(0.6, 1.0, 0.6));
             }
             this.applyDamageEffects(this, target);
-            this.onAttacking(target);
+            this.setLastHurtMob(target);
             // Weapon wear. LivingEntity never does this — only PlayerEntity#attack calls postHit, which
             // is the hook SwordItem/AxeItem/TridentItem use for hurtAndBreak(1) and their on-hit extras.
             // Use the Item overload: the ItemStack one demands a PlayerEntity we don't have.
             if (target instanceof LivingEntity living) {
-                ItemStack weapon = this.getMainHandStack();
+                ItemStack weapon = this.getMainHandItem();
                 if (!weapon.isEmpty()) {
                     weapon.getItem().hurtEnemy(weapon, living, this);
                     if (weapon.isEmpty()) {
@@ -1122,7 +1125,7 @@ public class CompanionEntity extends LivingEntity
     @Override
     public void takeKnockback(double strength, double x, double z) {
         if (this.hurtMarked) {
-            super.takeKnockback(strength, x, z);
+            super.knockback(strength, x, z);
         }
     }
 
@@ -1144,7 +1147,7 @@ public class CompanionEntity extends LivingEntity
         } else if (slot == EquipmentSlot.OFFHAND) {
             return this.inventory.offHand.get(0);
         }
-        return slot.getType() == EquipmentSlot.Type.ARMOR
+        return slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR
                 ? this.inventory.armor.get(slot.getIndex())
                 : ItemStack.EMPTY;
     }
@@ -1162,7 +1165,7 @@ public class CompanionEntity extends LivingEntity
      */
     @Override
     public void damageShield(float amount) {
-        if (!this.useItem.isOf(Items.SHIELD) || amount < 3.0F) {
+        if (!this.useItem.is(Items.SHIELD) || amount < 3.0F) {
             return;
         }
         InteractionHand hand = this.getUsedItemHand();
@@ -1173,17 +1176,17 @@ public class CompanionEntity extends LivingEntity
                     ItemStack.EMPTY);
             this.stopUsingItem();
             this.playSound(SoundEvents.SHIELD_BREAK, 0.8F,
-                    0.8F + this.getWorld().getRandom().nextFloat() * 0.4F);
+                    0.8F + this.level().getRandom().nextFloat() * 0.4F);
         }
     }
 
     @Override
     public void equipStack(EquipmentSlot slot, ItemStack stack) {
         if (slot == EquipmentSlot.MAINHAND) {
-            this.inventory.setStack(this.inventory.selectedSlot, stack);
+            this.inventory.setItem(this.inventory.selectedSlot, stack);
         } else if (slot == EquipmentSlot.OFFHAND) {
             this.inventory.offHand.set(0, stack);
-        } else if (slot.getType() == EquipmentSlot.Type.ARMOR) {
+        } else if (slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
             this.inventory.armor.set(slot.getIndex(), stack);
         }
     }

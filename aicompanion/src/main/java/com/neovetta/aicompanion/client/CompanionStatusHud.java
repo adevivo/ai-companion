@@ -125,12 +125,12 @@ public final class CompanionStatusHud {
         }
         Minecraft client = Minecraft.getInstance();
         LocalPlayer player = client.player;
-        if (player == null || client.world == null || client.options.hideGui) {
+        if (player == null || client.level == null || client.options.hideGui) {
             return;
         }
 
         long now = System.currentTimeMillis();
-        Identifier here = client.world.getRegistryKey().getValue();
+        Identifier here = client.level.dimension().getValue();
 
         List<Row> rows = new ArrayList<>();
         boolean anyNeedsAttention = false;
@@ -164,10 +164,10 @@ public final class CompanionStatusHud {
         // Stable ordering, so rows do not swap places under the cursor as packets arrive.
         rows.sort(Comparator.comparing(r -> r.snapshot().name()));
 
-        Font tr = client.textRenderer;
+        Font tr = client.font;
         int nameWidth = 0;
         for (Row r : rows) {
-            nameWidth = Math.max(nameWidth, tr.getWidth(r.snapshot().name()));
+            nameWidth = Math.max(nameWidth, tr.width(r.snapshot().name()));
         }
         nameWidth = Math.min(nameWidth, NAME_MAX_WIDTH);
 
@@ -198,7 +198,7 @@ public final class CompanionStatusHud {
             int barTop = y + 1;
 
             String name = snap.name();
-            while (tr.getWidth(name) > NAME_MAX_WIDTH && name.length() > 1) {
+            while (tr.width(name) > NAME_MAX_WIDTH && name.length() > 1) {
                 name = name.substring(0, name.length() - 1);
             }
             ctx.drawString(tr, Component.literal(name), panelLeft, y, textColor);

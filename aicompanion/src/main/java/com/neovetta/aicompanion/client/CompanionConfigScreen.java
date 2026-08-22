@@ -237,7 +237,7 @@ public final class CompanionConfigScreen {
         if (Minecraft.getInstance().getServer() != null) {
             cat.addEntry(eb.startTextDescription(Component.literal(
                             "Editing this world's config/aicompanion.json — changes apply on save.")
-                    .formatted(ChatFormatting.GRAY)).build());
+                    .withStyle(ChatFormatting.GRAY)).build());
             return;
         }
         cat.addEntry(eb.startTextDescription(Component.literal(
@@ -245,7 +245,7 @@ public final class CompanionConfigScreen {
                                 + "your model and key, your memories, your voice. Reconnect after "
                                 + "saving for a changed roster to reach the server. What the "
                                 + "operator controls is on the Server tab.")
-                .formatted(ChatFormatting.GRAY)).build());
+                .withStyle(ChatFormatting.GRAY)).build());
     }
 
     // ## Categories
@@ -427,7 +427,7 @@ public final class CompanionConfigScreen {
             return null;
         }
         List<String> names = new ArrayList<>();
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             for (Entity entity : world.getAllEntities()) {
                 if (entity instanceof CompanionEntity companion) {
                     names.add(companion.displayName());
@@ -590,7 +590,7 @@ public final class CompanionConfigScreen {
                                 + "/companion remember and /companion rememberhere, or automatically "
                                 + "by \"Learn From Conversation\" below — which is off, because it "
                                 + "spends an extra model call on every turn you talk.")
-                .formatted(ChatFormatting.YELLOW)).build());
+                .withStyle(ChatFormatting.YELLOW)).build());
 
         cat.addEntry(eb.startBooleanToggle(Component.literal("Enabled"), bool(memory, "enabled", false))
                 .setDefaultValue(false)
@@ -653,7 +653,7 @@ public final class CompanionConfigScreen {
                                 + "one in the LLM tab: a normal llama.cpp cannot do this job, and "
                                 + "pointing this at it will not work. Run an embedding model of its "
                                 + "own: \"ollama pull nomic-embed-text\", then leave the endpoint below.")
-                .formatted(ChatFormatting.GRAY)).build());
+                .withStyle(ChatFormatting.GRAY)).build());
 
         cat.addEntry(eb.startBooleanToggle(Component.literal("Embeddings Enabled"),
                         bool(embeddings, "enabled", false))
@@ -709,7 +709,7 @@ public final class CompanionConfigScreen {
         cat.addEntry(eb.startTextDescription(Component.literal(
                         "Voice is set per companion — see the Companions tab. A companion that "
                                 + "picks none falls back to \"voice\" in aicompanion.json.")
-                .formatted(ChatFormatting.GRAY)).build());
+                .withStyle(ChatFormatting.GRAY)).build());
         cat.addEntry(eb.startDoubleField(Component.literal("Speed"), dbl(tts, "speed", 1.0))
                 .setDefaultValue(1.0)
                 .setTooltip(Component.literal("Playback speed multiplier (1.0 = normal)."))
@@ -732,7 +732,7 @@ public final class CompanionConfigScreen {
                         + "tab now. They change the world everyone shares or cost the server ticks, "
                         + "so they are the operator's to set — and in singleplayer you are the "
                         + "operator, so you can still edit them there.")
-                .formatted(ChatFormatting.GRAY)).build());
+                .withStyle(ChatFormatting.GRAY)).build());
     }
 
     /**
@@ -749,7 +749,7 @@ public final class CompanionConfigScreen {
             cat.addEntry(eb.startTextDescription(Component.literal(
                     "These are THIS SERVER's settings, shown read-only. Ask the operator to change "
                             + "them in config/aicompanion.json and run /companion reload.")
-                    .formatted(ChatFormatting.GOLD)).build());
+                    .withStyle(ChatFormatting.GOLD)).build());
             for (String key : new String[] {"maxCompanionsPerPlayer", "globalCompanionCap",
                     "allowPlayerCommands", "companionsAnswerAnyone", "maxRosterEntries",
                     "persistHistory", "thinkThrottleSeconds", "aiCrossTalk", "maxAutonomousTurns",
@@ -761,7 +761,7 @@ public final class CompanionConfigScreen {
                 if (remote.has(key)) {
                     cat.addEntry(eb.startTextDescription(Component.literal(
                             "  " + key + ": " + remote.get(key).getAsString())
-                            .formatted(ChatFormatting.GRAY)).build());
+                            .withStyle(ChatFormatting.GRAY)).build());
                 }
             }
             return;
@@ -770,7 +770,7 @@ public final class CompanionConfigScreen {
         JsonObject server = section(config, "server");
         cat.addEntry(eb.startTextDescription(Component.literal(
                 "You are the operator here, so these apply. On someone else's server this tab shows "
-                        + "their settings instead, read-only.").formatted(ChatFormatting.GRAY)).build());
+                        + "their settings instead, read-only.").withStyle(ChatFormatting.GRAY)).build());
         cat.addEntry(eb.startIntField(Component.literal("Max Companions Per Player"),
                         intVal(server, "maxCompanionsPerPlayer", 2))
                 .setDefaultValue(2).setMin(0)
@@ -857,7 +857,7 @@ public final class CompanionConfigScreen {
         cat.addEntry(eb.startTextDescription(Component.literal(
                 "Building, defence, scavenging and combat stats are in the \"server\" block of "
                         + "config/aicompanion.json — every key is documented there.")
-                .formatted(ChatFormatting.GRAY)).build());
+                .withStyle(ChatFormatting.GRAY)).build());
     }
 
     /**

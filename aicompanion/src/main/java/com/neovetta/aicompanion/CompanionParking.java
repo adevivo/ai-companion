@@ -1,7 +1,7 @@
 package com.neovetta.aicompanion;
 
-import adris.altoclef.player2api.ServerPolicy;
-import adris.altoclef.player2api.manager.ConversationManager;
+import com.neovetta.aicompanion.core.ServerPolicy;
+import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import java.io.File;
 import java.io.IOException;
@@ -77,7 +77,7 @@ public final class CompanionParking {
         }
         int parked = 0;
         int failed = 0;
-        for (ServerLevel world : server.getWorlds()) {
+        for (ServerLevel world : server.getAllLevels()) {
             // Copied first: discarding while iterating the world's entity view is asking for trouble.
             List<CompanionEntity> mine = new ArrayList<>();
             for (net.minecraft.world.entity.Entity entity : world.getAllEntities()) {
@@ -113,11 +113,11 @@ public final class CompanionParking {
                         AiCompanion.MOD_ID, name);
                 return false;
             }
-            tag.putString(DIMENSION_KEY, world.getRegistryKey().getValue().toString());
+            tag.putString(DIMENSION_KEY, world.dimension().getValue().toString());
 
             Path dir = parkedDir(owner);
             Files.createDirectories(dir);
-            File file = dir.resolve(companion.getUuid() + ".nbt").toFile();
+            File file = dir.resolve(companion.getUUID() + ".nbt").toFile();
             NbtIo.writeCompressed(tag, file);
 
             // ⚠️ Read it back before removing anything. A write that reported success but produced
@@ -133,7 +133,7 @@ public final class CompanionParking {
 
             // Only now. Its conversation state goes too, the same as a despawn — the manager keys on
             // the entity UUID and never cleans up on its own.
-            ConversationManager.forget(companion.getUuid());
+            ConversationManager.forget(companion.getUUID());
             companion.discard();
             return true;
         } catch (Throwable e) {
@@ -153,7 +153,7 @@ public final class CompanionParking {
         if (server == null || owner == null) {
             return;
         }
-        Path dir = parkedDir(owner.getUuid());
+        Path dir = parkedDir(owner.getUUID());
         if (!Files.isDirectory(dir)) {
             return;
         }
@@ -194,14 +194,14 @@ public final class CompanionParking {
 
             // A crash between writing the file and discarding the entity would leave both. Spawning
             // the second one is how an inventory gets duplicated, so the file loses.
-            if (world.getEntity(companion.getUuid()) != null) {
+            if (world.getEntity(companion.getUUID()) != null) {
                 AiCompanion.LOGGER.info("[{}] {} is already in the world — dropping the stale parked "
                         + "copy", AiCompanion.MOD_ID, companion.displayName());
                 Files.deleteIfExists(file);
                 return false;
             }
 
-            world.spawnEntity(companion);
+            world.addFreshEntity(companion);
             // Only once it is actually in the world.
             Files.deleteIfExists(file);
             return true;
@@ -215,14 +215,14 @@ public final class CompanionParking {
     private static ServerLevel worldOf(MinecraftServer server, CompoundTag tag) {
         String id = tag.getString(DIMENSION_KEY);
         if (id == null || id.isBlank()) {
-            return server.getOverworld();
+            return server.overworld();
         }
         Identifier parsed = Identifier.tryParse(id);
         if (parsed == null) {
-            return server.getOverworld();
+            return server.overworld();
         }
-        ResourceKey<Level> key = ResourceKey.of(Registries.WORLD, parsed);
-        ServerLevel world = server.getWorld(key);
+        ResourceKey<Level> key = ResourceKey.of(Registries.DIMENSION, parsed);
+        ServerLevel world = server.getLevel(key);
         return world;
     }
 

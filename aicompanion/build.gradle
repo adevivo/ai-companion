@@ -1,13 +1,20 @@
 plugins {
-    id 'fabric-loom' version '1.6-SNAPSHOT'
+    // Architectury Loom, not Fabric Loom, for a mod that only targets Fabric. Two reasons, both
+    // practical: the engine is built with this exact version against this exact Minecraft, so one
+    // proven toolchain covers both halves of the repo; and Loom version compatibility is the
+    // sharpest edge in this whole build — Architectury Loom 1.11 silently cannot do 1.21.11 at all.
+    // Pinned exactly for the same reason every version here is (see the PlayerEngine note below).
+    id 'dev.architectury.loom' version '1.14.476'
 }
 
 group = project.maven_group
 version = project.mod_version
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 loom {
+    silentMojangMappingsLicense()
+
     runs {
         client {
             // Pin the dev username. Loom otherwise picks a random 'Player###' per launch, and an
@@ -21,8 +28,8 @@ loom {
 
 repositories {
     mavenCentral()
-    maven { name = 'Quilt Releases'; url = 'https://maven.quiltmc.org/repository/release/' }
-    maven { name = 'Quilt Snapshots'; url = 'https://maven.quiltmc.org/repository/snapshot/' }
+    maven { name = 'ParchmentMC'; url = 'https://maven.parchmentmc.org' }
+    maven { name = 'Architectury'; url = 'https://maven.architectury.dev/' }
     maven { name = 'Shedaniel'; url = 'https://maven.shedaniel.me/' }   // Cloth Config
     maven { name = 'Nucleoid'; url = 'https://maven.nucleoid.xyz/' }    // fabric-permissions-api
     maven {
@@ -36,12 +43,21 @@ repositories {
 
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings "org.quiltmc:quilt-mappings:${minecraft_version}+build.${quilt_mappings}:intermediary-v2"
-    modImplementation "net.fabricmc:fabric-loader:0.15.6"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
+    mappings loom.layered() {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-${minecraft_version}:${parchment_version}@zip")
+    }
+    modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    // Architectury API. The engine declares `architectury` in its own depends and does not nest it,
+    // and its networking is Architectury's NetworkManager — a channel has a server half and a
+    // client half and they must be the same API or the wire silently mistypes. Not include()d here:
+    // whether the shipped jar nests it or asks the player to install it is Phase 6's call.
+    modImplementation "dev.architectury:architectury-fabric:${architectury_api_version}"
 
     // Our forked PlayerEngine (built from ../engine, staged into libs/) — provides
-    // baritone/automatone + adris.altoclef (AltoClefController, IAutomatone, etc.).
+    // com.player2.playerengine.* (PlayerEngineController, IAutomatone, etc.).
     // include(...) nests it into the built jar (JiJ) so the CurseForge download runs
     // standalone; the nested jar keeps its own LGPL-3.0 license (META-INF/LICENSE).
     //
@@ -51,18 +67,17 @@ dependencies {
     // debugging sessions, once as a runtime NoSuchMethodError that vanished into a swallowed
     // Error. An exact version fails loudly at compile time instead. Bump this together with
     // ../engine/gradle.properties.
-    include(modImplementation("libs:PlayerEngine:1.1.19"))
+    include(modImplementation("libs:PlayerEngine:${playerengine_version}"))
 
     // The memory engine from ../../ai-companion-memory (built there, staged into libs/). Plain
     // Java 17 + Gson, no Minecraft and no Fabric, so Loom wraps the non-mod jar for JiJ. Gson is
     // deliberately not nested with it — Minecraft already ships Gson, and a second copy on the
     // classpath is a real hazard rather than a redundancy.
     //
-    // Pinned to an exact version rather than '+': Gradle caches dynamic-version resolution, so
-    // restaging a changed jar under an unchanged version silently keeps the old one. That cost real
-    // time on PlayerEngine today. Bump the version in ../../ai-companion-memory/engine/build.gradle
-    // and here together.
-    include(implementation("libs:aicompanion-memory:0.4.0"))
+    // The engine takes this compileOnly and relies on the mod to nest it, so there is exactly one
+    // copy on the classloader. Two copies of the same scorer is the silent divergence the shared
+    // core exists to prevent. Pinned exactly, for the reason above.
+    include(implementation("libs:aicompanion-memory:${memory_version}"))
 
     // Per-node permissions for /companion. A ~5 KB API with no implementation of its own: with no
     // permissions mod installed every check falls back to the vanilla operator level, so this
@@ -113,5 +128,8 @@ tasks.named('jar') {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
-    options.release = 17
+    options.release = 21
+    // A port produces errors in the hundreds and javac stops at 100 by default. Seeing all of them
+    // at once is what makes them sortable into categories instead of a queue.
+    options.compilerArgs += ['-Xmaxerrs', '100000']
 }

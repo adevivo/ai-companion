@@ -2,12 +2,13 @@ package com.neovetta.aicompanion.client;
 
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.screen.CompanionScreens;
+import dev.architectury.networking.NetworkManager;
+import net.minecraft.client.Minecraft;
 import net.fabricmc.api.ClientModInitializer;
 import net.minecraft.client.gui.screens.MenuScreens;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -35,20 +36,22 @@ public class AiCompanionClient implements ClientModInitializer {
         // /companion reload → re-read OUR file and apply the half that is ours. Off the netty
         // thread: this reads a file from disk and rebuilds the roster, and a network read thread is
         // the wrong place for either — observed running on "Netty Client IO #1" before this hop.
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.RELOAD_CLIENT_CONFIG,
-                (client, handler, buf, responseSender) ->
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.RELOAD_CLIENT_CONFIG,
+                (buf, context) ->
                         java.util.concurrent.CompletableFuture.runAsync(ClientConfigSync::reloadOwnConfig));
 
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.OPEN_CONFIG_SCREEN,
-                (client, handler, buf, responseSender) ->
-                        client.execute(() -> client.setScreen(CompanionConfigScreen.create(client.screen))));
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.OPEN_CONFIG_SCREEN,
+                (buf, context) -> context.queue(() -> {
+                    Minecraft client = Minecraft.getInstance();
+                    client.setScreen(CompanionConfigScreen.create(client.screen));
+                }));
 
         // Radar position/health snapshot. Read the buf synchronously (it's freed after the handler
         // returns); update() only stores primitives, so no client-thread hop is needed.
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.RADAR_UPDATE,
-                (client, handler, buf, responseSender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.RADAR_UPDATE,
+                (buf, context) -> {
                     int entityId = buf.readVarInt();
-                    String name = buf.readString();
+                    String name = buf.readUtf();
                     double x = buf.readDouble();
                     double y = buf.readDouble();
                     double z = buf.readDouble();
@@ -62,12 +65,12 @@ public class AiCompanionClient implements ClientModInitializer {
                 });
 
         // /companion radar → cycle the HUD mode and echo it. Hop to the client thread to touch the player.
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.RADAR_TOGGLE,
-                (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::cycleRadarAndEcho));
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.RADAR_TOGGLE,
+                (buf, context) -> context.queue(AiCompanionClient::cycleRadarAndEcho));
 
         // Cumulative session token spend for the usage HUD. Same no-hop reasoning as the radar.
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.TOKEN_USAGE,
-                (client, handler, buf, responseSender) -> {
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.TOKEN_USAGE,
+                (buf, context) -> {
                     long promptTokens = buf.readLong();
                     long completionTokens = buf.readLong();
                     long totalTokens = buf.readLong();
@@ -76,12 +79,12 @@ public class AiCompanionClient implements ClientModInitializer {
                 });
 
         // /companion hud → cycle the status panel and echo it. Client thread, same as the radar toggle.
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.STATUS_HUD_TOGGLE,
-                (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::cycleStatusHudAndEcho));
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.STATUS_HUD_TOGGLE,
+                (buf, context) -> context.queue(AiCompanionClient::cycleStatusHudAndEcho));
 
         // /companion tokens → flip the usage panel and echo it. Client thread, same as the radar toggle.
-        ClientPlayNetworking.registerGlobalReceiver(AiCompanion.TOKEN_HUD_TOGGLE,
-                (client, handler, buf, responseSender) -> client.execute(AiCompanionClient::toggleTokenHudAndEcho));
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.TOKEN_HUD_TOGGLE,
+                (buf, context) -> context.queue(AiCompanionClient::toggleTokenHudAndEcho));
 
         // Count our own spend when we are the ones spending it — see CompanionTokenHud#selfUpdate.
         // Registered unconditionally: it is a counter read and a modulo, and it returns immediately
@@ -104,7 +107,7 @@ public class AiCompanionClient implements ClientModInitializer {
         // assign it in Controls, or just use /companion radar.
         KeyMapping radarKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.aicompanion.radar", InputConstants.Type.KEYSYM,
-                InputConstants.UNKNOWN_KEY.getKeyCode(), "key.category.aicompanion"));
+                InputConstants.UNKNOWN.getKeyCode(), "key.category.aicompanion"));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (radarKey.consumeClick()) {
                 cycleRadarAndEcho();
@@ -117,7 +120,7 @@ public class AiCompanionClient implements ClientModInitializer {
         boolean on = CompanionTokenHud.toggle();
         var client = net.minecraft.client.Minecraft.getInstance();
         if (client.player != null) {
-            client.player.sendMessage(Component.literal("Companion token HUD: " + (on ? "ON" : "OFF")), false);
+            client.player.displayClientMessage(Component.literal("Companion token HUD: " + (on ? "ON" : "OFF")), false);
         }
     }
 
@@ -131,7 +134,7 @@ public class AiCompanionClient implements ClientModInitializer {
                 case ON -> " (always shown)";
                 case OFF -> " (hidden)";
             };
-            client.player.sendMessage(Component.literal("Companion status HUD: " + next + hint), false);
+            client.player.displayClientMessage(Component.literal("Companion status HUD: " + next + hint), false);
         }
     }
 
@@ -140,7 +143,7 @@ public class AiCompanionClient implements ClientModInitializer {
         CompanionRadarHud.Mode next = CompanionRadarHud.cycleMode();
         var client = net.minecraft.client.Minecraft.getInstance();
         if (client.player != null) {
-            client.player.sendMessage(Component.literal("Companion radar: " + next), false);
+            client.player.displayClientMessage(Component.literal("Companion radar: " + next), false);
         }
     }
 }
