@@ -4,7 +4,6 @@ import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.network.chat.Component;
@@ -17,11 +16,16 @@ import net.minecraft.network.chat.Component;
  * companion" stops being a safe guess the moment there are two.
  */
 public record CompanionScreenHandlerFactory(CompanionEntity companion)
-        implements ExtendedScreenHandlerFactory {
+        implements ExtendedScreenHandlerFactory<Integer> {
 
+    /**
+     * The opening payload is typed now rather than written by hand into a buffer: the factory
+     * returns the value and the menu type owns the codec that puts it on the wire. Both halves have
+     * to agree on that codec — see {@link CompanionScreens#TYPE}.
+     */
     @Override
-    public void writeScreenOpeningData(ServerPlayer player, FriendlyByteBuf buf) {
-        buf.writeVarInt(this.companion.getId());
+    public Integer getScreenOpeningData(ServerPlayer player) {
+        return this.companion.getId();
     }
 
     @Override

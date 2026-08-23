@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion.screen;
 
+import net.minecraft.world.item.enchantment.EnchantmentEffectComponents;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -55,7 +56,7 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
         for (int col = 0; col < ARMOR_ORDER.length; col++) {
             final EquipmentSlot equipment = ARMOR_ORDER[col];
             int index = ARMOR_START + equipment.getIndex();
-            this.addSlot(new ArmorSlot(this.companionInventory, index, 8 + col * 18, 18, equipment));
+            this.addSlot(new ArmorSlot(companion, this.companionInventory, index, 8 + col * 18, 18, equipment));
         }
         // Offhand, set apart from the armour so it does not read as a fifth piece.
         this.addSlot(new OffhandSlot(this.companionInventory, OFFHAND_SLOT, 98, 18));
@@ -86,28 +87,34 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
     /** Armour slot: one item, and only armour that actually belongs in this piece's place. */
     private static class ArmorSlot extends Slot {
         private final EquipmentSlot equipment;
+        /** Only to answer "where would this be worn" — that question is the entity's now. */
+        private final CompanionEntity companion;
 
-        ArmorSlot(Container inventory, int index, int x, int y, EquipmentSlot equipment) {
+        ArmorSlot(CompanionEntity companion, Container inventory, int index, int x, int y,
+                EquipmentSlot equipment) {
             super(inventory, index, x, y);
+            this.companion = companion;
             this.equipment = equipment;
         }
 
         @Override
-        public int getMaxItemCount() {
+        public int getMaxStackSize() {
             return 1;
         }
 
         @Override
-        public boolean canInsert(ItemStack stack) {
-            return LivingEntity.getEquipmentSlotForItem(stack) == this.equipment;
+        public boolean mayPlace(ItemStack stack) {
+            return this.companion.getEquipmentSlotForItem(stack) == this.equipment;
         }
 
         @Override
-        public boolean canTakeItems(Player player) {
+        public boolean mayPickup(Player player) {
             // Cursed armour cannot be taken off a player; the same should hold for a companion, or
             // the curse is trivially undone by handing the piece over and taking it back.
             ItemStack stack = this.getItem();
-            return (stack.isEmpty() || player.isCreative() || !EnchantmentHelper.hasBindingCurse(stack))
+            // Binding curse is a data component now rather than a bespoke helper.
+            return (stack.isEmpty() || player.isCreative()
+                    || !EnchantmentHelper.has(stack, EnchantmentEffectComponents.PREVENT_ARMOR_CHANGE))
                     && super.mayPickup(player);
         }
     }
@@ -131,7 +138,7 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
      * loop; getting that wrong is how shift-click hangs a server.
      */
     @Override
-    public ItemStack quickTransfer(Player player, int index) {
+    public ItemStack quickMoveStack(Player player, int index) {
         Slot slot = this.slots.get(index);
         if (slot == null || !slot.hasItem()) {
             return ItemStack.EMPTY;
@@ -150,7 +157,7 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
             }
         } else {
             // Player → companion: try to wear it first, then the storage rows, then the hotbar row.
-            EquipmentSlot preferred = LivingEntity.getEquipmentSlotForItem(inSlot);
+            EquipmentSlot preferred = this.companion.getEquipmentSlotForItem(inSlot);
             int armorIndex = armorSlotIndexFor(preferred);
             boolean moved = false;
             if (armorIndex >= 0 && !this.slots.get(armorIndex).hasItem()) {
@@ -197,7 +204,7 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
      * across the world, including into chunks that are no longer loaded.
      */
     @Override
-    public boolean canUse(Player player) {
+    public boolean stillValid(Player player) {
         if (!this.companion.isAlive() || this.companion.isRemoved()) {
             return false;
         }
@@ -210,10 +217,10 @@ public class CompanionScreenHandler extends AbstractContainerMenu {
     }
 
     @Override
-    public void close(Player player) {
+    public void removed(Player player) {
         super.removed(player);
         // Armour and held items are read straight off this inventory (see
-        // CompanionEntity#getEquippedStack), so anything just handed over takes effect on the next
+        // CompanionEntity#getItemBySlot), so anything just handed over takes effect on the next
         // tick with no extra plumbing — including the attribute modifiers of a weapon or a helmet.
         this.companionInventory.stopOpen(player);
     }

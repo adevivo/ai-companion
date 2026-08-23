@@ -3,12 +3,17 @@ package com.neovetta.aicompanion.client;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.SkinProfileResolver;
-import com.mojang.authlib.minecraft.MinecraftProfileTexture;
+import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.properties.Property;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
 
+import java.util.UUID;
+import java.util.Set;
+import java.util.HashSet;
+import java.nio.charset.StandardCharsets;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,6 +44,9 @@ public final class CompanionSkin {
      */
     private static final Map<String, Identifier> PROFILE_CACHE = new HashMap<>();
 
+    /** Blobs with a request in flight, so the render path asks once rather than once per frame. */
+    private static final Set<String> PROFILE_PENDING = new HashSet<>();
+
     private CompanionSkin() {}
 
     /** The named skin if it loaded, else {@code fallback}. Loads once per filename, then caches. */
@@ -61,10 +69,14 @@ public final class CompanionSkin {
      * {@link SkinProfileResolver} — so this never talks to Mojang and never needs a PNG on disk,
      * which is what makes username skins work for every client on a LAN.
      *
-     * <p>Returns immediately even on a cold cache: {@code loadSkin} hands back an identifier straight
-     * away and downloads the PNG on a background thread, swapping the texture in when it lands. The
-     * companion is briefly drawn with {@code fallback} and then simply becomes itself. That is the
-     * whole reason this is safe to call from {@code getTexture} on every frame.
+     * <p>Returns immediately even on a cold cache. The skin manager is asked once per blob and
+     * answers with a future; until it completes the companion is drawn with {@code fallback} and
+     * then simply becomes itself. That is the whole reason this is safe to call on every frame.
+     *
+     * <p>⚠️ Cold-cache behaviour changed in the 1.21.11 port and is worth knowing. The old
+     * {@code SkinManager.loadSkin(MinecraftProfileTexture, Type)} handed back an identifier
+     * synchronously and filled the texture in later. That entry point is gone; what remains takes a
+     * {@link GameProfile} and returns a future, so the identifier itself now arrives late.
      */
     public static Identifier textureFromProfile(String blob, Identifier fallback) {
         if (blob == null || blob.isBlank()) {
@@ -72,32 +84,55 @@ public final class CompanionSkin {
         }
         // containsKey, not get() != null: a blob that could not be used caches null and must not be
         // retried every frame. Same reasoning as textureOrDefault.
-        if (!PROFILE_CACHE.containsKey(blob)) {
-            PROFILE_CACHE.put(blob, tryLoadProfile(blob));
+        if (!PROFILE_CACHE.containsKey(blob) && PROFILE_PENDING.add(blob)) {
+            requestProfileSkin(blob);
         }
         Identifier loaded = PROFILE_CACHE.get(blob);
         return loaded != null ? loaded : fallback;
     }
 
-    private static Identifier tryLoadProfile(String blob) {
-        Optional<String> url = SkinProfileResolver.textureUrl(blob);
-        if (url.isEmpty()) {
+    /**
+     * Ask the skin manager for the skin a {@code textures} blob describes, and cache the answer.
+     *
+     * <p>The blob is handed over as a property on a synthetic {@link GameProfile}, which is what
+     * the session service reads: the profile needs no real identity, because nothing is looked up
+     * remotely — everything the download needs is already inside the blob, resolved server-side by
+     * {@link SkinProfileResolver}. The UUID is derived from the blob so two companions sharing a
+     * skin share a cache entry rather than racing for two downloads of the same PNG.
+     *
+     * <p>Failure caches {@code null}, and {@link #PROFILE_PENDING} keeps the entry from being
+     * retried on the next frame — this is called from the render path.
+     */
+    private static void requestProfileSkin(String blob) {
+        if (SkinProfileResolver.textureUrl(blob).isEmpty()) {
             AiCompanion.LOGGER.warn("[{}] companion skin profile carried no usable texture URL",
                     AiCompanion.MOD_ID);
-            return null;
+            PROFILE_CACHE.put(blob, null);
+            PROFILE_PENDING.remove(blob);
+            return;
         }
         try {
-            // Arm width is not read from here: it travels separately as tracked data, decoded
-            // server-side, so the metadata map this constructor takes can stay empty.
-            MinecraftProfileTexture texture = new MinecraftProfileTexture(url.get(), Map.of());
-            Identifier id = Minecraft.getInstance().getSkinManager()
-                    .loadSkin(texture, MinecraftProfileTexture.Type.SKIN);
-            AiCompanion.LOGGER.info("[{}] loaded companion skin from {}", AiCompanion.MOD_ID, url.get());
-            return id;
+            GameProfile profile = new GameProfile(
+                    UUID.nameUUIDFromBytes(blob.getBytes(StandardCharsets.UTF_8)), "companion");
+            profile.properties().put("textures", new Property("textures", blob));
+            Minecraft client = Minecraft.getInstance();
+            client.getSkinManager().get(profile).whenComplete((skin, error) -> client.execute(() -> {
+                PROFILE_PENDING.remove(blob);
+                if (error != null || skin == null || skin.isEmpty()) {
+                    AiCompanion.LOGGER.error("[{}] failed to load companion skin from its profile: {}",
+                            AiCompanion.MOD_ID, error == null ? "no skin returned" : error.toString());
+                    PROFILE_CACHE.put(blob, null);
+                    return;
+                }
+                PROFILE_CACHE.put(blob, skin.get().body().texturePath());
+                AiCompanion.LOGGER.info("[{}] loaded companion skin from its profile",
+                        AiCompanion.MOD_ID);
+            }));
         } catch (Exception e) {
-            AiCompanion.LOGGER.error("[{}] failed to load companion skin from {}: {}",
-                    AiCompanion.MOD_ID, url.get(), e.toString());
-            return null;
+            AiCompanion.LOGGER.error("[{}] failed to request a companion skin: {}",
+                    AiCompanion.MOD_ID, e.toString());
+            PROFILE_CACHE.put(blob, null);
+            PROFILE_PENDING.remove(blob);
         }
     }
 
@@ -112,9 +147,10 @@ public final class CompanionSkin {
             NativeImage image = NativeImage.read(in);
             // Identifier paths only allow [a-z0-9/._-]; sanitize the filename so any name is valid.
             String safe = file.toLowerCase().replaceAll("[^a-z0-9_.-]", "_");
-            Identifier id = new Identifier(AiCompanion.MOD_ID, "skin/" + safe);
+            Identifier id = Identifier.fromNamespaceAndPath(AiCompanion.MOD_ID, "skin/" + safe);
+            // DynamicTexture takes a label supplier now, used in debug output and GPU labels.
             Minecraft.getInstance().getTextureManager().register(id,
-                    new DynamicTexture(image));
+                    new DynamicTexture(() -> "aicompanion skin " + safe, image));
             AiCompanion.LOGGER.info("[{}] loaded companion skin from {}", AiCompanion.MOD_ID, path);
             return id;
         } catch (Exception e) {

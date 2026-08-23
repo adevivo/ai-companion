@@ -1,5 +1,7 @@
 package com.neovetta.aicompanion;
 
+import net.minecraft.server.players.ProfileResolver;
+import java.util.concurrent.CompletableFuture;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -79,19 +81,25 @@ public final class SkinProfileResolver {
         }
 
         try {
-            SkullBlockEntity.loadProperties(new GameProfile(null, username.strip()), profile -> {
-                String blob = texturesBlob(profile).orElse(NO_SKIN);
-                CACHE.put(key, blob);
-                IN_FLIGHT.remove(key);
-                if (blob.equals(NO_SKIN)) {
-                    AiCompanion.LOGGER.warn("[{}] no skin found for username '{}' — falling back",
-                            AiCompanion.MOD_ID, username);
-                    return;
-                }
-                // loadProperties calls back off-thread; tracked data may only be touched on the
-                // server thread.
-                server.execute(() -> onResolved.accept(blob));
-            });
+            // SkullBlockEntity.loadProperties is gone; the lookup is ProfileResolver's now, and it
+            // is synchronous — so the off-thread hop that used to come free with the callback has
+            // to be arranged here. Still ends on the server thread, because that is the only place
+            // tracked data may be touched.
+            ProfileResolver resolver = server.services().profileResolver();
+            CompletableFuture.supplyAsync(() -> resolver.fetchByName(username.strip()))
+                    .whenComplete((profile, error) -> {
+                        String blob = error != null
+                                ? NO_SKIN
+                                : profile.flatMap(SkinProfileResolver::texturesBlob).orElse(NO_SKIN);
+                        CACHE.put(key, blob);
+                        IN_FLIGHT.remove(key);
+                        if (blob.equals(NO_SKIN)) {
+                            AiCompanion.LOGGER.warn("[{}] no skin found for username '{}' — falling back",
+                                    AiCompanion.MOD_ID, username);
+                            return;
+                        }
+                        server.execute(() -> onResolved.accept(blob));
+                    });
         } catch (Exception e) {
             // An offline-mode server has no session service to ask. That is a supported setup, not an
             // error worth breaking a spawn over.
@@ -113,11 +121,11 @@ public final class SkinProfileResolver {
         if (profile == null) {
             return Optional.empty();
         }
-        Collection<Property> textures = profile.getProperties().get("textures");
+        Collection<Property> textures = profile.properties().get("textures");
         if (textures == null || textures.isEmpty()) {
             return Optional.empty();
         }
-        String value = textures.iterator().next().getValue();
+        String value = textures.iterator().next().value();
         return value == null || value.isBlank() ? Optional.empty() : Optional.of(value);
     }
 

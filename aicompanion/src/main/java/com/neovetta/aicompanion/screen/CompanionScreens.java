@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion.screen;
 
+import net.minecraft.network.codec.ByteBufCodecs;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerType;
@@ -21,13 +22,13 @@ public final class CompanionScreens {
      * out "the nearest one" is not an answer. The entity id travels in the opening packet.
      */
     public static final MenuType<CompanionScreenHandler> TYPE =
-            new ExtendedScreenHandlerType<>((syncId, playerInventory, buf) -> {
-                Entity entity = playerInventory.player.getWorld().getEntity(buf.readVarInt());
+            new ExtendedScreenHandlerType<>((syncId, playerInventory, entityId) -> {
+                Entity entity = playerInventory.player.level().getEntity(entityId);
                 if (!(entity instanceof CompanionEntity companion)) {
                     return null; // the companion left the client's view between opening and reading
                 }
                 return new CompanionScreenHandler(syncId, playerInventory, companion);
-            });
+            }, ByteBufCodecs.VAR_INT);
 
     public static void register() {
         Registry.register(BuiltInRegistries.MENU, AiCompanion.id("companion_inventory"), TYPE);

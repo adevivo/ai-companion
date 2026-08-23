@@ -107,7 +107,8 @@ public class AiCompanionClient implements ClientModInitializer {
         // assign it in Controls, or just use /companion radar.
         KeyMapping radarKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.aicompanion.radar", InputConstants.Type.KEYSYM,
-                InputConstants.UNKNOWN.getValue(), "key.category.aicompanion"));
+                InputConstants.UNKNOWN.getValue(),
+                new KeyMapping.Category(AiCompanion.id("main"))));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (radarKey.consumeClick()) {
                 cycleRadarAndEcho();

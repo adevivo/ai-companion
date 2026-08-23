@@ -197,7 +197,7 @@ public final class CompanionCommands {
         ServerLevel world = source.getLevel();
         Vec3 origin = source.getPosition();
         List<CompanionEntity> companions = new ArrayList<>(world.getEntitiesOfClass(CompanionEntity.class,
-                AABB.of(origin, 20000, 20000, 20000), e -> true));
+                AABB.ofSize(origin, 20000, 20000, 20000), e -> true));
         companions.sort(Comparator.comparingDouble(e -> e.distanceToSqr(origin)));
         return companions;
     }
@@ -477,7 +477,7 @@ public final class CompanionCommands {
             AiCompanion.LOGGER.warn("[{}] {} has not ticked for {} ms at {} blocks — outside simulation "
                     + "distance, so it cannot walk back. Teleporting instead of pathing.",
                     AiCompanion.MOD_ID, who, idleMs, String.format("%.0f", distance));
-            companion.teleport(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, false);
+            companion.teleportTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5);
         }
 
         PlayerEngineController ctrl = companion.getController();
@@ -980,7 +980,7 @@ public final class CompanionCommands {
         List<String> armor = new ArrayList<>();
         for (EquipmentSlot slot : new EquipmentSlot[]{
                 EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
-            String d = describe(companion.getEquippedStack(slot));
+            String d = describe(companion.getItemBySlot(slot));
             if (d != null) {
                 armor.add(d);
             }
@@ -989,8 +989,8 @@ public final class CompanionCommands {
                 "Armor: " + (armor.isEmpty() ? "none" : String.join(", ", armor))), false);
 
         // Hands.
-        String main = describe(companion.getEquippedStack(EquipmentSlot.MAINHAND));
-        String off = describe(companion.getEquippedStack(EquipmentSlot.OFFHAND));
+        String main = describe(companion.getItemBySlot(EquipmentSlot.MAINHAND));
+        String off = describe(companion.getItemBySlot(EquipmentSlot.OFFHAND));
         source.sendSuccess(() -> Component.literal("Hands: main = " + (main == null ? "empty" : main)
                 + ", off = " + (off == null ? "empty" : off)), false);
 

@@ -1,5 +1,6 @@
 package com.neovetta.aicompanion.client;
 
+import net.minecraft.client.renderer.RenderPipelines;
 import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.screen.CompanionScreenHandler;
 import net.minecraft.client.gui.GuiGraphics;
@@ -24,6 +25,10 @@ public class CompanionScreen extends AbstractContainerScreen<CompanionScreenHand
     private static final int WIDTH = 176;
     private static final int HEIGHT = 216;
 
+    /** The PNG's own size. blit needs it to derive UVs; the panel above is a region of it. */
+    private static final int TEXTURE_WIDTH = 256;
+    private static final int TEXTURE_HEIGHT = 256;
+
     public CompanionScreen(CompanionScreenHandler handler, Inventory inventory, Component title) {
         super(handler, inventory, title);
         this.imageWidth = WIDTH;
@@ -34,15 +39,18 @@ public class CompanionScreen extends AbstractContainerScreen<CompanionScreenHand
     }
 
     @Override
-    protected void drawBackground(GuiGraphics ctx, float delta, int mouseX, int mouseY) {
+    protected void renderBg(GuiGraphics ctx, float delta, int mouseX, int mouseY) {
         int x = (this.width - this.imageWidth) / 2;
         int y = (this.height - this.imageHeight) / 2;
-        ctx.blit(TEXTURE, x, y, 0, 0, this.imageWidth, this.imageHeight);
+        // blit now names the pipeline it draws through and takes the texture's own dimensions, so
+        // it can work out UVs rather than assuming the old fixed 256x256 sheet.
+        ctx.blit(RenderPipelines.GUI_TEXTURED, TEXTURE, x, y, 0.0F, 0.0F,
+                this.imageWidth, this.imageHeight, TEXTURE_WIDTH, TEXTURE_HEIGHT);
     }
 
     @Override
     public void render(GuiGraphics ctx, int mouseX, int mouseY, float delta) {
-        this.renderBackground(ctx);
+        this.renderBackground(ctx, mouseX, mouseY, delta);
         super.render(ctx, mouseX, mouseY, delta);
         this.renderTooltip(ctx, mouseX, mouseY);
     }

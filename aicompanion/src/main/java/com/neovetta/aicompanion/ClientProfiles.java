@@ -76,7 +76,7 @@ public final class ClientProfiles {
             }
         }
 
-        RosterGuard.Result result = RosterGuard.sanitize(announced, onlineNames(player.getServer()));
+        RosterGuard.Result result = RosterGuard.sanitize(announced, onlineNames(player.level().getServer()));
         // The skills advertisement is the SERVER's to add — the skill files are its own, and a
         // client cannot know what they are. Appended on the same terms as a server-side entry: only
         // to a persona that is set, because a blank one falls back to the global persona, which is
