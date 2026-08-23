@@ -14,15 +14,21 @@ is a genuine removal or redesign, which is exactly the set worth a human's atten
     python3 tools/quilt2mojmap.py --from 1.20.1 --to 1.21.11 --root aicompanion/src --dry-run
     python3 tools/quilt2mojmap.py --from 1.20.1 --to 1.21.11 --root aicompanion/src
 
-Never guesses, in three separate ways:
+Never guesses, in four separate ways:
 
   * A quilt name that maps to more than one mojmap name is reported and skipped, never resolved by
-    picking one. (`mcmigrate.py` learned this the hard way — see tools/README.md.)
-  * Member renames are skipped when the same name is declared by the source tree itself. Yarn
-    `getWorld` becomes Mojmap `level`, and rewriting our own `getWorld()` would be silent damage.
-  * Comments and string literals are masked before any rewrite. An import-only pass misses live
-    references in code bodies, and a body-inclusive pass corrupts javadoc and error messages unless
-    they are held out.
+    picking one. (`mcmigrate.py` learned this the hard way — see tools/README.md.) What it skips is
+    not lost: the compiler knows the receiver, so those are resolved from a build log afterwards.
+  * Member renames are skipped when the source tree declares the same name itself. Yarn `getWorld`
+    becomes Mojmap `level`, and rewriting our own `getWorld()` would be silent damage.
+  * Member renames are skipped when anything on the classpath declares the name — pass every
+    dependency to `--holdout`, Fabric API and the JDK included. `String.strip()` is not Minecraft.
+  * Comments, string literals and qualified names are masked before any rewrite. An import-only
+    pass misses live references in code bodies; a body-inclusive pass corrupts javadoc, error
+    messages and package segments unless they are held out.
+
+And the passes run against the text as it arrived, never against each other's output — see
+`rewrite`.
 """
 import argparse, collections, pathlib, re, sys
 
