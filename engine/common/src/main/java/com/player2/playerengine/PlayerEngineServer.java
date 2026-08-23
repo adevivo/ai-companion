@@ -20,26 +20,53 @@ package com.player2.playerengine;
 import com.player2.playerengine.player2api.brain.BrainWire;
 import com.player2.playerengine.player2api.manager.TTSManager;
 import com.player2.playerengine.automaton.KeepName;
-import net.fabricmc.api.ModInitializer;
+import dev.architectury.platform.Platform;
+import dev.architectury.utils.Env;
 
 /**
- * Server-side init for the altoclef half of the engine.
+ * Server-side init for the engine's agent half.
  *
- * <p>Separate from {@link baritone.PlayerEngine} because that class lives in the {@code main} source
- * set, which cannot see {@code adris.altoclef} — the dependency runs the other way.
+ * <p>⚠️ This used to be a {@code ModInitializer} named in the old (pre-Architectury)
+ * {@code fabric.mod.json}. The 1.21.11 port took its {@code fabric.mod.json} from upstream's
+ * Architectury template, which never listed it — so for the whole port this class was <b>dead
+ * code</b>: it compiled, it looked wired, and nothing ever called it. It is now invoked from
+ * {@link PlayerEngine#onInitialize()}, which every loader runs, rather than depending on an
+ * entrypoint list that a re-base can silently drop again. Keeping it out of the entrypoint list is
+ * deliberate for the same reason.
+ *
+ * <p>What that cost, so nobody re-breaks it: {@link TTSManager#registerAckReceiver()} never ran, so
+ * the server had no receiver on {@code tts_done}. The owner's client checks
+ * {@code canServerReceive} before replying, found it false, and never sent the ack at all — which
+ * meant a companion's speech lock was only ever released by its 60-second backstop. Since
+ * {@code AgentConversationData.getPriority()} returns 0 while a companion is "speaking", every
+ * queued message stalled for up to a minute. It read as network lag or a slow LLM; it was neither.
  */
 @KeepName
-public final class PlayerEngineServer implements ModInitializer {
-   public void onInitialize() {
-      // Companion speech plays on the owner's machine, so only the owner's client can say whether it
-      // happened. It answers when the line finishes — or straight away when there is no Kokoro server
-      // to play it — and that answer is what releases the companion's speech lock.
+public final class PlayerEngineServer {
+
+   private PlayerEngineServer() {}
+
+   /** Called from {@link PlayerEngine#onInitialize()} on every side and every loader. */
+   public static void init() {
+      // C2S, and it must run on BOTH sides. The server needs the receiver so an ack releases the
+      // speech lock the moment the line finishes; the client needs the type registered so it can
+      // send one at all — canServerReceive is false until this exists, and the client stays silent.
       TTSManager.registerAckReceiver();
 
-      // Architectury learns a channel's payload type when a receiver is registered for it, and the
-      // receivers for these two live on the client. A dedicated server never runs that code, so it
-      // has to be told about them here or every outgoing packet on them is built with a null type.
-      TTSManager.registerSpeechChannel();
-      BrainWire.registerServerToClientChannels();
+      // S2C payload types: DEDICATED SERVER ONLY.
+      //
+      // Architectury learns a channel's type as a side effect of registering a RECEIVER for it, and
+      // the receivers for both of these live on the client. A dedicated server never runs client
+      // init, so without this its lookup misses and every outgoing packet is built with a null type
+      // — silently, which is the whole reason the declaration exists.
+      //
+      // But declaring them on a client DOUBLE-registers: the client's own receiver registration
+      // registers the same type, and Fabric's PayloadTypeRegistry throws on a duplicate id. That is
+      // exactly the crash the mod half hit on 2026-08-23 (aicompanion:server_policy "is already
+      // registered"), which killed the client entrypoint before the title screen.
+      if (Platform.getEnvironment() == Env.SERVER) {
+         TTSManager.registerSpeechChannel();
+         BrainWire.registerServerToClientChannels();
+      }
    }
 }

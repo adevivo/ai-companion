@@ -46,6 +46,10 @@ public final class PlayerEngine {
    public static void onInitialize() {
       DefaultCommands.registerAll();
       Registry.register(BuiltInRegistries.ENTITY_TYPE, id("fishing_bobber"), FISHING_BOBBER);
+      // The agent half's own init: the TTS ack receiver, and the server's S2C channel declarations.
+      // Called from here rather than from a fabric.mod.json entrypoint because the port lost exactly
+      // that entrypoint and nothing noticed for the whole port — see PlayerEngineServer.
+      PlayerEngineServer.init();
    }
 
    static {
