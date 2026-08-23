@@ -84,6 +84,39 @@ entity/spawn/render glue is written independently, informed only by public/vanil
 
 ---
 
+## What a player needs installed
+
+| | Mod | Why |
+|---|---|---|
+| **Required** | Fabric Loader + Fabric API | the loader and its APIs |
+| **Required** | **Architectury API** | the engine is an Architectury mod and all our networking is Architectury's. Structural — it cannot be made optional |
+| *Optional* | **Cloth Config API** | the graphical settings screen. Without it the mod runs normally and `/aicompanion config` edits the same settings from chat |
+| *Optional* | Mod Menu | adds the gear button next to our entry on the Mods screen |
+
+Installing through the **CurseForge app** or **Prism** resolves the required entries automatically —
+there is nothing extra to click. Downloading the jar straight from the CurseForge *website* does not,
+so that route needs Architectury API fetched by hand.
+
+### Why we stopped bundling other people's mods
+
+Earlier builds nested Cloth Config inside our jar so the download was self-contained. That traded away
+more than it bought. Cloth is a separately published project with its own CurseForge listing, and
+redistributing another author's mod inside ours is one of the things that put 0.3.0 and 0.3.1 into
+CurseForge's manual-review queue — see `../ai-companion-memory/curseforge-release-problems.md`. It also
+bought less than it appeared to, because the jar has never nested Architectury API and so was never
+genuinely standalone in the first place.
+
+What is still nested is deliberate and defensible: our own engine fork (no upstream listing exists for
+a player to install from), our own core library, and `fabric-permissions-api` — a ~15 KB API with no
+implementation, which is designed to be bundled.
+
+Cloth being *optional* rather than merely unbundled is the part that matters for players. As a hard
+`depends` a missing Cloth is a launch-blocking Fabric Loader error that reads as "this mod is broken";
+as `suggests` it is a mod that looks plainer and tells you what to type. `CompanionConfigChat` keeps
+the screen class behind a runtime `isModLoaded` check so it is never loaded when Cloth is absent.
+
+---
+
 ## Foundation (decided via spike)
 
 | Layer | Choice |
@@ -567,6 +600,54 @@ almost certainly core-library code and putting it in the engine commits you to p
 The **mod version is the feature set** and the **`+mc` suffix is the target**, so the same number on
 two branches means the same features built for different Minecraft versions, and one changelog entry
 covers both. This follows Fabric API's own scheme (`0.141.1+1.21.11`).
+
+Applied in `aicompanion/build.gradle` as
+`version = "${project.mod_version}+mc${project.minecraft_version}"`; `fabric.mod.json` picks it up
+because `processResources` already expands `${version}` into it.
+
+One property of `+` worth knowing: it is semver **build metadata**, which comparison ignores. So
+`0.4.0+mc1.20.1` and `0.4.0+mc1.21.11` compare *equal* to Fabric Loader. In practice the `minecraft`
+range in each jar's `depends` decides which one can load, but a dependency range like `>=0.4.0` cannot
+tell the two lines apart, and neither can a naive update checker. Fabric API has shipped this way for
+years, so it is well-trodden rather than clever.
+
+### Releasing
+
+Built jars are published as **GitHub Release assets**, one release per Minecraft version. They are
+deliberately *not* committed to the repo: git history is permanent, so a 3.2 MB jar per release per
+`mc/*` branch would be paid by every clone forever, and a tracked `jars/` directory under
+`aicompanion/` would collide on every cross-branch cherry-pick — which is the one mechanism the whole
+multi-version strategy rests on. A jar is derived state, reproducible from a tag plus the version
+matrix. If a local staging directory is wanted, use a gitignored `dist/`.
+
+Tag convention is `v<mod version>+mc<minecraft version>` — the jar name exactly, minus the `v`. `+` is
+valid in a git ref (`git check-ref-format refs/tags/v0.4.0+mc1.21.11` passes).
+
+| Branch | Tag | Release title | Asset |
+|---|---|---|---|
+| `mc/1.21.11` | `v0.4.0+mc1.21.11` | `0.4.0 — Minecraft 1.21.11` | `aicompanion-0.4.0+mc1.21.11.jar` |
+| `mc/1.20.1` | `v0.4.0+mc1.20.1` | `0.4.0 — Minecraft 1.20.1` | `aicompanion-0.4.0+mc1.20.1.jar` |
+
+```bash
+# 1. build, and confirm the name carries +mc<version>
+ls aicompanion/build/libs/
+
+# 2. tag the exact commit that produced it
+git tag -a "v0.4.0+mc1.21.11" -m "0.4.0 for Minecraft 1.21.11"
+
+# 3. push branch and tag
+git push origin mc/1.21.11 && git push origin "v0.4.0+mc1.21.11"
+
+# 4. create the release and attach the jar
+gh release create "v0.4.0+mc1.21.11" \
+   "aicompanion/build/libs/aicompanion-0.4.0+mc1.21.11.jar" \
+   --title "0.4.0 — Minecraft 1.21.11" \
+   --notes "$(sed -n '/^## 0.4.0/,/^## /p' docs/changelog.md)"
+```
+
+CurseForge is a **parallel** channel, not an alternative: upload the same jar there as a separate file
+on the same project, and declare Architectury API as a required relation and Cloth Config as optional
+so the app resolves them for players.
 
 ### Adding a new Minecraft version
 

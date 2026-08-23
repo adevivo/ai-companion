@@ -5,6 +5,62 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.4.0 — Minecraft 1.21.11, and a jar that stops carrying other people's mods
+
+The first release on the 1.21.11 line, and the first with a Minecraft version in its filename.
+
+### Minecraft 1.21.11
+
+The engine and the mod were both ported: the engine re-based onto upstream PlayerEngine's Architectury
+tree and then carried to 1.21.11 ourselves (upstream stopped at 1.21.10), and the mod translated from
+Quilt Mappings to Mojang's own names at the same time. 1.21.11 is not a patch-sized change —
+`ResourceLocation` became `Identifier`, the entity tree reorganised into `monster.zombie.*` and
+`monster.skeleton.*`, and entity save data moved to `ValueInput`/`ValueOutput`.
+
+The 1.20.1 line continues in parallel and is not going away. Both lines share one version number when
+they share a feature set, which is what the new `+mc` suffix is for.
+
+### Jar names now say which Minecraft they are for
+
+Files are `aicompanion-<version>+mc<minecraft version>.jar` — `aicompanion-0.4.0+mc1.21.11.jar`. With
+two lines uploading to the same project, a filename that did not name its target was going to cause
+somebody to install the wrong one. It matches Fabric API's own scheme.
+
+### Cloth Config is no longer required, or bundled
+
+The settings screen still uses Cloth Config, but the mod no longer ships a copy of it and no longer
+refuses to start without it. If Cloth is missing, the mod loads normally and `/aicompanion config`
+edits exactly the same settings from chat:
+
+- `/aicompanion config show` — every setting and its current value
+- `/aicompanion config get <path>` — read one, e.g. `llm.model`
+- `/aicompanion config set <path> <value>` — write one and apply it
+
+Only settings that already exist can be set, and a value keeps its existing type, so a typo is refused
+rather than silently written. Anything that looks like an API key prints redacted, because chat gets
+screenshotted. The file is copied to `.bak` before each write.
+
+**Architectury API is required** and is not bundled — the CurseForge app and Prism install it for you.
+Cloth Config and Mod Menu are optional.
+
+### The bundled engine now says who wrote it
+
+The nested PlayerEngine jar shipped unedited Fabric template metadata: author `"Me!"`, a description
+reading `"This is an example description!"`, source links pointing at the Fabric example repository,
+and a `CC0-1.0` license declaration over Baritone-derived code that is LGPL-3.0. That was wrong on its
+own merits regardless of anyone reviewing it. It now identifies itself honestly, declares
+`LGPL-3.0-or-later`, and carries `META-INF/NOTICE` crediting upstream PlayerEngine (LGPL-3.0), Baritone
+(LGPL-3.0) and AltoClef (MIT), with both license texts alongside it.
+
+### Smaller, flatter, and shorter paths inside
+
+Dropping Cloth removed a whole level of nesting, and an unused Architectury `@ExpectPlatform` support
+package — which generated a single 169-character path segment — is no longer emitted at all, since
+nothing in the tree ever used it. The deepest path inside the archive went from about 235 characters to
+163, which matters on Windows, where extraction tooling runs into a 260-character limit.
+
+---
+
 ## 0.3.1 — A silent turn no longer crashes the world
 
 Bundles PlayerEngine 1.1.18. One bug, in two places, and it is the kind worth shipping on its own.
