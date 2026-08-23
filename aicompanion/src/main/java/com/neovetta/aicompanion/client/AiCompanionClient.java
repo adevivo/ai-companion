@@ -18,6 +18,7 @@ import net.minecraft.resources.Identifier;
 
 /** Client entrypoint: register the companion's renderer, the config-screen opener, and the radar HUD. */
 public class AiCompanionClient implements ClientModInitializer {
+
     @Override
     public void onInitializeClient() {
         EntityRendererRegistry.register(AiCompanion.COMPANION, CompanionRenderer::new);
@@ -28,6 +29,11 @@ public class AiCompanionClient implements ClientModInitializer {
         // Thinking for our own companion when the server asks. Registers a JOIN handshake plus one
         // receiver; does nothing at all unless the server has llm.clientBrain on and asks.
         ClientBrain.register();
+        // /aicompanion config show|get|set - the config route that works without Cloth Config
+        // installed, editing the same local file the screen edits. Registered unconditionally: it is
+        // just as useful on a dedicated server, and a command that comes and goes depending on
+        // another mod is harder to document than one that is always there.
+        CompanionConfigChat.register();
         // Announce our own companions and trigger prefix at join, and take the operator's rules back
         // for the read-only Server tab. Both directions no-op against a server too old to have the
         // channels registered, which is the ordinary case and not an error.
@@ -42,8 +48,12 @@ public class AiCompanionClient implements ClientModInitializer {
 
         NetworkManager.registerReceiver(NetworkManager.Side.S2C, AiCompanion.OPEN_CONFIG_SCREEN,
                 (buf, context) -> context.queue(() -> {
-                    Minecraft client = Minecraft.getInstance();
-                    client.setScreen(CompanionConfigScreen.create(client.screen));
+                    // Cloth Config is optional (suggests, not depends, and no longer bundled), so
+                    // this goes through the helper: it opens the screen when Cloth is installed and
+                    // otherwise explains the /aicompanion config chat route. Calling
+                    // CompanionConfigScreen directly here would drag its me.shedaniel imports into
+                    // this class and crash the receiver on a client without Cloth.
+                    CompanionConfigChat.openOrExplain(Minecraft.getInstance().screen);
                 }));
 
         // Radar position/health snapshot. Read the buf synchronously (it's freed after the handler

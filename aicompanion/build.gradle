@@ -90,13 +90,28 @@ dependencies {
 
     implementation 'com.google.code.findbugs:jsr305:3.0.2'
 
-    // In-game config screen. Cloth Config builds the screen and is JiJ'd (include) so the
-    // CurseForge jar stays self-contained; its POM pulls fabric-api, excluded to avoid clashing
-    // with the version pinned above.
-    modApi("me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}") {
+    // In-game config screen. NOT bundled, and NOT a hard dependency.
+    //
+    // It used to be JiJ'd so the CurseForge download was self-contained. That traded away more than
+    // it bought: Cloth is a separately-published project with its own CurseForge listing, and
+    // redistributing another author's mod inside ours is one of the things that put 0.3.0 and 0.3.1
+    // into manual review. It also bought less than it looked like it did, because the jar has never
+    // nested Architectury API and so was never actually standalone anyway.
+    //
+    // Unbundling costs a CurseForge-app player nothing: required dependencies declared on the
+    // project page are resolved and installed automatically. For everyone else CompanionConfigChat
+    // keeps the mod working without it - Cloth is 'suggests' in fabric.mod.json, the screen class is
+    // only ever loaded behind a runtime isModLoaded check, and /aicompanion config edits the same
+    // file from chat. So a missing Cloth is a plainer mod, not a launch-blocking dependency error.
+    //
+    // compileOnly + localRuntime mirrors how Mod Menu is handled just below, which is the existing
+    // pattern in this file for 'we implement against it, we do not ship it'.
+    modCompileOnly("me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}") {
         exclude group: 'net.fabricmc.fabric-api'
     }
-    include "me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}"
+    modLocalRuntime("me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}") {
+        exclude group: 'net.fabricmc.fabric-api'
+    }
 
     // Mod Menu is compile-time only: we implement its ModMenuApi entrypoint, but the class is
     // loaded solely BY Mod Menu, so shipping without it is safe (fabric.mod.json 'suggests' it).
