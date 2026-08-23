@@ -32,6 +32,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -117,6 +118,32 @@ public class ToolSet {
       return this.baritone.settings().blocksToAvoidBreaking.get().contains(b.builtInRegistryHolder().value()) ? 0.1 : 1.0;
    }
 
+   /**
+    * Efficiency level on a stack, or 0 when it has none.
+    *
+    * <p>On 1.20.1 this was {@code EnchantmentHelper.getItemEnchantmentLevel(BLOCK_EFFICIENCY, item)},
+    * which answers 0 for an unenchanted or differently-enchanted tool and cannot throw. The 1.21
+    * rewrite replaced it with a stream ending in {@code .findFirst().get()}, guarded only by "does
+    * this stack have ANY enchantments". Those are different questions: a Fortune, Silk Touch,
+    * Unbreaking or Mending pickaxe has enchantments and no Efficiency, so the filter came back empty
+    * and {@code Optional.get()} threw — from block-breaking cost estimation, which runs constantly
+    * during pathfinding. It also called {@code unwrapKey().get()}, a second unguarded Optional.
+    *
+    * <p>{@code Holder.is(ResourceKey)} removes the need for both.
+    */
+   private static int efficiencyLevel(ItemStack item) {
+      ItemEnchantments enchantments = item.get(DataComponents.ENCHANTMENTS);
+      if (enchantments == null) {
+         return 0;
+      }
+      for (var entry : enchantments.entrySet()) {
+         if (entry.getKey().is(Enchantments.EFFICIENCY)) {
+            return entry.getIntValue();
+         }
+      }
+      return 0;
+   }
+
    public static double calculateSpeedVsBlock(ItemStack item, BlockState state) {
       float hardness = state.getDestroySpeed(null, null);
       if (hardness < 0.0F) {
@@ -124,7 +151,7 @@ public class ToolSet {
       } else {
          float speed = item.getDestroySpeed(state);
          if (speed > 1.0F) {
-            int effLevel = item.get(DataComponents.ENCHANTMENTS)==null || item.get(DataComponents.ENCHANTMENTS).isEmpty()?0: item.get(DataComponents.ENCHANTMENTS).entrySet().stream().filter(e->e.getKey().unwrapKey().get().equals(Enchantments.EFFICIENCY)).findFirst().get().getIntValue();
+            int effLevel = efficiencyLevel(item);
             if (effLevel > 0 && !item.isEmpty()) {
                speed += effLevel * effLevel + 1;
             }

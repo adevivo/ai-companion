@@ -8,15 +8,16 @@ import com.player2.playerengine.util.helpers.LookHelper;
 import com.player2.playerengine.util.helpers.StorageHelper;
 import com.player2.playerengine.util.slots.PlayerSlot;
 import java.util.List;
+import java.util.OptionalDouble;
 
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.Tool;
 
 public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
@@ -35,6 +36,32 @@ public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
       super(maintainDistance, combatGuardLowerRange, combatGuardLowerFieldRadius);
    }
 
+   /**
+    * The attack-damage bonus an item carries, or empty when it grants none.
+    *
+    * <p>Both halves of this matter. On 1.20.1 this was
+    * {@code item instanceof TieredItem t ? t.getTier().getAttackDamageBonus() : ...} — total, and
+    * incapable of throwing. 1.21 removed tiers in favour of the attribute-modifiers component, and
+    * the rewrite guarded on {@code components().has(ATTRIBUTE_MODIFIERS)} before calling
+    * {@code .findFirst().get()} on the ATTACK_DAMAGE entry. Those are not the same question: armour
+    * carries attribute modifiers and no attack damage, so the filter came back empty and
+    * {@code Optional.get()} threw {@code NoSuchElementException} straight out of the AI tick.
+    *
+    * <p>Seen in the wild on 2026-08-23: a companion died, respawned with an empty inventory, and
+    * the very next tick asked what its best weapon was. Five throws later its AI was disabled
+    * outright and it stood still until the world was reloaded.
+    */
+   private static OptionalDouble attackDamageOf(Item candidate) {
+      ItemAttributeModifiers modifiers = candidate.components().get(DataComponents.ATTRIBUTE_MODIFIERS);
+      if (modifiers == null) {
+         return OptionalDouble.empty();
+      }
+      return modifiers.modifiers().stream()
+            .filter(entry -> entry.attribute() == Attributes.ATTACK_DAMAGE)
+            .mapToDouble(entry -> entry.modifier().amount())
+            .findFirst();
+   }
+
    public static Item bestWeapon(PlayerEngineController mod) {
       Item toolItem1 = null;
       List<ItemStack> invStacks = mod.getItemStorage().getItemStacksPlayerInventory(true);
@@ -43,18 +70,21 @@ public abstract class AbstractKillEntityTask extends AbstractDoToEntityTask {
          return toolItem2;
       } else {
          Item item = StorageHelper.getItemStackInSlot(PlayerSlot.getEquipSlot(mod.getInventory())).getItem();
-         float bestDamage = Float.NEGATIVE_INFINITY;
-         if (item.components().has(DataComponents.ATTRIBUTE_MODIFIERS)) {
-            bestDamage = (float) item.components().get(DataComponents.ATTRIBUTE_MODIFIERS).modifiers().stream().filter((f)->f.attribute()== Attributes.ATTACK_DAMAGE).findFirst().get().modifier().amount();
-         }
+         // Anything with no attack damage sits at -inf and so never wins, which is what the
+         // TieredItem check used to accomplish by simply not matching.
+         float bestDamage = (float) attackDamageOf(item).orElse(Double.NEGATIVE_INFINITY);
 
          for (ItemStack invStack : invStacks) {
-            if (invStack.getItem().components().has(DataComponents.ATTRIBUTE_MODIFIERS)) {
-               float itemDamage = (float) item.components().get(DataComponents.ATTRIBUTE_MODIFIERS).modifiers().stream().filter((f)->f.attribute()== Attributes.ATTACK_DAMAGE).findFirst().get().modifier().amount();
-               if (itemDamage > bestDamage) {
-                  toolItem1 = invStack.getItem();
-                  bestDamage = itemDamage;
-               }
+            // invStack, NOT item. The 1.20.1 original read a pattern variable bound from invStack;
+            // dropping the `instanceof TieredItem toolItem` pattern for a `.has(...)` test destroyed
+            // that binding, and the equipped `item` — in scope, right type — was substituted for it.
+            // Every iteration then scored the same stack, so "best weapon" returned whichever
+            // inventory item happened to come last rather than the strongest one. Silent, and
+            // invisible to the compiler.
+            float itemDamage = (float) attackDamageOf(invStack.getItem()).orElse(Double.NEGATIVE_INFINITY);
+            if (itemDamage > bestDamage) {
+               toolItem1 = invStack.getItem();
+               bestDamage = itemDamage;
             }
          }
 
