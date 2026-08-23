@@ -24,6 +24,21 @@ subprojects {
     apply plugin: 'architectury-plugin'
     apply plugin: 'maven-publish'
 
+    architectury {
+        // @ExpectPlatform is used exactly zero times in this tree, but the plugin injects its
+        // support package unconditionally. That injection generates a single 169-character path
+        // segment holding one class:
+        //   architectury_inject_<archives_name>_<subproject>_<32 hex>_<64 hex><name>devjar/PlatformMethods.class
+        // It is the most likely reason CurseForge's automated scanner aborts on our upload. When a
+        // scanner extracts the outer jar and then the nested PlayerEngine jar, that path reaches
+        // ~235 characters before any temp-directory prefix, against a Windows MAX_PATH of 260.
+        //
+        // Shortening archives_name would only trim it proportionally; switching the injection off
+        // removes the package outright, because nothing here ever used it. Verify after a build:
+        //   unzip -Z1 <jar> | grep -c architectury_inject     # expect 0
+        injectInjectables = false
+    }
+
     base {
         // Set up a suffixed format for the mod jar names, e.g. `example-fabric`.
         archivesName = "$rootProject.archives_name-$project.name"
