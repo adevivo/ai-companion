@@ -8,7 +8,9 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.neovetta.aicompanion.entity.CompanionEntity;
 import com.neovetta.aicompanion.screen.CompanionScreens;
+import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
@@ -140,6 +142,26 @@ public class AiCompanion implements ModInitializer {
      * dedicated-server check would break sending from the client, at a distance.
      */
     private static void registerServerToClientChannels() {
+        // ⚠️ DEDICATED SERVER ONLY, and this guard is the whole point of the method.
+        //
+        // Fabric runs this (main) entrypoint on the client too. Every channel below also has a
+        // client receiver, and Architectury registers a channel's payload type as a side effect of
+        // registering a receiver for it — so on a client both paths fire and the second one throws
+        // `IllegalArgumentException: Packet type [id=aicompanion:server_policy] is already
+        // registered!` out of Fabric's PayloadTypeRegistry, killing the client entrypoint before the
+        // game reaches the title screen. Observed 2026-08-23 on the first real launch of the port.
+        //
+        // A dedicated server never runs client init, so nothing declares these for it and every
+        // outgoing packet would be built with a null type — silently, which is why the declaration
+        // exists at all. Gating on the environment satisfies both: the side that has receivers uses
+        // them, and the side that has none declares its own.
+        //
+        // Do NOT extend this to the C2S channels. The client learns those types precisely because
+        // registerBrainReceivers() and registerConfigReceivers() run from this entrypoint on the
+        // client, and gating them would break sending from the client, at a distance.
+        if (FabricLoader.getInstance().getEnvironmentType() != EnvType.SERVER) {
+            return;
+        }
         for (Identifier channel : new Identifier[]{
                 SERVER_POLICY, RADAR_UPDATE, RADAR_TOGGLE, TOKEN_USAGE, TOKEN_HUD_TOGGLE,
                 STATUS_HUD_TOGGLE, OPEN_CONFIG_SCREEN, RELOAD_CLIENT_CONFIG}) {
