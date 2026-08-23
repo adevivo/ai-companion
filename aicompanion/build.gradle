@@ -8,7 +8,22 @@ plugins {
 }
 
 group = project.maven_group
-version = project.mod_version
+// <mod version>+mc<minecraft version>, e.g. 0.4.0+mc1.21.11 - the convention set out in
+// readme.md ("Release numbering"). Mod version is the FEATURE SET, the suffix is the TARGET, so the
+// same number on two branches means the same features and one changelog covers both. It matches
+// Fabric API's own scheme (fabric-api-0.141.1+1.21.11.jar), which is what Minecraft tooling expects.
+//
+// It became load-bearing the moment two branches could both build: CurseForge takes them as separate
+// files on one project, and until now both emitted an identical `aicompanion-0.3.1.jar` with nothing
+// in the name saying which Minecraft it was for.
+//
+// Note that `+` is semver BUILD METADATA and is ignored when comparing versions, so 0.4.0+mc1.20.1
+// and 0.4.0+mc1.21.11 compare equal to Fabric Loader. That is fine - the `minecraft` range in each
+// jar's depends is what decides which one can load - but a dependency range like >=0.4.0 cannot tell
+// the two lines apart. Fabric API has shipped this way for years.
+//
+// fabric.mod.json picks this up for free: processResources expands ${version} into it.
+version = "${project.mod_version}+mc${project.minecraft_version}"
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
