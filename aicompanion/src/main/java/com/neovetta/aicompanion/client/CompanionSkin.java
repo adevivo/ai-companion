@@ -4,7 +4,9 @@ import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.SkinProfileResolver;
 import com.mojang.authlib.GameProfile;
+import com.google.common.collect.LinkedHashMultimap;
 import com.mojang.authlib.properties.Property;
+import com.mojang.authlib.properties.PropertyMap;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -112,9 +114,22 @@ public final class CompanionSkin {
             return;
         }
         try {
+            // Build the properties BEFORE the profile, and never mutate them afterwards.
+            //
+            // GameProfile is a record now, and its two-argument constructor delegates to
+            // PropertyMap.EMPTY -- a shared static, immutable. So the obvious
+            // `new GameProfile(id, name).properties().put(...)` throws
+            // UnsupportedOperationException, with no message, from the render thread. That is what
+            // broke every Mojang-username skin: the request never left, so it presented as "the
+            // fallback skin, forever" rather than as an error anyone would notice.
+            //
+            // PropertyMap has no no-arg constructor either; it wraps a Guava multimap, which is
+            // where the mutability has to come from.
+            PropertyMap properties = new PropertyMap(LinkedHashMultimap.create());
+            properties.put("textures", new Property("textures", blob));
             GameProfile profile = new GameProfile(
-                    UUID.nameUUIDFromBytes(blob.getBytes(StandardCharsets.UTF_8)), "companion");
-            profile.properties().put("textures", new Property("textures", blob));
+                    UUID.nameUUIDFromBytes(blob.getBytes(StandardCharsets.UTF_8)), "companion",
+                    properties);
             Minecraft client = Minecraft.getInstance();
             client.getSkinManager().get(profile).whenComplete((skin, error) -> client.execute(() -> {
                 PROFILE_PENDING.remove(blob);
