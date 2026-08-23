@@ -158,7 +158,7 @@ public final class CompanionRadarHud {
 
             if (r.crossDim()) {
                 ctx.drawCenteredString(tr, Component.literal(prefix + "other dimension"),
-                        centerX, labelY, 0xAAAAAA);
+                        centerX, labelY, 0xFFAAAAAA);   // alpha byte required on 1.21.11
                 labelY += 10;
                 continue;
             }
@@ -188,7 +188,7 @@ public final class CompanionRadarHud {
                 label += " (last seen)";
             }
             ctx.drawCenteredString(tr, Component.literal(label), centerX, labelY,
-                    dim ? 0xAAAAAA : 0xFFFFFF);
+                    dim ? 0xFFAAAAAA : 0xFFFFFFFF);   // alpha byte required on 1.21.11
             labelY += 10;
         }
     }

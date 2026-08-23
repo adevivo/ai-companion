@@ -116,8 +116,13 @@ public final class CompanionStatusHud {
     private static final int COLOR_FOOD_OK = 0xFFCC8844;
     private static final int COLOR_FOOD_LOW = 0xFFFFAA33;
     private static final int COLOR_SATURATION = 0x66FFFFFF;
-    private static final int COLOR_TEXT = 0xFFFFFF;
-    private static final int COLOR_TEXT_DIM = 0xAAAAAA;
+    // ⚠️ Text colours MUST carry an explicit alpha byte on 1.21.11. Font used to force full
+    // opacity when the top bits were zero (the 0xFC000000 fixup); that is gone, so a bare
+    // 0xRRGGBB now means alpha 0 and the text draws perfectly invisibly - no error, no warning.
+    // Shapes were unaffected here only because they already had alpha, which is why the panels
+    // and bars rendered while every label vanished.
+    private static final int COLOR_TEXT = 0xFFFFFFFF;
+    private static final int COLOR_TEXT_DIM = 0xFFAAAAAA;
 
     /** Render callback body — registered against {@code HudRenderCallback.EVENT} in the client init. */
     public static void render(GuiGraphics ctx, DeltaTracker delta) {

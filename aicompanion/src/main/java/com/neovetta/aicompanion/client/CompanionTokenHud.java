@@ -147,10 +147,15 @@ public final class CompanionTokenHud {
     /** Stop drawing once the companion has been silent this long — the same give-up window as the radar. */
     private static final long GIVE_UP_MS = 60_000L;
     private static final int COLOR_PANEL = 0x80000000;
-    private static final int COLOR_LABEL = 0xAAAAAA;
-    private static final int COLOR_VALUE = 0xFFFFFF;
-    private static final int COLOR_IN = 0x77CCFF;
-    private static final int COLOR_OUT = 0xFFCC66;
+    // ⚠️ Text colours MUST carry an explicit alpha byte on 1.21.11. Font used to force full
+    // opacity when the top bits were zero (the 0xFC000000 fixup); that is gone, so a bare
+    // 0xRRGGBB now means alpha 0 and the text draws perfectly invisibly - no error, no warning.
+    // Shapes were unaffected here only because they already had alpha, which is why the panels
+    // and bars rendered while every label vanished.
+    private static final int COLOR_LABEL = 0xFFAAAAAA;
+    private static final int COLOR_VALUE = 0xFFFFFFFF;
+    private static final int COLOR_IN = 0xFF77CCFF;
+    private static final int COLOR_OUT = 0xFFFFCC66;
     private static final int COLOR_BAR = 0xFF77CCFF;
     private static final int COLOR_BAR_PARTIAL = 0xFF3E6E8A;
     private static final int COLOR_GRAPH_BG = 0x30FFFFFF;
