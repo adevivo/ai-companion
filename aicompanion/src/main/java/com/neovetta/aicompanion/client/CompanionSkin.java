@@ -114,22 +114,29 @@ public final class CompanionSkin {
             return;
         }
         try {
-            // Build the properties BEFORE the profile, and never mutate them afterwards.
+            // ⚠️ Populate the multimap BEFORE wrapping it. Nothing here is mutable after
+            // construction, at either level, and both levels throw the same bare
+            // UnsupportedOperationException from the render thread:
             //
-            // GameProfile is a record now, and its two-argument constructor delegates to
-            // PropertyMap.EMPTY -- a shared static, immutable. So the obvious
-            // `new GameProfile(id, name).properties().put(...)` throws
-            // UnsupportedOperationException, with no message, from the render thread. That is what
-            // broke every Mojang-username skin: the request never left, so it presented as "the
-            // fallback skin, forever" rather than as an error anyone would notice.
+            //   GameProfile is a record, and its 2-arg constructor delegates to PropertyMap.EMPTY,
+            //   a shared static. So new GameProfile(id, name).properties().put(...) throws.
             //
-            // PropertyMap has no no-arg constructor either; it wraps a Guava multimap, which is
-            // where the mutability has to come from.
-            PropertyMap properties = new PropertyMap(LinkedHashMultimap.create());
-            properties.put("textures", new Property("textures", blob));
+            //   PropertyMap's constructor does ImmutableMultimap.copyOf(...) on whatever it is
+            //   given, so a PropertyMap is ALWAYS immutable no matter how mutable the multimap
+            //   handed to it was. So new PropertyMap(LinkedHashMultimap.create()).put(...) throws
+            //   too -- the same bug one layer down, which is exactly the trap this fell into first
+            //   time round.
+            //
+            // The only order that works is: fill the multimap, then wrap it, then build the profile.
+            //
+            // This is what broke every Mojang-username skin. The throw was caught and the result
+            // cached as null, so it showed up as "the fallback skin, forever" rather than as an
+            // error a player would notice.
+            LinkedHashMultimap<String, Property> textures = LinkedHashMultimap.create();
+            textures.put("textures", new Property("textures", blob));
             GameProfile profile = new GameProfile(
                     UUID.nameUUIDFromBytes(blob.getBytes(StandardCharsets.UTF_8)), "companion",
-                    properties);
+                    new PropertyMap(textures));
             Minecraft client = Minecraft.getInstance();
             client.getSkinManager().get(profile).whenComplete((skin, error) -> client.execute(() -> {
                 PROFILE_PENDING.remove(blob);
@@ -144,8 +151,11 @@ public final class CompanionSkin {
                         AiCompanion.MOD_ID);
             }));
         } catch (Exception e) {
-            AiCompanion.LOGGER.error("[{}] failed to request a companion skin: {}",
-                    AiCompanion.MOD_ID, e.toString());
+            // Pass the exception, not e.toString(): an UnsupportedOperationException carries no
+            // message, so without a stack trace this logs six identical words and nothing that
+            // says which call threw. That cost two round trips of guessing.
+            AiCompanion.LOGGER.error("[{}] failed to request a companion skin",
+                    AiCompanion.MOD_ID, e);
             PROFILE_CACHE.put(blob, null);
             PROFILE_PENDING.remove(blob);
         }
