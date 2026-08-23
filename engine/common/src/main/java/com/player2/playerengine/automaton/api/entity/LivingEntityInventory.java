@@ -367,28 +367,37 @@ public class LivingEntityInventory implements Container, Nameable {
       return ((ItemStack)this.main.get(this.selectedSlot)).getDestroySpeed(block);
    }
 
+   /**
+    * Slot-number bases for the three backing lists, shared by {@link #writeNbt} and
+    * {@link #readNbt} so the two halves cannot disagree.
+    *
+    * <p>They very much did disagree. The port left the pre-ValueOutput code in place: it built a
+    * throwaway {@code CompoundTag}, put the correctly-offset slot number on THAT, and then
+    * constructed the {@code ItemStackWithSlot} from the bare list index. So armour saved as slots
+    * 0-3 and the offhand as slot 0, while the reader still expected 100+ and 150+ — which put worn
+    * gear back into the BACKPACK and, because main is 36 slots, silently overwrote whatever was in
+    * main[0..3]. A companion holding a sword in slot 0 lost it to her own shield on every reload.
+    * The compiler could not see it: every line was individually valid.
+    */
+   private static final int ARMOR_SLOT_BASE = 100;
+   private static final int OFFHAND_SLOT_BASE = 150;
+
    public void writeNbt(ValueOutput.TypedOutputList<ItemStackWithSlot> output) {
       for (int i = 0; i < this.main.size(); i++) {
          if (!((ItemStack)this.main.get(i)).isEmpty()) {
-            CompoundTag nbtCompound = new CompoundTag();
-            nbtCompound.putByte("Slot", (byte)i);
             output.add(new ItemStackWithSlot(i, (ItemStack)this.main.get(i)));
          }
       }
 
-      for (int ix = 0; ix < this.armor.size(); ix++) {
-         if (!((ItemStack)this.armor.get(ix)).isEmpty()) {
-            CompoundTag nbtCompound = new CompoundTag();
-            nbtCompound.putByte("Slot", (byte)(ix + 100));
-            output.add(new ItemStackWithSlot(ix, (ItemStack)this.armor.get(ix)));
+      for (int i = 0; i < this.armor.size(); i++) {
+         if (!((ItemStack)this.armor.get(i)).isEmpty()) {
+            output.add(new ItemStackWithSlot(i + ARMOR_SLOT_BASE, (ItemStack)this.armor.get(i)));
          }
       }
 
-      for (int ixx = 0; ixx < this.offHand.size(); ixx++) {
-         if (!((ItemStack)this.offHand.get(ixx)).isEmpty()) {
-            CompoundTag nbtCompound = new CompoundTag();
-            nbtCompound.putByte("Slot", (byte)(ixx + 150));
-            output.add(new ItemStackWithSlot(ixx, (ItemStack)this.offHand.get(ixx)));
+      for (int i = 0; i < this.offHand.size(); i++) {
+         if (!((ItemStack)this.offHand.get(i)).isEmpty()) {
+            output.add(new ItemStackWithSlot(i + OFFHAND_SLOT_BASE, (ItemStack)this.offHand.get(i)));
          }
       }
 
@@ -405,10 +414,10 @@ public class LivingEntityInventory implements Container, Nameable {
          if (!itemStack.isEmpty()) {
             if (j >= 0 && j < this.main.size()) {
                this.main.set(j, itemStack);
-            } else if (j >= 100 && j < this.armor.size() + 100) {
-               this.armor.set(j - 100, itemStack);
-            } else if (j >= 150 && j < this.offHand.size() + 150) {
-               this.offHand.set(j - 150, itemStack);
+            } else if (j >= ARMOR_SLOT_BASE && j < this.armor.size() + ARMOR_SLOT_BASE) {
+               this.armor.set(j - ARMOR_SLOT_BASE, itemStack);
+            } else if (j >= OFFHAND_SLOT_BASE && j < this.offHand.size() + OFFHAND_SLOT_BASE) {
+               this.offHand.set(j - OFFHAND_SLOT_BASE, itemStack);
             }
          }
       }
