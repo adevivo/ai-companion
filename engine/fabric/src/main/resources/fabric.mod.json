@@ -3,16 +3,21 @@
   "id": "playerengine",
   "version": "${version}",
   "name": "PlayerEngine",
-  "description": "This is an example description! Tell everyone what your mod is about!",
+  "description": "Autonomous player-agent engine: pathfinding, world interaction, inventory and task planning for a program-controlled player. A NeoVetta fork of Goodbird-git/PlayerEngine, which builds on Baritone for pathfinding. Bundled inside AI Companion and not intended to be installed on its own.",
   "authors": [
-    "Me!"
+    "NeoVetta"
+  ],
+  "contributors": [
+    "Goodbird-git — upstream PlayerEngine",
+    "The Baritone authors — pathfinding and automation layer (LGPL-3.0)",
+    "The AltoClef authors — task and command framework (MIT)"
   ],
   "contact": {
-    "homepage": "https://fabricmc.net/",
-    "sources": "https://github.com/FabricMC/fabric-example-mod"
+    "homepage": "https://github.com/adevivo/ai-companion",
+    "sources": "https://github.com/adevivo/ai-companion",
+    "issues": "https://github.com/adevivo/ai-companion/issues"
   },
-  "license": "CC0-1.0",
-  "icon": "assets/playerengine/icon.png",
+  "license": "LGPL-3.0-or-later",
   "environment": "*",
   "entrypoints": {
     "main": [
@@ -27,12 +32,9 @@
   ],
   "depends": {
     "fabricloader": ">=0.17.2",
-    "minecraft": "~1.21.10",
-    "java": ">=17",
-    "architectury": ">=9.2.14",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "architectury": ">=19.0.1",
     "fabric-api": "*"
-  },
-  "suggests": {
-    "another-mod": "*"
   }
 }

@@ -48,6 +48,18 @@ processResources {
 shadowJar {
     configurations = [project.configurations.shadowBundle]
     archiveClassifier = 'dev-shadow'
+
+    // LGPL-3.0 requires the license text to travel with the binary, not just live in the source
+    // repo — and this jar ships nested inside AI Companion rather than being downloaded from here,
+    // so nothing else carries it. LGPL-3.0 is drafted as an addendum to GPL-3.0, so both texts are
+    // required. NOTICE records the lineage this fork is built from: upstream PlayerEngine
+    // (LGPL-3.0), Baritone (LGPL-3.0) and AltoClef (MIT). Until now the nested jar carried no
+    // attribution at all and declared CC0-1.0 over LGPL-derived code.
+    // remapJar takes shadowJar's output as its input, so anything added here reaches the real jar.
+    from(rootProject.projectDir) {
+        include 'LICENSE', 'LICENSE.GPL-3.0.txt', 'NOTICE'
+        into 'META-INF'
+    }
 }
 
 remapJar {

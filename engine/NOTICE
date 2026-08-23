@@ -1,0 +1,39 @@
+PlayerEngine (NeoVetta fork)
+============================
+
+This mod is distributed under the GNU Lesser General Public License, version 3
+or later (LGPL-3.0-or-later). The full text ships alongside this file as
+META-INF/LICENSE, together with META-INF/LICENSE.GPL-3.0.txt — LGPL-3.0 is
+drafted as a set of additional permissions on top of GPL-3.0, so both texts are
+required.
+
+It is a fork and is built substantially from the work of others. Attribution,
+in order of derivation:
+
+  PlayerEngine — Goodbird-git
+  https://github.com/Goodbird-git/PlayerEngine
+  LGPL-3.0. The direct upstream. Forked 2026-07-14 at commit
+  13fddc140a7ffd60b6bc9d1f084b36adc0674510, re-based 2026-08-22 onto the
+  Architectury multiloader tree, and subsequently ported to Minecraft 1.21.11
+  by NeoVetta (upstream stopped at 1.21.10). See UPSTREAM_FORK.txt in the
+  source repository for the full provenance record.
+
+  Baritone — the Baritone authors
+  https://github.com/cabaletta/baritone
+  LGPL-3.0. The pathfinding, movement and automation layer, incorporated by
+  upstream PlayerEngine. Now located under
+  com.player2.playerengine.automaton.* following upstream's package rename
+  from baritone.*.
+
+  AltoClef — the AltoClef authors
+  https://github.com/gaucho-matrero/AltoClef
+  MIT. The task, command and resource-planning framework, incorporated by
+  upstream PlayerEngine. Now located under com.player2.playerengine.*
+  following upstream's package rename from adris.altoclef.*.
+
+Modifications by NeoVetta are likewise LGPL-3.0-or-later.
+
+This jar is bundled inside the AI Companion mod and is not intended to be
+installed on its own.
+
+  https://github.com/adevivo/ai-companion
