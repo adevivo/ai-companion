@@ -17,6 +17,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neovetta.aicompanion.entity.CompanionEntity;
+import net.fabricmc.api.EnvType;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.server.MinecraftServer;
@@ -49,6 +50,27 @@ import java.util.Optional;
 public final class CompanionConfig {
 
     private static final String FILE_NAME = "aicompanion.json";
+    private static final String SERVER_FILE_NAME = "aicompanion-server.json";
+
+    /** True on a dedicated server, where the client/server config split is real. */
+    private static boolean isDedicated() {
+        return FabricLoader.getInstance().getEnvironmentType() == EnvType.SERVER;
+    }
+
+    /**
+     * Which file this installation reads.
+     *
+     * <p>A dedicated server and a player's game want almost disjoint settings, and for years they
+     * shared one schema in which most keys were live on one side and inert on the other with nothing
+     * saying which. The split is by FILE because that is the only place the distinction can be made
+     * visible before someone edits a value: a setting that is not in your file cannot be set wrongly.
+     *
+     * <p>Singleplayer keeps {@link #FILE_NAME}, and correctly — the integrated server is the same
+     * process reading the same statics, so there are no two sides to split.
+     */
+    private static String fileName() {
+        return isDedicated() ? SERVER_FILE_NAME : FILE_NAME;
+    }
 
     /**
      * One companion's identity: who it is, how it talks, and what it looks like.
@@ -139,7 +161,7 @@ public final class CompanionConfig {
 
     /** Path of the config file ({@code config/aicompanion.json}). The config screen edits it in place. */
     public static Path configPath() {
-        return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+        return FabricLoader.getInstance().getConfigDir().resolve(fileName());
     }
 
     /**
@@ -167,32 +189,40 @@ public final class CompanionConfig {
 
     /** Read config (writing the default first if missing) and apply it to the engine config statics. */
     public static void load() {
-        Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+        Path path = configPath();
         try {
             if (Files.notExists(path)) {
-                Files.writeString(path, DEFAULT_JSON);
+                Files.writeString(path, isDedicated() ? initialServerJson() : DEFAULT_JSON);
                 AiCompanion.LOGGER.info("[{}] wrote default config to {}", AiCompanion.MOD_ID, path);
             }
             Files.createDirectories(skinsDir()); // so admins have somewhere to drop skin PNGs
             extractTtsSetup();
             String raw = Files.readString(path);
             JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
-            // Migration first: it creates "companions" from the retired block, and the merge below
-            // would otherwise see that key absent and fill in DEFAULT_JSON's entry — handing everyone
-            // a companion called Vetta in place of their own.
             List<String> changes = new ArrayList<>();
-            migrateLegacyCompanion(root, changes);
-            // Also before the merge, and for the same reason: it moves the operator's tuned values
-            // into 'server', and the merge would otherwise fill that block with defaults first.
-            migrateServerBlock(root, changes);
+            if (!isDedicated()) {
+                // Migration first: it creates "companions" from the retired block, and the merge
+                // below would otherwise see that key absent and fill in DEFAULT_JSON's entry —
+                // handing everyone a companion called Vetta in place of their own.
+                migrateLegacyCompanion(root, changes);
+                // Also before the merge, and for the same reason: it moves the operator's tuned
+                // values into 'server', and the merge would otherwise fill that block with defaults.
+                migrateServerBlock(root, changes);
+            }
+            String defaults = isDedicated() ? defaultServerJson() : DEFAULT_JSON;
             List<String> added = new ArrayList<>();
-            addMissingRecursive(JsonParser.parseString(DEFAULT_JSON).getAsJsonObject(), root, "", added);
+            addMissingRecursive(JsonParser.parseString(defaults).getAsJsonObject(), root, "", added);
             if (!added.isEmpty()) {
                 changes.add(String.format("filled in %d setting(s) added in a newer version (%s) — "
                         + "your existing values are untouched", added.size(), String.join(", ", added)));
             }
             rewrite(root, path, raw, changes);
-            apply(root);
+            // apply() speaks the flat schema this file used to have on both sides. The server file
+            // is translated into it rather than teaching apply() a second shape: the nesting exists
+            // to make dead settings visible to a HUMAN reading the file, and duplicating that
+            // structure through several hundred lines of parsing would buy nothing and risk the two
+            // shapes drifting apart.
+            apply(isDedicated() ? flattenServerShape(root) : root);
             AiCompanion.LOGGER.info(
                     "[{}] config loaded: roster={}, llm.endpoint={}, model={}, maxTokens={}, tts={}, brain={}, aiCrossTalk={}. Skins dir: {}",
                     AiCompanion.MOD_ID, describeRoster(), LlmConfig.baseUrl,
@@ -206,6 +236,7 @@ public final class CompanionConfig {
             // another machine.
             AiCompanion.LOGGER.info("[{}] server policy: {}", AiCompanion.MOD_ID,
                     ServerPolicy.describe());
+            warnIfIncoherent();
         } catch (Exception e) {
             AiCompanion.LOGGER.warn("[{}] failed to load {} ({}) — using built-in defaults",
                     AiCompanion.MOD_ID, path, e.toString());
@@ -251,6 +282,261 @@ public final class CompanionConfig {
      * <p>Shared "apply" step for {@code /companion reload} and the config screen's save hook. Call on
      * the server thread.
      */
+
+
+    /** Keys of the flat schema that only mean anything when THIS server does the thinking. */
+    private static final String[] SERVER_BRAIN_BLOCKS = {"llm", "memory", "embeddings"};
+
+    /**
+     * The dedicated-server schema, derived from {@link #DEFAULT_JSON} rather than written out again.
+     *
+     * <p>Derived on purpose. The two files share almost every value and every word of help text, and
+     * a second literal would be two copies of fifty explanatory strings that drift the first time
+     * somebody edits one of them. What differs is structure, and structure is what code expresses
+     * well: move the three brain blocks under the switch that enables them, drop the keys a server
+     * has no say over, and leave the rest alone.
+     */
+    private static String defaultServerJson() {
+        JsonObject flat = JsonParser.parseString(DEFAULT_JSON).getAsJsonObject();
+        return PRETTY.toJson(toServerShape(flat, true)) + System.lineSeparator();
+    }
+
+    /**
+     * Reshape a flat config into the server schema.
+     *
+     * <p>{@code fresh} distinguishes generating the shipped default from converting a file an
+     * operator has already tuned. For a real file the current {@code llm.clientBrain} decides the
+     * mode, so an operator who deliberately chose server-side thinking keeps it across the upgrade;
+     * only a file that never mentioned the key adopts the new default.
+     */
+    private static JsonObject toServerShape(JsonObject flat, boolean fresh) {
+        JsonObject out = new JsonObject();
+        out.addProperty("_help", "This file configures a DEDICATED SERVER. A player's own game reads"
+                + " aicompanion.json instead, and the two are deliberately different: almost every"
+                + " setting here is one a connected player cannot change, and the settings that are"
+                + " theirs — which model they use, which api key, what their companion remembers —"
+                + " are not in this file at all. If you are looking for a setting that used to be"
+                + " here and is not, that is why: it was never read on this side.");
+
+        JsonObject flatLlm = obj(flat, "llm");
+        boolean clientBrain = true;
+        if (!fresh && flatLlm != null && flatLlm.has("clientBrain")
+                && flatLlm.get("clientBrain").isJsonPrimitive()) {
+            clientBrain = flatLlm.get("clientBrain").getAsBoolean();
+        }
+
+        JsonObject brain = new JsonObject();
+        brain.addProperty("mode", clientBrain ? "client" : "server");
+        brain.addProperty("clientTimeoutMs", flatLlm != null && flatLlm.has("clientBrainTimeoutMs")
+                ? flatLlm.get("clientBrainTimeoutMs").getAsInt() : 45000);
+        brain.addProperty("_mode", "WHICH MACHINE THINKS — the most consequential setting on this"
+                + " server. \"client\" (default) hands each turn to the owner's own game, which runs"
+                + " THEIR model with THEIR api key against THEIR memory corpus: a player's companion"
+                + " remembers what they taught it in singleplayer, and nobody spends your tokens."
+                + " \"server\" makes this machine think for everyone, from the whenServer block below"
+                + " and one shared corpus in this server's config folder. THE SYMPTOM OF CHOOSING"
+                + " WRONG IS NOT AN ERROR: a companion thinking on the wrong machine still answers,"
+                + " in character, immediately — it has simply never heard of the player it belongs"
+                + " to. The boot line reports which one is live. Applied per player: anyone whose"
+                + " client does not answer the capability handshake is thought for here regardless,"
+                + " and what happens when their own model FAILS is server.serverAnswersWhenClientFails.");
+        brain.addProperty("_clientTimeoutMs", "How long to wait for a client to think before giving"
+                + " up on that turn, in milliseconds. Not a latency budget — nothing is blocked while"
+                + " it runs — but a liveness check on a client that said it could think and then went"
+                + " quiet. Generous on purpose: a frontier model on a slow link can legitimately take"
+                + " many seconds, and cutting it off to run the turn again would spend twice and"
+                + " answer once.");
+
+        JsonObject whenServer = new JsonObject();
+        whenServer.addProperty("_help", "READ ONLY WHEN mode IS \"server\". With mode \"client\" every"
+                + " key below is inert — this server never calls a model and never opens a corpus,"
+                + " because each player's own machine does both. They are nested here rather than"
+                + " left at the top level so that is visible from the file itself: the old flat"
+                + " layout had an endpoint, a memory switch and an embedder sitting in plain sight"
+                + " with nothing to say whether anything read them.");
+        for (String block : SERVER_BRAIN_BLOCKS) {
+            JsonObject b = obj(flat, block);
+            if (b == null) {
+                continue;
+            }
+            JsonObject copy = b.deepCopy();
+            // These two moved up to 'brain': they govern delegation itself, which is a live question
+            // in BOTH modes, so leaving them in the read-only-when-server block would be a lie.
+            copy.remove("clientBrain");
+            copy.remove("clientBrainTimeoutMs");
+            copy.remove("_clientBrain");
+            copy.remove("_clientBrainTimeoutMs");
+            whenServer.add(block, copy);
+        }
+        brain.add("whenServer", whenServer);
+        out.add("brain", brain);
+
+        // TTS does not split cleanly, so it is split by KEY rather than by block. 'enabled' gates the
+        // whole path from here and a client cannot switch it on; voice, model and speed ride the
+        // SPEAK packet from this machine. 'endpoint' is omitted because the client's own value wins
+        // — it is the one that has to reach Kokoro, and a server's idea of "localhost" is useless to
+        // everyone else. Shipping it here would recreate exactly that bug.
+        JsonObject tts = obj(flat, "tts");
+        if (tts != null) {
+            JsonObject copy = tts.deepCopy();
+            copy.remove("endpoint");
+            copy.addProperty("_endpoint", "Deliberately absent. Each player's own tts.endpoint is used,"
+                    + " because their machine is the one that has to reach it. Setting it here would"
+                    + " send this server's idea of localhost to every client.");
+            out.add("tts", copy);
+        }
+        for (String keep : new String[] {"server", "companions"}) {
+            if (flat.has(keep)) {
+                out.add(keep, flat.get(keep).deepCopy());
+            }
+        }
+        for (String key : flat.keySet()) {
+            // Help text that described the file as a whole, not one of the blocks we placed.
+            if (key.startsWith("_") && !out.has(key) && !"_help".equals(key)) {
+                out.add(key, flat.get(key).deepCopy());
+            }
+        }
+        // Everything this method did NOT place, said out loud. The set of blocks a server file
+        // carries is an allowlist on purpose — the point of the split is that a client-owned block
+        // like 'behavior' does not appear here, where an operator would set it and nothing would
+        // read it. But an allowlist silently swallows anything added later, which is the same class
+        // of quiet wrongness the split exists to end, so a block that goes no further says so.
+        if (!fresh) {
+            List<String> dropped = new ArrayList<>();
+            List<String> nested = List.of(SERVER_BRAIN_BLOCKS);
+            for (String key : flat.keySet()) {
+                // A block nested under brain.whenServer is CARRIED, not dropped — out.has() cannot
+                // see it because it is no longer at the top level. Reporting those as lost would be
+                // a warning that fires loudest on the configs it handled best.
+                if (!key.startsWith("_") && !out.has(key) && !nested.contains(key)) {
+                    dropped.add(key);
+                }
+            }
+            if (!dropped.isEmpty()) {
+                AiCompanion.LOGGER.info("[{}] not carried into the server file: {} — these are"
+                        + " settings a connected player owns and announces for themselves, so a value"
+                        + " set here would be read by nothing. Your old file still has them.",
+                        AiCompanion.MOD_ID, String.join(", ", dropped));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Translate the server schema back into the flat one {@code apply()} understands.
+     *
+     * <p>Everything under {@code whenServer} is copied out unconditionally, including when the mode
+     * is "client" and none of it will be used. Blanking it instead would make {@code describeBrain}
+     * and the coherence warnings report an endpoint of "" for a server that has one configured and
+     * is one setting away from needing it.
+     */
+    private static JsonObject flattenServerShape(JsonObject root) {
+        JsonObject flat = new JsonObject();
+        JsonObject brain = obj(root, "brain");
+        JsonObject whenServer = brain == null ? null : obj(brain, "whenServer");
+        if (whenServer != null) {
+            for (String block : SERVER_BRAIN_BLOCKS) {
+                if (whenServer.has(block)) {
+                    flat.add(block, whenServer.get(block).deepCopy());
+                }
+            }
+        }
+        boolean client = brain == null || !brain.has("mode")
+                || !"server".equalsIgnoreCase(brain.get("mode").getAsString());
+        JsonObject llm = flat.has("llm") ? flat.getAsJsonObject("llm") : new JsonObject();
+        llm.addProperty("clientBrain", client);
+        if (brain != null && brain.has("clientTimeoutMs")) {
+            llm.addProperty("clientBrainTimeoutMs", brain.get("clientTimeoutMs").getAsInt());
+        }
+        flat.add("llm", llm);
+        for (String keep : new String[] {"tts", "server", "companions"}) {
+            if (root.has(keep)) {
+                flat.add(keep, root.get(keep).deepCopy());
+            }
+        }
+        return flat;
+    }
+
+    /**
+     * What to write when a dedicated server has no {@link #SERVER_FILE_NAME} yet.
+     *
+     * <p>An existing {@link #FILE_NAME} is converted rather than ignored. A server that has been
+     * running for a year has a tuned roster, tuned policy and possibly a deliberate server-side
+     * brain in that file, and silently starting from defaults would look exactly like the mod
+     * forgetting everything. The old file is left where it is: it is harmless here, and leaving it
+     * means a downgrade still finds what it expects.
+     */
+    private static String initialServerJson() {
+        Path legacy = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+        if (Files.exists(legacy)) {
+            try {
+                JsonObject flat = JsonParser.parseString(Files.readString(legacy)).getAsJsonObject();
+                // The legacy migrations first, on the legacy shape they were written for. Skipping
+                // them would silently drop the values they exist to rescue: a file old enough to
+                // keep its operator settings in 'behavior'/'combat'/'skills' has nothing in
+                // 'server' yet, and toServerShape carries 'server' across and leaves those blocks
+                // behind. Conversion is the one moment this can go wrong and the one moment nobody
+                // is watching, because it happens on a restart that was about something else.
+                List<String> rescued = new ArrayList<>();
+                migrateLegacyCompanion(flat, rescued);
+                migrateServerBlock(flat, rescued);
+                for (String note : rescued) {
+                    AiCompanion.LOGGER.info("[{}] while converting: {}", AiCompanion.MOD_ID, note);
+                }
+                String json = PRETTY.toJson(toServerShape(flat, false)) + System.lineSeparator();
+                AiCompanion.LOGGER.info("[{}] first start on this version: built {} from your existing"
+                        + " {} (roster, policy and brain mode carried over). The old file is left in"
+                        + " place and is no longer read on a dedicated server.",
+                        AiCompanion.MOD_ID, SERVER_FILE_NAME, FILE_NAME);
+                return json;
+            } catch (Exception e) {
+                AiCompanion.LOGGER.warn("[{}] could not convert {} ({}) — writing a fresh {} instead",
+                        AiCompanion.MOD_ID, FILE_NAME, e.toString(), SERVER_FILE_NAME);
+            }
+        }
+        return defaultServerJson();
+    }
+
+    /**
+     * Refuse to boot quietly into a configuration that cannot do what the mod is for.
+     *
+     * <p>Every check here describes a state that is internally consistent — nothing throws, nothing
+     * is missing, the file parses — and yet cannot produce a companion that remembers anything. The
+     * combination that prompted this was a dedicated server thinking for its players with
+     * {@code memory.enabled} off: a perfectly valid file in which the whole memory feature is
+     * silently inert, and whose only symptom in game is a companion that is friendly and knows
+     * nothing. It booted for weeks without a single line of complaint.
+     *
+     * <p>Dedicated servers only. In singleplayer the client and the server are one process and one
+     * config, so none of these splits exist and every check below would be noise.
+     */
+    private static void warnIfIncoherent() {
+        if (FabricLoader.getInstance().getEnvironmentType() != EnvType.SERVER) {
+            return;
+        }
+        boolean serverThinks = !LlmConfig.clientBrain || !LlmConfig.localMode;
+        if (serverThinks && !MemoryConfig.enabled) {
+            AiCompanion.LOGGER.warn("[{}] this server does the thinking (brain={}) but memory.enabled"
+                    + " is false — companions here will remember NOTHING between turns or sessions,"
+                    + " and a player's own remembered facts are never consulted. Either turn"
+                    + " llm.clientBrain on so each player's own machine and corpus are used, or turn"
+                    + " memory.enabled and embeddings.enabled on here.",
+                    AiCompanion.MOD_ID, describeBrain());
+        }
+        if (serverThinks && MemoryConfig.enabled && !EmbeddingsConfig.enabled) {
+            AiCompanion.LOGGER.warn("[{}] memory.enabled is true but embeddings.enabled is false —"
+                    + " recall needs an embedder, so memory is inert. Point embeddings.endpoint at a"
+                    + " running embedding model and enable it.", AiCompanion.MOD_ID);
+        }
+        if (!serverThinks && ServerPolicy.serverAnswersWhenClientFails) {
+            AiCompanion.LOGGER.warn("[{}] clients do the thinking, but"
+                    + " server.serverAnswersWhenClientFails is true: when a player's own model fails"
+                    + " this server answers instead, from ITS corpus and on ITS bill, and nothing in"
+                    + " game says so. Leave it false unless every player here is trusted.",
+                    AiCompanion.MOD_ID);
+        }
+    }
+
     /**
      * Which brain the config asks for, for the startup summary.
      *
@@ -444,10 +730,10 @@ public final class CompanionConfig {
         if (changes.isEmpty()) {
             return;
         }
-        AiCompanion.LOGGER.info("[{}] updating {} — {}", AiCompanion.MOD_ID, FILE_NAME,
+        AiCompanion.LOGGER.info("[{}] updating {} — {}", AiCompanion.MOD_ID, fileName(),
                 String.join("; ", changes));
         try {
-            Path backup = path.resolveSibling(FILE_NAME + ".bak");
+            Path backup = path.resolveSibling(fileName() + ".bak");
             Files.writeString(backup, originalRaw);
             Files.writeString(path, PRETTY.toJson(config) + System.lineSeparator());
             AiCompanion.LOGGER.info("[{}] updated {} (previous version saved as {})",
@@ -790,7 +1076,11 @@ public final class CompanionConfig {
     /** The operator-owned block as JSON, for the packet that shows a connected player the rules. */
     public static JsonObject serverPolicyJson() {
         try {
-            Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+            // configPath(), not FILE_NAME: on a dedicated server the file is aicompanion-server.json
+            // and the old name does not exist. Reading the wrong path here failed on every join —
+            // survivably, because the fallback below sends the values actually in force, which is
+            // why it showed up as a warning per player rather than as a broken Server tab.
+            Path path = configPath();
             JsonObject root = JsonParser.parseString(Files.readString(path)).getAsJsonObject();
             JsonObject server = obj(root, "server");
             if (server != null) {
@@ -935,6 +1225,10 @@ public final class CompanionConfig {
                 "maxConcurrentRequests": 2,
                 "maxPromptChars": 20000,
                 "usageReportEveryTokens": 100000,
+                "clientBrain": true,
+                "clientBrainTimeoutMs": 45000,
+                "_clientBrain": "WHICH MACHINE THINKS, and on a dedicated server this is the most consequential setting in the file. On (default) the server hands each turn to the owner's own client, which runs THEIR model with THEIR api key against THEIR memory corpus — so a player's companion remembers what they taught it in singleplayer, and nobody spends the operator's tokens. Off, and this server thinks for everyone from the 'llm' block above and one shared corpus in its own config folder, which is why memory.enabled and embeddings.enabled matter here only when this is off. THE SYMPTOM OF GETTING THIS WRONG IS NOT AN ERROR: a companion thinking on the wrong machine still answers, in character, immediately — it has simply never heard of you. Check the boot line: brain=client-when-able is on, brain=server is off. IGNORED WITHOUT localMode, and ignored per-player for anyone whose client does not answer the capability handshake. ON A DEDICATED SERVER THIS KEY IS NOT HERE: that installation reads aicompanion-server.json instead, where the same decision is brain.mode. This copy governs singleplayer, where it changes nothing observable — client and server are one process reading one corpus — so it is left visible mainly so the concept is not a surprise the first time you run a server.",
+                "_clientBrainTimeoutMs": "How long the server waits for a client to think before giving up on that turn, in milliseconds. Not a latency budget — nothing is blocked while it runs — but a liveness check on a client that said it could think and then went quiet. Generous on purpose: a frontier model on a slow link can legitimately take many seconds, and cutting it off to run the turn again would spend twice and answer once. What happens after the timeout is server.serverAnswersWhenClientFails.",
                 "_maxPromptChars": "Hard character budget for the prompt; the oldest turns are dropped to fit (0 = no limit). Message count alone does not bound the prompt because every turn carries a world/agent status blob, so the same 64 messages can be 13k or 25k characters. Once the prompt outgrows what your model can attend to, the JSON contract at the FRONT is what gets lost: the companion still reasons correctly off recent turns and picks the right command, but writes it as prose instead of JSON, so nothing runs. Lower this if the companion talks sensibly and then stands still; raise it if your model has a large context. There is a FLOOR: the system prompt (~15k) and the newest turn with its status blob (~1.7k) can never be dropped, so a budget below ~17k throws away all conversation history on every turn and is still over — the companion then remembers nothing you said two messages ago. 20000 is the default for that reason. Watch the log for 'dropped ALL ... droppable turn(s)', which is what being under the floor looks like.",
                 "_maxConcurrentRequests": "How many LLM requests may be in flight at once across ALL companions. At 1 the roster is single-file: while one companion is thinking, the others cannot, which makes a second companion look broken while the first works a long task. 2 suits a local llama.cpp, which serves one request at a time anyway. Raise it for a hosted endpoint that parallelises, or when several companions are out and expected to work independently — it is also the concurrency half of the spend guardrail, since every extra slot is another request that can be burning tokens at the same instant. Clamped to 1-16.",
                 "_usage": "usageReportEveryTokens: print a running token-usage total to chat and the log every N tokens (0 = never). Purely informational — it never blocks a reply. maxRequests is the opposite: a hard per-session request cap that makes the companion stop responding once hit (0 = unlimited, the default). Leave maxRequests at 0 unless you are on a paid endpoint and want a hard stop.",
