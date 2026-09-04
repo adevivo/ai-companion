@@ -15,6 +15,11 @@ out/
 
 run/
 
+# Minecraft/Loom run logs. Also written into a module dir by any bare `java` invocation that
+# initialises Minecraft's logger (a reflection test harness will do it), which is how these first
+# appeared — nothing here is a run configuration worth keeping.
+logs/
+
 # Vendored upstream reference (read-only, not part of our mod)
 reference/
 
