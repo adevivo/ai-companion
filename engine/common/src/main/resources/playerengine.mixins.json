@@ -8,14 +8,14 @@
     "defaultRequire": 1
   },
   "client": [
+    "ClientBlockBreakMixin",
+    "PlayerCollidesWithEntityMixin"
   ],
   "mixins": [
-    "ClientBlockBreakMixin",
     "ClientConnectionAccessor",
     "EntityAnimationSwungMixin",
     "LivingEntityMixin",
     "MixinAbstractFurnaceBlockEntity",
-    "PlayerCollidesWithEntityMixin",
     "PlayerDamageMixin",
     "WorldBlockModifiedMixin",
     "baritone.MixinBucketItem",
