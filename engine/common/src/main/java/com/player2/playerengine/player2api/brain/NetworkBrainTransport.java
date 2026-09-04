@@ -144,11 +144,49 @@ public final class NetworkBrainTransport implements BrainTransport {
         return p;
     }
 
-    /** The owning client announced it can think. Called from the mod's packet receiver. */
-    public static void markCapable(UUID player) {
+    /** What each capable client reported about its own LLM config, for diagnostics only. */
+    private static final Map<UUID, String> CAPABILITY_DETAIL = new ConcurrentHashMap<>();
+
+    /**
+     * The owning client announced it can think. Called from the mod's packet receiver.
+     *
+     * <p>{@code detail} is what the client says it is pointed at. It is logged and never gated on:
+     * a client is the only thing that knows whether its endpoint answers, and guessing from a URL
+     * would refuse to delegate to a working setup that merely looks unusual. When a reported-looking
+     * config does fail, {@code serverAnswersWhenClientFails} decides whether the player is told or
+     * quietly answered from here — and the default is to tell them.
+     */
+    public static void markCapable(UUID player, String detail) {
+        CAPABILITY_DETAIL.put(player, detail);
         if (CAPABLE.add(player)) {
-            LOGGER.info("Brain: {} can think client-side.", player);
+            LOGGER.info("Brain: {} can think client-side ({}).", player, detail);
+            warnIfServerIsThinkingAnyway(player);
         }
+    }
+
+    /**
+     * The one line that would have saved an afternoon: a client said it could think and the server
+     * is going to ignore it.
+     *
+     * <p>In game the two are indistinguishable — the companion answers either way. The differences
+     * are all invisible: which machine pays, which corpus is consulted, and therefore whether the
+     * companion remembers anything the player taught it somewhere else. Logged at WARN per player
+     * rather than once at boot because the capability handshake is the only moment where both
+     * halves of the contradiction are known at the same time.
+     */
+    private static void warnIfServerIsThinkingAnyway(UUID player) {
+        if (LlmConfig.clientBrain && LlmConfig.localMode) {
+            return;
+        }
+        String why = !LlmConfig.clientBrain
+                ? "this server is configured to do the thinking (brain.mode=\"server\" in"
+                        + " aicompanion-server.json)"
+                : "llm.localMode is off on this server, which disables client-side thinking"
+                        + " regardless of brain.mode";
+        LOGGER.warn("Brain: {} can think client-side but this server will think for it instead — {}."
+                + " Every turn will use THIS server's llm endpoint and THIS server's memory corpus,"
+                + " so the player's own model and their own remembered facts are not consulted.",
+                player, why);
     }
 
     /**
@@ -160,6 +198,7 @@ public final class NetworkBrainTransport implements BrainTransport {
      */
     public static void forget(UUID player) {
         CAPABLE.remove(player);
+        CAPABILITY_DETAIL.remove(player);
         for (Map.Entry<UUID, Pending> e : PENDING.entrySet()) {
             if (player.equals(e.getValue().owner)) {
                 e.getValue().fail("the owner disconnected");

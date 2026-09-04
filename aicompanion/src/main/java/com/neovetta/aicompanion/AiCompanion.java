@@ -43,8 +43,22 @@ public class AiCompanion implements ModInitializer {
                 com.player2.playerengine.player2api.brain.BrainWire.HELLO,
                 (buf, context) -> {
                     java.util.UUID id = context.getPlayer().getUUID();
+                    // Read on the netty thread — the buffer is not valid once we queue. A client
+                    // older than the capability fields sends an empty payload, so every read is
+                    // guarded rather than versioned: there is only one field group and its absence
+                    // is the whole story.
+                    String detail = "no detail (client predates capability reporting)";
+                    if (buf.isReadable()) {
+                        boolean localMode = buf.readBoolean();
+                        String endpoint = buf.readUtf();
+                        boolean hasKey = buf.readBoolean();
+                        detail = "endpoint=" + (endpoint.isBlank() ? "(blank)" : endpoint)
+                                + ", key=" + (hasKey ? "set" : "none")
+                                + (localMode ? "" : ", localMode=OFF so it will not be delegated to");
+                    }
+                    String reported = detail;
                     context.queue(() -> com.player2.playerengine.player2api.brain.NetworkBrainTransport
-                            .markCapable(id));
+                            .markCapable(id, reported));
                 });
 
         NetworkManager.registerReceiver(NetworkManager.Side.C2S,

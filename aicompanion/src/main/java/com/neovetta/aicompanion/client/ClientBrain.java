@@ -69,6 +69,17 @@ public final class ClientBrain {
             markThinkingHere(false);
             RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(),
                     handler.registryAccess());
+            // Say WHAT this client is pointed at, not merely that it exists. "Has the mod" and "can
+            // actually reach a model" are different things and the server cannot tell them apart:
+            // every client that gets this far has the mod, because registry sync refuses vanilla
+            // ones outright. Deliberately not a gate — a client that reports a hopeless-looking
+            // config is still asked to think, and if it fails the player is told so in chat. This
+            // exists so an operator reading the log can SEE that a player is still on the untouched
+            // default endpoint with no key, which is what a "my companion never answers" report
+            // actually looks like from the server side.
+            buf.writeBoolean(LlmConfig.localMode);
+            buf.writeUtf(LlmConfig.baseUrl == null ? "" : LlmConfig.baseUrl);
+            buf.writeBoolean(LlmConfig.apiKey != null && !LlmConfig.apiKey.isBlank());
             NetworkManager.sendToServer(BrainWire.HELLO, buf);
         });
 
