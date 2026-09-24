@@ -533,10 +533,10 @@ public final class CompanionConfigScreen {
                         Component.literal("Asks the endpoint to force every reply into JSON"),
                         Component.literal("(response_format: json_object). Keeps a chatty model"),
                         Component.literal("from answering in plain prose, which runs no command."),
-                        Component.literal("Leave on for OpenRouter, xAI, OpenAI and llama.cpp."),
-                        Component.literal("Turn OFF if a local server (LM Studio, Ollama) rejects"),
-                        Component.literal("requests or the companion never answers — then pick a"),
-                        Component.literal("model that follows instructions well."),
+                        Component.literal("Leave on. LM Studio, which refuses the usual form, is"),
+                        Component.literal("detected and sent the form it accepts. Turn OFF only if"),
+                        Component.literal("your server still refuses it (the chat error says so) —"),
+                        Component.literal("then pick a model that follows instructions well."),
                         Component.literal("(llm.useGrammar in the config file.)"))
                 .setSaveConsumer(v -> llm.addProperty("useGrammar", v))
                 .build());

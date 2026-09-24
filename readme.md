@@ -300,7 +300,7 @@ the file names the mechanism and the screen names the effect:
 
 | Config screen | In the file | What it does |
 |---|---|---|
-| LLM → **JSON Mode** | `llm.useGrammar` | Asks the endpoint to force every reply into JSON (`response_format: json_object`), so a chatty model cannot answer in prose that runs no command. On by default. Turn it **off** if a local server such as LM Studio or Ollama rejects requests or the companion never answers. |
+| LLM → **JSON Mode** | `llm.useGrammar` | Asks the endpoint to force every reply into JSON, so a chatty model cannot answer in prose that runs no command. On by default, and leave it on: LM Studio, which refuses the usual `json_object` form, is detected and sent `json_schema` instead. Turn it off only if the chat error says your server refuses JSON mode outright. |
 | Memory → **Learn From Conversation** | `memory.extractionEnabled` | Learns facts from what you say, not only from `/companion remember`. Off by default: it costs one extra LLM call per turn. |
 | Memory → **Skip Irrelevant Turns** | `memory.gateEnabled` | Decides whether a line is about you before looking anything up, so "attack that zombie" does not recall your dog. Leave it on. |
 | Memory → **Max Memories Per Reply** | `memory.topK` | How many remembered facts may reach one prompt. Each costs tokens on every turn. |
@@ -378,7 +378,10 @@ Get a key from <https://console.x.ai>. Three things that will bite you if you sk
 - **`endpoint` is the base URL only** — no trailing slash, no `/v1`. The mod appends
   `/v1/chat/completions` itself, so `https://api.x.ai/v1/` becomes a 404.
 - **Use a *non-reasoning* model.** Reasoning models are slower and bill you for thinking tokens the
-  companion never uses. `grok-4-1-fast-non-reasoning` is the sane default.
+  companion never uses. `grok-4-1-fast-non-reasoning` is the sane default. Local models too:
+  `qwen3` on Ollama thinks by default, and on long requests (lumberjack, "build a house") it spends
+  the whole `maxTokens` budget before writing a word. The log says *"The reply was EMPTY"*. Use a
+  non-thinking model such as `qwen2.5`, or turn thinking off in your model server.
 - **Prefer the environment variable to the config file** for the key —
   set `AICOMPANION_LLM_APIKEY` and leave `apiKey` blank, and the secret never touches disk. The env
   var wins when both are set.
