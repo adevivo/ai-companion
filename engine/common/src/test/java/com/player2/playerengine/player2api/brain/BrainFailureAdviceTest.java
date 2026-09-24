@@ -42,6 +42,17 @@ class BrainFailureAdviceTest {
     }
 
     @Test
+    @DisplayName("advice that points at the config file says how to apply an edit to it")
+    void configAdviceSaysHowToApply() {
+        assertTrue(advise("HTTP 401: Unauthorized").contains("/companion reload"),
+                "the file can already be right while the running game still holds the old key");
+        assertTrue(advise("java.net.ConnectException: Connection refused").contains("/companion reload"));
+        assertTrue(advise(null).contains("/companion reload"));
+        assertFalse(advise("HTTP 429: Too Many Requests").contains("/companion reload"),
+                "a rate limit is not fixed by editing the file, so do not suggest it is");
+    }
+
+    @Test
     @DisplayName("an unreachable endpoint IS an endpoint problem")
     void connectionRefusedStillPointsAtTheEndpoint() {
         String advice = advise("java.net.ConnectException: Connection refused");

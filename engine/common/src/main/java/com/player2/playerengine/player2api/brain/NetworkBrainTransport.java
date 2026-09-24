@@ -80,6 +80,11 @@ public final class NetworkBrainTransport implements BrainTransport {
      *
      * <p>The client already sends its exception text back, so the answer is available and was
      * simply being dropped on the way to the player.
+     *
+     * <p>Every branch that sends the player to their config file also says how to apply it. Observed
+     * 2026-09-23: a fresh key pasted into the file of a running game, the config screen showing that
+     * new key, and three 401s in a row, because the game still held the key it read at launch.
+     * "Check llm.apiKey" was correct advice and led to a file that was already right.
      */
     static String adviseOn(String clientError) {
         String e = clientError == null ? "" : clientError.toLowerCase(java.util.Locale.ROOT);
@@ -92,7 +97,7 @@ public final class NetworkBrainTransport implements BrainTransport {
         if (e.contains("401") || e.contains("403") || e.contains("unauthorized")
                 || e.contains("invalid api key") || e.contains("no auth")) {
             return "your model provider refused the key. Check llm.apiKey in your own config, or "
-                    + "the AICOMPANION_LLM_APIKEY environment variable if you set it there.";
+                    + "the AICOMPANION_LLM_APIKEY environment variable if you set it there." + APPLY;
         }
         if (e.contains("402") || e.contains("insufficient") || e.contains("credit")
                 || e.contains("quota") || e.contains("billing")) {
@@ -103,15 +108,19 @@ public final class NetworkBrainTransport implements BrainTransport {
                 || e.contains("no route to host") || e.contains("timed out")
                 || e.contains("timeout") || e.contains("connect")) {
             return "nothing answered at your endpoint. Check llm.endpoint in your own config and "
-                    + "that the model server is running and reachable from your machine.";
+                    + "that the model server is running and reachable from your machine." + APPLY;
         }
         if (e.isBlank()) {
-            return "your client did not say why. Check llm.endpoint in your own config.";
+            return "your client did not say why. Check llm.endpoint in your own config." + APPLY;
         }
         // Say what happened rather than guessing at it — an unclassified failure is still a
         // better clue in the player's own words than a wrong diagnosis.
         return "your model returned an error — " + clientError;
     }
+
+    /** A running game reads its config at launch, so an edit to the file changes nothing until applied. */
+    static final String APPLY = " A file edit only takes effect after /companion reload, or Save in the"
+            + " config screen.";
 
     private static final Logger LOGGER = LogManager.getLogger();
 

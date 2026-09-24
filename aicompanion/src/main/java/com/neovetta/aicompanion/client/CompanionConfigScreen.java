@@ -10,6 +10,7 @@ import com.neovetta.aicompanion.AiCompanion;
 import com.neovetta.aicompanion.CompanionConfig;
 import com.neovetta.aicompanion.CompanionSkills;
 import com.neovetta.aicompanion.entity.CompanionEntity;
+import com.neovetta.aicompanion.core.LlmConfig;
 import me.shedaniel.clothconfig2.api.ConfigBuilder;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
@@ -439,6 +440,14 @@ public final class CompanionConfigScreen {
 
     private static void buildLlm(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
         JsonObject llm = section(config, "llm");
+        List<String> unapplied = unappliedLlmEdits(llm);
+        if (!unapplied.isEmpty()) {
+            cat.addEntry(eb.startTextDescription(Component.literal(
+                            "⚠ Not in use yet: " + String.join(", ", unapplied) + ". This screen shows"
+                                    + " the file, which has changed since the game loaded it. Save, or"
+                                    + " run /companion reload, to apply.")
+                    .withStyle(ChatFormatting.GOLD)).build());
+        }
         // Combobox: type any URL, or pick a common provider from the dropdown. Suggestion mode
         // keeps free entry working; the list is just a convenience for first-time setup.
         cat.addEntry(eb.startStringDropdownMenu(Component.literal("Endpoint"), str(llm, "endpoint", "http://localhost:3030"), opaqueCells())
@@ -517,6 +526,19 @@ public final class CompanionConfigScreen {
                         Component.literal("to stop runs to the cap and is retried — which is"),
                         Component.literal("why the default is 2000, not the 1000 floor."))
                 .setSaveConsumer(v -> llm.addProperty("maxTokens", v))
+                .build());
+        cat.addEntry(eb.startBooleanToggle(Component.literal("JSON Mode"), bool(llm, "useGrammar", true))
+                .setDefaultValue(true)
+                .setTooltip(
+                        Component.literal("Asks the endpoint to force every reply into JSON"),
+                        Component.literal("(response_format: json_object). Keeps a chatty model"),
+                        Component.literal("from answering in plain prose, which runs no command."),
+                        Component.literal("Leave on for OpenRouter, xAI, OpenAI and llama.cpp."),
+                        Component.literal("Turn OFF if a local server (LM Studio, Ollama) rejects"),
+                        Component.literal("requests or the companion never answers — then pick a"),
+                        Component.literal("model that follows instructions well."),
+                        Component.literal("(llm.useGrammar in the config file.)"))
+                .setSaveConsumer(v -> llm.addProperty("useGrammar", v))
                 .build());
         if (envApiKeySet()) {
             cat.addEntry(eb.startTextDescription(Component.literal(
@@ -1081,6 +1103,34 @@ public final class CompanionConfigScreen {
                 };
             }
         };
+    }
+
+    /**
+     * Which LLM settings in the file differ from what this game is actually using.
+     *
+     * <p>The screen re-reads the file every time it opens, but the game reads it only at launch and
+     * on reload or Save. So a hand edit shows up here as though it were live while every request
+     * still goes out with the old value. Observed 2026-09-23: a new API key pasted into the file,
+     * this screen displaying it, and three 401s from a key nobody could see.
+     *
+     * <p>Names only, never values: the API key is one of them. An absent key is not a difference,
+     * because {@code load()} leaves the running value alone when a key is missing.
+     */
+    private static List<String> unappliedLlmEdits(JsonObject llm) {
+        List<String> out = new ArrayList<>();
+        if (!str(llm, "endpoint", LlmConfig.baseUrl).equals(LlmConfig.baseUrl)) {
+            out.add("Endpoint");
+        }
+        if (!str(llm, "model", LlmConfig.model).equals(LlmConfig.model)) {
+            out.add("Model");
+        }
+        if (!envApiKeySet() && !str(llm, "apiKey", "").equals(LlmConfig.apiKey == null ? "" : LlmConfig.apiKey)) {
+            out.add("API Key");
+        }
+        if (bool(llm, "useGrammar", LlmConfig.useGrammar) != LlmConfig.useGrammar) {
+            out.add("JSON Mode");
+        }
+        return out;
     }
 
     private static boolean envApiKeySet() {
