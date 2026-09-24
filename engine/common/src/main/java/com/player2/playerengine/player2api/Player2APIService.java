@@ -131,12 +131,82 @@ public class Player2APIService {
     * would keep landing on other servers and evicting nothing useful.
     */
    private Map<String, JsonElement> chatCompletion(JsonObject requestBody) throws Exception {
-      Map<String, JsonElement> responseMap = Player2HTTPUtils.sendRequest(
+      Map<String, JsonElement> responseMap;
+      try {
+         responseMap = sendChat(requestBody);
+      } catch (HttpApiException e) {
+         if (!requestBody.has("response_format") || needsJsonSchema() || !rejectsJsonObject(e)) {
+            throw e;
+         }
+         // Asked for once per endpoint and then remembered, so a server that only takes json_schema
+         // pays for the refusal on its first request and never again.
+         schemaOnlyEndpoint = LlmConfig.baseUrl;
+         LOGGER.warn("{} does not accept response_format json_object; asking for JSON through "
+               + "json_schema instead, from now on. JSON Mode stays on.", LlmConfig.baseUrl);
+         requestBody.add("response_format", responseFormat(true));
+         responseMap = sendChat(requestBody);
+      }
+      recordUsage(responseMap);
+      return responseMap;
+   }
+
+   private Map<String, JsonElement> sendChat(JsonObject requestBody) throws Exception {
+      return Player2HTTPUtils.sendRequest(
             controller == null ? null : controller.getOwner(), clientId,
             "/v1/chat/completions", true, requestBody,
             java.util.Collections.singletonMap(CONV_ID_HEADER, conversationId()));
-      recordUsage(responseMap);
-      return responseMap;
+   }
+
+   /**
+    * The endpoint that refused {@code json_object}, or null. Keyed on the URL so pointing the config
+    * at a different server starts over rather than inheriting another server's quirk.
+    */
+   private static volatile String schemaOnlyEndpoint;
+
+   private static boolean needsJsonSchema() {
+      String endpoint = schemaOnlyEndpoint;
+      return endpoint != null && endpoint.equals(LlmConfig.baseUrl);
+   }
+
+   /**
+    * Whether a refusal is the server saying "not json_object — json_schema".
+    *
+    * <p>LM Studio's exact words, observed 2026-09-17 on qwen2.5-14b-instruct, 33 times in one session:
+    * {@code HTTP 400 … {"error":"'response_format.type' must be 'json_schema' or 'text'"}}. The player
+    * saw the raw exception in chat. Matched on the two field names rather than the whole sentence, so
+    * a reworded message from the same server still matches.
+    */
+   static boolean rejectsJsonObject(Exception e) {
+      if (!(e instanceof HttpApiException http) || http.getStatusCode() != 400) {
+         return false;
+      }
+      String m = String.valueOf(e.getMessage()).toLowerCase(java.util.Locale.ROOT);
+      return m.contains("response_format") && m.contains("json_schema");
+   }
+
+   /**
+   * The JSON-mode request field.
+   *
+   * <p>{@code json_object} is the OpenAI-compatible form, honoured by OpenRouter, xAI, OpenAI and
+   * llama.cpp. {@code json_schema} is the structured-output form that LM Studio insists on. The
+   * schema says only "an object" — no required fields — so it asks for exactly what
+   * {@code json_object} asks for. Stricter would be possible for the agent turn, but this is also
+   * used by memory extraction, whose object has a different shape.
+   */
+   static JsonObject responseFormat(boolean schema) {
+      JsonObject format = new JsonObject();
+      if (!schema) {
+         format.addProperty("type", "json_object");
+         return format;
+      }
+      JsonObject anyObject = new JsonObject();
+      anyObject.addProperty("type", "object");
+      JsonObject jsonSchema = new JsonObject();
+      jsonSchema.addProperty("name", "reply");
+      jsonSchema.add("schema", anyObject);
+      format.addProperty("type", "json_schema");
+      format.add("json_schema", jsonSchema);
+      return format;
    }
 
    /**
@@ -312,11 +382,10 @@ public class Player2APIService {
          requestBody.addProperty(openAi ? "max_completion_tokens" : "max_tokens", LlmConfig.maxTokens);
       }
       if (jsonMode && LlmConfig.useGrammar) {
-         // OpenAI-compatible JSON mode: forces the model to emit a JSON object instead of prose.
-         // Honored by both xAI/Grok and llama.cpp — stops chatty models replying with bare sentences.
-         JsonObject responseFormat = new JsonObject();
-         responseFormat.addProperty("type", "json_object");
-         requestBody.add("response_format", responseFormat);
+         // JSON mode: forces the model to emit a JSON object instead of prose, which stops chatty
+         // models replying with bare sentences. The form depends on what the server has told us it
+         // accepts — see chatCompletion.
+         requestBody.add("response_format", responseFormat(needsJsonSchema()));
       }
    }
 
@@ -332,14 +401,32 @@ public class Player2APIService {
     *
     * <p>The tell is cheap and reliable: a long run of one repeated character at the tail. Small and
     * heavily-quantised models are where this shows up, which is exactly what a free tier is made of.
+    *
+    * <p>⚠️ And the opposite case: an <b>empty</b> reply at a cap that is already big enough. The model
+    * spent the whole budget before writing a single character, which is what a thinking model does —
+    * its reasoning is billed against the same cap and returned separately or not at all. Observed
+    * 2026-09-22 with qwen3:4b on Ollama at maxTokens=2000, about sixteen times, worst on long
+    * requests (lumberjack, "build a small house"). Every one was told to "raise llm.maxTokens to at
+    * least 1000", a value it was already double.
     */
-   private static String truncationNote(String content) {
+   static String truncationNote(String content) {
+      if ((content == null || content.isBlank()) && LlmConfig.maxTokens >= LlmConfig.MIN_USEFUL_MAX_TOKENS) {
+         return "The reply was EMPTY: the model spent all " + LlmConfig.maxTokens + " tokens before "
+               + "writing anything. That is a thinking model (qwen3, deepseek-r1, gpt-oss and "
+               + "similar) reasoning out of sight, and long requests make it think longer. Use a "
+               + "non-thinking model, turn thinking off in your model server, or raise llm.maxTokens "
+               + "well past " + LlmConfig.maxTokens + ".";
+      }
       if (looksDegenerate(content)) {
          return "The tail is a repeated character, so the model did not run out of room — it failed to "
                + "STOP. Raising llm.maxTokens buys more of the same (and costs more on a paid "
                + "endpoint); use a larger or less quantised model instead.";
       }
-      return "Raise llm.maxTokens to at least " + LlmConfig.MIN_USEFUL_MAX_TOKENS + ".";
+      if (LlmConfig.maxTokens < LlmConfig.MIN_USEFUL_MAX_TOKENS) {
+         return "Raise llm.maxTokens to at least " + LlmConfig.MIN_USEFUL_MAX_TOKENS + ".";
+      }
+      // Already past the floor, so the reply really was that long — never advise a smaller number.
+      return "Raise llm.maxTokens above " + LlmConfig.maxTokens + ".";
    }
 
    /** A tail of one character repeated far past anything a real reply ends with. */
@@ -657,12 +744,13 @@ public class Player2APIService {
          if (choices.size() != 0) {
             JsonObject messageObject = choices.get(0).getAsJsonObject().getAsJsonObject("message");
             if (messageObject != null && messageObject.has("content")) {
+               String content = messageObject.get("content").getAsString();
                if (wasTruncated(choices)) {
                   LOGGER.warn("Deterministic JSON reply was cut off by the output token limit "
-                        + "(llm.maxTokens={}); it will not parse. Raise it to at least {}.",
-                        LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS);
+                        + "(llm.maxTokens={}); it will not parse. {}",
+                        LlmConfig.maxTokens, truncationNote(content));
                }
-               return messageObject.get("content").getAsString();
+               return content;
             }
          }
       }
@@ -697,8 +785,8 @@ public class Player2APIService {
                   // summary — so a cut-off reply would otherwise go through as a half-written plan
                   // with nothing anywhere saying why it was wrong.
                   LOGGER.warn("Plain-text LLM reply was cut off by the output token limit "
-                        + "(llm.maxTokens={}); the result is incomplete. Raise it to at least {}.",
-                        LlmConfig.maxTokens, LlmConfig.MIN_USEFUL_MAX_TOKENS);
+                        + "(llm.maxTokens={}); the result is incomplete. {}",
+                        LlmConfig.maxTokens, truncationNote(messageObject.get("content").getAsString()));
                }
                return messageObject.get("content").getAsString();
             }

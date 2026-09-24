@@ -94,6 +94,13 @@ public final class NetworkBrainTransport implements BrainTransport {
                     + "plus another per turn if memory extraction is on. Wait for the reset, add "
                     + "credits, or point llm.endpoint at a local model.";
         }
+        if (e.contains("response_format")) {
+            // Only reached when the server refused BOTH forms — json_object is retried as
+            // json_schema automatically (Player2APIService#chatCompletion), which covers LM Studio.
+            return "your model server refused the JSON Mode request. Turn off JSON Mode in the "
+                    + "config screen's LLM tab (llm.useGrammar in the file), and pick a model that "
+                    + "follows instructions well." + APPLY;
+        }
         if (e.contains("401") || e.contains("403") || e.contains("unauthorized")
                 || e.contains("invalid api key") || e.contains("no auth")) {
             return "your model provider refused the key. Check llm.apiKey in your own config, or "

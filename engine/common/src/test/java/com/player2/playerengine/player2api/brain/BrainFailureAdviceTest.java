@@ -53,6 +53,15 @@ class BrainFailureAdviceTest {
     }
 
     @Test
+    @DisplayName("a server that refuses JSON mode is told where the switch is, not shown an exception")
+    void jsonModeRefusalPointsAtTheToggle() {
+        String advice = advise("HttpApiException: HTTP 400: Bad Request Body: "
+                + "{\"error\":\"'response_format.type' must be 'json_schema' or 'text'\"}");
+        assertTrue(advice.contains("JSON Mode") && advice.contains("llm.useGrammar"), advice);
+        assertFalse(advice.contains("HttpApiException"), "the raw exception is what the player saw before");
+    }
+
+    @Test
     @DisplayName("an unreachable endpoint IS an endpoint problem")
     void connectionRefusedStillPointsAtTheEndpoint() {
         String advice = advise("java.net.ConnectException: Connection refused");
