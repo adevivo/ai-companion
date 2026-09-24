@@ -284,7 +284,27 @@ gets the chance to flush it. On Windows, check **Event Viewer → Windows Logs �
 
 The mod writes `config/aicompanion.json` inside your Minecraft instance folder on first launch, with
 comments (`_help` keys) explaining every setting. Full schema:
-**[docs/config.example.json](docs/config.example.json)**. Edit it and restart the game.
+**[docs/config.example.json](docs/config.example.json)**. Edit it, then run `/companion reload` or
+restart the game.
+
+⚠️ **A running game reads the file only at launch, on `/companion reload`, and when you press Save in
+the config screen.** The screen shows the *file*, so a hand edit appears there straight away while
+the game carries on with the old value. If the LLM tab opens with *"⚠ Not in use yet: …"*, that is
+what has happened: reload or Save to apply it. The usual way to run into this is a freshly pasted
+API key that shows correctly on screen and is still refused.
+
+### Screen names that differ from the file
+
+Most settings have the same name on the config screen as in the file. These five do not, because
+the file names the mechanism and the screen names the effect:
+
+| Config screen | In the file | What it does |
+|---|---|---|
+| LLM → **JSON Mode** | `llm.useGrammar` | Asks the endpoint to force every reply into JSON (`response_format: json_object`), so a chatty model cannot answer in prose that runs no command. On by default. Turn it **off** if a local server such as LM Studio or Ollama rejects requests or the companion never answers. |
+| Memory → **Learn From Conversation** | `memory.extractionEnabled` | Learns facts from what you say, not only from `/companion remember`. Off by default: it costs one extra LLM call per turn. |
+| Memory → **Skip Irrelevant Turns** | `memory.gateEnabled` | Decides whether a line is about you before looking anything up, so "attack that zombie" does not recall your dog. Leave it on. |
+| Memory → **Max Memories Per Reply** | `memory.topK` | How many remembered facts may reach one prompt. Each costs tokens on every turn. |
+| Memory → **Minimum Relevance** | `memory.minCosine` | How closely a fact must match what was just said (0–1) before it is included. |
 
 ### Two kinds of setting, split by who pays
 
