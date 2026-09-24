@@ -2,6 +2,7 @@
 build/
 bin/
 out/
+videos/
 
 *.DS_Store
 
