@@ -17,35 +17,29 @@
 
 package com.player2.playerengine.automaton.api.component;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.function.Function;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import org.jetbrains.annotations.Nullable;
 
 public class EntityComponentKey<C> {
-   private final Map<UUID, C> storage = new HashMap<>();
-   private final Function<LivingEntity, C> factory;
+   /** Keyed by UUID, but never returns a component bound to a removed entity — see {@link ComponentStore}. */
+   private final ComponentStore<LivingEntity, C> storage;
 
    public EntityComponentKey(Function<LivingEntity, C> factory) {
-      this.factory = factory;
+      this.storage = new ComponentStore<>(Entity::getUUID, Entity::isRemoved, factory);
    }
 
    @Nullable
    public C getNullable(Object object) {
-      if (object instanceof LivingEntity provider) {
-         return this.storage.get(provider.getUUID()) == null ? null : this.storage.get(provider.getUUID());
-      } else {
-         return null;
-      }
+      return object instanceof LivingEntity provider ? this.storage.getIfPresent(provider) : null;
    }
 
    public final C get(Object object) {
       if (object instanceof LivingEntity provider) {
-         return this.storage.computeIfAbsent(provider.getUUID(), u -> this.factory.apply(provider));
+         return this.storage.get(provider);
       } else {
          throw new NoSuchElementException();
       }
@@ -61,7 +55,9 @@ public class EntityComponentKey<C> {
     * then reads a dead world: player lookups come back empty, and chunk reads on a stopped server's
     * chunk cache take the off-thread branch and park the server thread forever.
     *
-    * <p>It is also an unbounded leak: without this, every entity that ever touched a component is
+    * <p>{@link ComponentStore} now refuses a stale component on lookup, which covers the same case
+    * within a running server (a parked companion restored under its old UUID). This stays, because it
+    * is also what stops an unbounded leak: without it every entity that ever touched a component is
     * retained for the lifetime of the game process.
     */
    public final void clear() {
@@ -69,10 +65,6 @@ public class EntityComponentKey<C> {
    }
 
    public final Optional<C> maybeGet(@Nullable Object object) {
-      if (object instanceof LivingEntity provider) {
-         return this.storage.get(provider.getUUID()) == null ? Optional.empty() : Optional.of(this.storage.get(provider.getUUID()));
-      } else {
-         return Optional.empty();
-      }
+      return Optional.ofNullable(this.getNullable(object));
    }
 }
