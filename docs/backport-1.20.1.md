@@ -301,9 +301,33 @@ the real cause*.
 - A double chest is allowed if either half is, so extending an allowed chest keeps it allowed.
 - The prompt says to use only allowed containers, and never to run `usechest` unprompted.
 
+**Also:** `fd5418b` — *Let get take from the owner's allowed containers before gathering*.
+`GetFromStorageFirstTask` wraps the gather task and runs `WithdrawFromContainersTask` (new
+`skipKnownWithout` mode) for each target first. `ResourceTask.allowContainers` stays false: its branch
+ignores permissions and uses `PickupFromContainerTask`.
+
 **Port:** on 1.20.1 `SavedData` is override-based (`save(CompoundTag)` plus a `load` factory for
 `computeIfAbsent`), not codec-based. Check `GlobalPos`, `UUIDUtil` and `Entity.pick` with `javap`, and
 the `RightClickBlock` signature in the 1.20.1 Architectury jar.
+
+---
+
+## 15. Command results that never reach the model, and a reload message that overclaims
+
+**Status:** not ported. **Depends on 9** for `reportCommandResult`.
+
+**Commits:** `8db4088` — *Send scan, eat, give and stand_ground results to the agent, not stdout*;
+`ee31043` — *Stop /companion reload claiming it re-applied an edited persona*.
+
+**What changed:** `ScanCommand`, `EatCommand`, `GiveCommand` (unknown item), `StandGroundCommand` and
+`GetCommand` (no items) called `mod.log()`, which only reaches stdout. Results now use
+`reportCommandResult` and failures `logAgentNotice(msg, null)`. The reload message no longer says
+"persona re-applied": `CompanionConfig.entryFor` prefers the identity saved on the entity, so a
+roster edit needs a despawn and spawn.
+
+**Port:** check each file on 1.20.1 for the same `mod.log()` calls. For the reload message, first
+check whether 1.20.1 saves an identity on the entity at all. If it does not, reload may really
+re-apply the persona there, and the old message is correct.
 
 ---
 
