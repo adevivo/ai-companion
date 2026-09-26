@@ -29,6 +29,7 @@ import com.player2.playerengine.player2api.LLMCompleter;
 import com.player2.playerengine.player2api.Player2APIService;
 import com.player2.playerengine.player2api.Prompts;
 import com.player2.playerengine.player2api.brain.NetworkBrainTransport;
+import com.player2.playerengine.tasks.container.GetFromStorageFirstTask;
 import com.player2.playerengine.player2api.utils.Utils;
 import com.player2.playerengine.tasks.construction.build_structure.StructureFromCode.SetBlockCommand;
 import com.player2.playerengine.tasks.construction.build_structure.templates.TemplateLibrary;
@@ -45,6 +46,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
@@ -132,6 +134,15 @@ public class BuildStructureTask extends Task {
     private BuildMaterials.Bill pendingBill;
     /** When the owner was last told how the gather is going. */
     private long lastProgressReport;
+    /**
+     * How long a gather may go without the inventory changing before the build stops and asks.
+     * Measured on the inventory, not on the shortfall: chopping logs for planks is progress that the
+     * plank count does not show until the crafting happens.
+     */
+    private static final long GATHER_STALL_MILLIS = 180_000L;
+    /** The inventory as last seen during the gather, and when it last changed. */
+    private long gatherFingerprint;
+    private long gatherChangedAt;
     /**
      * How often to report progress while collecting.
      *
@@ -1533,6 +1544,13 @@ public class BuildStructureTask extends Task {
     protected void onStart() {
         // Resuming after an interruption (a fight, an escape from powder snow): the plan being asked
         // for or run is still on its way, so carry on with it rather than design the build again.
+        if (!isDone && gatherTask != null && actuallyRunningTask == gatherTask) {
+            // Interrupted mid-gather. Carry on gathering for the same plan, and do not count the
+            // time spent on whatever interrupted it (a fight, say) as a stall.
+            LOGGER.info("Build ({}) resuming: back to gathering materials", description);
+            restartGatherClock();
+            return;
+        }
         if (!isDone && actuallyRunningTask instanceof RequestLLMCode) {
             LOGGER.info("Build ({}) resuming: still waiting for the plan already asked for", description);
             return;
@@ -1591,6 +1609,61 @@ public class BuildStructureTask extends Task {
      * <p>Chat only — the agent is deliberately left out of it. Feeding progress into the model would
      * spend tokens every half minute and invite it to narrate work the engine is already doing.
      */
+    /** Every stack, by item and count, reduced to one number that changes when anything does. */
+    private long inventoryFingerprint() {
+        long h = 17;
+        for (int i = 0; i < mod.getInventory().getContainerSize(); i++) {
+            ItemStack stack = mod.getInventory().getItem(i);
+            h = h * 31 + (stack.isEmpty() ? 0 : Item.getId(stack.getItem()) * 1000L + stack.getCount());
+        }
+        return h;
+    }
+
+    private void restartGatherClock() {
+        gatherFingerprint = inventoryFingerprint();
+        gatherChangedAt = System.currentTimeMillis();
+    }
+
+    /**
+     * Stop a gather that has stopped getting anywhere, and ask.
+     *
+     * <p>Observed 2026-09-26, three builds in a row: the gather stood still for 5-7 minutes each,
+     * repeating "Still collecting" every 30 s, until the owner noticed. The combined gather merges
+     * every crafted item into one job whose raw materials (leather for books, say) may simply not
+     * be anywhere near, and it neither fails nor wanders, so nothing else ever stopped it.
+     *
+     * <p>The plan is kept, so running the same build again picks it up rather than designing it again.
+     */
+    private boolean gatherStalled() {
+        long now = System.currentTimeMillis();
+        long fingerprint = inventoryFingerprint();
+        if (fingerprint != gatherFingerprint) {
+            gatherFingerprint = fingerprint;
+            gatherChangedAt = now;
+            return false;
+        }
+        if (now - gatherChangedAt < GATHER_STALL_MILLIS) {
+            return false;
+        }
+        Map<Item, Integer> remaining = pendingBill == null ? Map.of() : BuildMaterials.shortfall(mod, pendingBill);
+        String missing = remaining.isEmpty() ? "the remaining materials" : BuildMaterials.describeForPlayer(remaining);
+        LOGGER.info("Build ({}) gather stalled: nothing collected in {} s, still missing {}",
+                description, GATHER_STALL_MILLIS / 1000, missing);
+        BuildPlanCache.remember(mod, description, pendingPlan);
+        mod.logAgentNotice(String.format(
+                "Stopped the build (%s) while gathering materials: nothing was collected for %d minutes. Nothing was placed."
+                        + " Still missing: %s. Do NOT start this build again on your own. Ask your owner what to do: they can bring the"
+                        + " materials or show you a container you may use (they open it, or stand at it and you run `usechest`), or"
+                        + " you can build something smaller from what you carry. Running the same build_structure again later"
+                        + " resumes this plan.",
+                shortDescription(), GATHER_STALL_MILLIS / 60_000, missing),
+                "I'm stuck finding materials for the build: still need " + missing + ". Nothing's built yet.");
+        gatherTask = null;
+        isDone = true;
+        actuallyRunningTask = null;
+        return true;
+    }
+
     private void reportGatherProgress() {
         if (gatherTask == null || actuallyRunningTask != gatherTask || pendingBill == null) {
             return;
@@ -1639,6 +1712,9 @@ public class BuildStructureTask extends Task {
             return null;
         }
         if (actuallyRunningTask == null || !actuallyRunningTask.isFinished()) {
+            if (gatherTask != null && actuallyRunningTask == gatherTask && gatherStalled()) {
+                return null;
+            }
             reportGatherProgress();
             return actuallyRunningTask;
         }
@@ -1716,10 +1792,14 @@ public class BuildStructureTask extends Task {
                 gatherAttempted = true;
                 pendingPlan = placeTask.plan();
                 pendingBill = placeTask.bill();
-                gatherTask = needed.size() == 1
+                Task gather = needed.size() == 1
                         ? TaskCatalogue.getItemTask(needed.get(0))
                         : TaskCatalogue.getSquashedItemTask(needed.toArray(new ItemTarget[0]));
+                // The owner's allowed containers first, as `get` does, then gather the rest.
+                gatherTask = gather == null ? null
+                        : new GetFromStorageFirstTask(needed.toArray(new ItemTarget[0]), gather);
                 if (gatherTask != null) {
+                    restartGatherClock();
                     LOGGER.info("Gathering materials for ({}): {}", description,
                             needed.stream().map(ItemTarget::toString).collect(Collectors.joining(", ")));
                     setDebugState("Collecting materials to build");

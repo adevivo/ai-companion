@@ -635,9 +635,43 @@ public final class CompanionCommands {
                     companion.displayName(), dist, companion.getHealth(), companion.getMaxHealth(),
                     task, mine ? "" : " (not yours)");
             source.sendSuccess(() -> Component.literal(line).withStyle(ChatFormatting.GRAY), false);
+            if (ctrl != null) {
+                for (String step : taskSteps(ctrl)) {
+                    source.sendSuccess(() -> Component.literal("      → " + step)
+                            .withStyle(ChatFormatting.DARK_GRAY), false);
+                }
+            }
         }
         return 1;
     }
+
+    /**
+     * The subtasks under the current one, outermost first, so a companion that "is collecting
+     * materials" can be seen to be stuck on, say, a crafting step three levels down. The top line
+     * above already names the outermost task, so it is left out here. Observed 2026-09-26: a build
+     * stood still for seven minutes and the top line was all anyone could see.
+     */
+    private static List<String> taskSteps(PlayerEngineController ctrl) {
+        try {
+            com.player2.playerengine.tasks.base.Task task = ctrl.getUserTaskChain().getCurrentTask();
+            if (task == null) {
+                return List.of();
+            }
+            String[] levels = task.getTaskTree().replaceFirst("^Main task:\\n", "").split("\\nFor that doing:\\n");
+            List<String> steps = new java.util.ArrayList<>();
+            for (int i = 1; i < levels.length && steps.size() < MAX_TASK_STEPS; i++) {
+                String step = levels[i].strip();
+                steps.add(step.length() > 160 ? step.substring(0, 157) + "..." : step);
+            }
+            return steps;
+        } catch (Exception e) {
+            // Never let a status readout be the thing that breaks a command.
+            return List.of();
+        }
+    }
+
+    /** Deep enough to reach the stuck step, short enough not to flood chat. */
+    private static final int MAX_TASK_STEPS = 8;
 
     /**
      * One-line summary of what a companion is currently working on — the same string the model is
