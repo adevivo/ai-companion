@@ -255,6 +255,58 @@ so the server's C2S receiver is unchanged.
 
 ---
 
+## 13. Build plans time out on the turn budget, send one request too many, and blame the endpoint
+
+**Status:** not ported. **Depends on 12**: the plan timeout exists only once plans go to the client.
+The other two parts are **confirmed present** on 1.20.1 in shape, but check the line numbers:
+`BuildStructureTask` creates the next `RequestLLMCode` before it checks `numErrors`, and a turn
+timeout calls `runOnServer(null)`.
+
+**Commit:** `6bac1fb` — *Give build plans their own timeout, stop after the last attempt, and name
+the real cause*.
+
+**What changed:**
+- `NetworkBrainTransport.planTimeoutMs` (180 s by default) arms plan requests instead of
+  `LlmConfig.clientBrainTimeoutMs`. Config keys `llm.clientPlanTimeoutMs` in the flat file and
+  `brain.planTimeoutMs` in the server file (`CompanionConfig`). It lives in the engine, not the
+  core's `LlmConfig`, so the core did not need a release.
+- `BuildStructureTask.shouldGiveUp()` runs before the next request is created. A timeout gives up at
+  once instead of asking again.
+- `Pending.fail()` passes its reason to `adviseOn`. `adviseOn` gained timeout, "could not be sent"
+  and 503 cases, ahead of the endpoint branch, which matches "timeout" too. Tests: three new cases in
+  `BrainFailureAdviceTest`.
+- The build's owner message comes from `adviseOn(lastError)` when the model call failed, and says
+  "couldn't come up with a workable plan" only when a plan arrived and failed to run.
+
+**Port:** 1.20.1 has no server config file, so only the flat key applies.
+
+---
+
+## 14. Companions use any container in range, including other players'
+
+**Status:** not ported. **Depends on 9**: it filters the container tasks that entry adds.
+
+**Commit:** `8eebd34` — *Let companions use only the containers their owner has allowed*.
+
+**What changed:**
+- `ChestPermissions` (new, `util/helpers/`): a `SavedData` of allowed container positions per owner
+  UUID, in `data/aicompanion_allowed_containers.dat`. Built like `WorldIdentity`: one shared static
+  `SavedDataType`, and a real `DataFixTypes`. Tests: `ChestPermissionsTest`.
+- An owner allows a container by opening it (Architectury `InteractionEvent.RIGHT_CLICK_BLOCK`,
+  registered in `PlayerEngineController`'s static block), by `usechest`, or by a deposit placing it.
+  `forgetchest` removes one. Both commands find the container from the OWNER's position, never the
+  companion's.
+- `VisitContainersTask.replan()` skips containers that are not allowed and counts them. `notes()`
+  tells the agent how many were skipped and how to allow one.
+- A double chest is allowed if either half is, so extending an allowed chest keeps it allowed.
+- The prompt says to use only allowed containers, and never to run `usechest` unprompted.
+
+**Port:** on 1.20.1 `SavedData` is override-based (`save(CompoundTag)` plus a `load` factory for
+`computeIfAbsent`), not codec-based. Check `GlobalPos`, `UUIDUtil` and `Entity.pick` with `javap`, and
+the `RightClickBlock` signature in the 1.20.1 Architectury jar.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).
