@@ -91,13 +91,27 @@ public final class ContainerAccess {
    }
 
    /** The position a double chest is known by — its first half — or the position itself. */
-   private static BlockPos canonical(Level level, BlockPos pos) {
+   public static BlockPos canonical(Level level, BlockPos pos) {
       BlockState state = level.getBlockState(pos);
       if (state.getBlock() instanceof ChestBlock
          && ChestBlock.getBlockType(state) == DoubleBlockCombiner.BlockType.SECOND) {
          return pos.relative(ChestBlock.getConnectedDirection(state));
       }
       return pos;
+   }
+
+   /** Both halves of a double chest, or just {@code pos} for anything else. */
+   public static List<BlockPos> halves(Level level, BlockPos pos) {
+      BlockState state = level.getBlockState(pos);
+      if (state.getBlock() instanceof ChestBlock && ChestBlock.getBlockType(state) != DoubleBlockCombiner.BlockType.SINGLE) {
+         return List.of(pos, pos.relative(ChestBlock.getConnectedDirection(state)));
+      }
+      return List.of(pos);
+   }
+
+   /** Whether {@code pos} is half of a double chest. */
+   public static boolean isDouble(Level level, BlockPos pos) {
+      return halves(level, pos).size() > 1;
    }
 
    /** The inventory at {@code pos}, with both halves of a double chest combined. */

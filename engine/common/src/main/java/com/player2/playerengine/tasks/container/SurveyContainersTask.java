@@ -45,12 +45,12 @@ public class SurveyContainersTask extends VisitContainersTask {
 
    /** The listing for the agent. */
    public String report() {
-      if (this.lines.isEmpty() && this.unreachable.isEmpty()) {
+      if (this.lines.isEmpty() && this.unreachable.isEmpty() && this.notAllowed == 0) {
          return "There are no chests, barrels or shulker boxes within " + ContainerAccess.SEARCH_RADIUS + " blocks.";
       }
-      StringBuilder out = new StringBuilder("Checked " + this.lines.size() + " container(s): ");
-      out.append(String.join("; ", this.lines)).append('.');
-      out.append(this.unreachableNote());
+      StringBuilder out = new StringBuilder("Checked " + this.lines.size() + " container(s)");
+      out.append(this.lines.isEmpty() ? "." : ": " + String.join("; ", this.lines) + ".");
+      out.append(this.notes());
       if (this.notChecked > 0) {
          out.append(" ").append(this.notChecked).append(" more further away were not checked.");
       }

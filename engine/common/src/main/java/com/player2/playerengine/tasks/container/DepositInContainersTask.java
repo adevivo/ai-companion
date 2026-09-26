@@ -6,6 +6,7 @@ import com.player2.playerengine.tasks.base.Task;
 import com.player2.playerengine.tasks.construction.PlaceBlockNearbyTask;
 import com.player2.playerengine.trackers.storage.ContainerCache;
 import com.player2.playerengine.util.ItemTarget;
+import com.player2.playerengine.util.helpers.ChestPermissions;
 import com.player2.playerengine.util.helpers.ContainerAccess;
 import com.player2.playerengine.util.helpers.ItemHelper;
 import com.player2.playerengine.util.helpers.WorldHelper;
@@ -90,6 +91,12 @@ public class DepositInContainersTask extends VisitContainersTask {
             return this.placeTask;
          }
          this.placedContainer = true;
+         BlockPos placed = this.placeTask.getPlaced();
+         // A container the companion placed for its owner is the owner's to use. Not when it joined
+         // onto a chest already there, though: the double chest it formed is half somebody else's.
+         if (placed != null && !ContainerAccess.isDouble(this.controller.getWorld(), placed)) {
+            ChestPermissions.allow(this.controller.getWorld(), this.controller.getOwnerUuid(), placed);
+         }
          this.replan();
          return null;
       }
@@ -120,11 +127,11 @@ public class DepositInContainersTask extends VisitContainersTask {
          }
       }
       if (shortOf.isEmpty()) {
-         return new WithdrawFromContainersTask.Outcome(true, (done.isEmpty() ? "Nothing needed depositing." : done) + this.unreachableNote());
+         return new WithdrawFromContainersTask.Outcome(true, (done.isEmpty() ? "Nothing needed depositing." : done) + this.notes());
       }
       return new WithdrawFromContainersTask.Outcome(false, (done.isEmpty() ? "" : done + " ") + "Could not store "
          + String.join(", ", shortOf) + ": every container within " + ContainerAccess.SEARCH_RADIUS
-         + " blocks is full or out of reach." + this.unreachableNote() + " Place another chest, or `give` the items to the owner.");
+         + " blocks is full or out of reach." + this.notes() + " Place another chest, or `give` the items to the owner.");
    }
 
    private static String label(ItemTarget target) {

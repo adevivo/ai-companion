@@ -52,6 +52,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import com.player2.playerengine.util.Debug;
 import com.player2.playerengine.util.Playground;
+import com.player2.playerengine.util.helpers.ChestPermissions;
 import dev.architectury.event.events.common.LifecycleEvent;
 import dev.architectury.event.events.common.TickEvent;
 import net.minecraft.server.MinecraftServer;
@@ -173,6 +174,7 @@ public class PlayerEngineController {
 
    static {
       TickEvent.SERVER_POST.register(PlayerEngineController::staticServerTick);
+      ChestPermissions.registerEvents();
       // Everything the tick hook above touches is static and would otherwise survive into the next
       // world loaded in this game process — see ConversationManager.onServerStopping() and
       // BaritoneComponents.clearAll().

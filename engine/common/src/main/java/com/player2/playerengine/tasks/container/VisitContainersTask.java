@@ -2,6 +2,7 @@ package com.player2.playerengine.tasks.container;
 
 import com.player2.playerengine.tasks.base.Task;
 import com.player2.playerengine.tasks.movement.GetToBlockTask;
+import com.player2.playerengine.util.helpers.ChestPermissions;
 import com.player2.playerengine.util.helpers.ContainerAccess;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +41,8 @@ public abstract class VisitContainersTask extends Task {
    private boolean done;
    private BlockPos lidOpen;
    protected final List<BlockPos> unreachable = new ArrayList<>();
+   /** Containers in range that the owner has not allowed, so were left alone. */
+   protected int notAllowed;
 
    /** Choose and order which containers to visit, from all of them within range, nearest first. */
    protected abstract List<BlockPos> plan(List<BlockPos> nearestFirst);
@@ -61,7 +64,19 @@ public abstract class VisitContainersTask extends Task {
 
    /** Look for containers again, for after one has been placed. */
    protected void replan() {
-      this.queue = this.plan(ContainerAccess.findNearby(this.controller, ContainerAccess.SEARCH_RADIUS));
+      // Only the owner's allowed containers: Minecraft does not record who placed a chest, so without
+      // this every chest in range was fair game, another team's included. See ChestPermissions.
+      List<BlockPos> allowed = new ArrayList<>();
+      this.notAllowed = 0;
+      Level level = this.controller.getWorld();
+      for (BlockPos pos : ContainerAccess.findNearby(this.controller, ContainerAccess.SEARCH_RADIUS)) {
+         if (ChestPermissions.isAllowed(level, this.controller.getOwnerUuid(), pos)) {
+            allowed.add(pos);
+         } else {
+            this.notAllowed++;
+         }
+      }
+      this.queue = this.plan(allowed);
       this.index = 0;
       this.headingSince = System.currentTimeMillis();
    }
@@ -161,6 +176,18 @@ public abstract class VisitContainersTask extends Task {
          level.blockEvent(pos, state.getBlock(), 1, ChestBlockEntity.getOpenCount(level, pos));
          level.playSound(null, pos, SoundEvents.CHEST_CLOSE, SoundSource.BLOCKS, 0.5F, 1.0F);
       }
+   }
+
+   /** Everything the agent should know about containers it skipped: unreachable, and not allowed. */
+   protected String notes() {
+      String note = this.unreachableNote();
+      if (this.notAllowed > 0) {
+         note += " " + this.notAllowed + " other container(s) within " + ContainerAccess.SEARCH_RADIUS
+            + " blocks are not ones your owner has let you use, so you did not touch them. Never take from"
+            + " them on your own: ask your owner. They can open the container once themselves, or stand at"
+            + " it and tell you to use it, and then you run `usechest`.";
+      }
+      return note;
    }
 
    /** "(x, y, z)" list of containers that could not be reached, or empty. */

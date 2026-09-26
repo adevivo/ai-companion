@@ -28,6 +28,7 @@ import com.player2.playerengine.commands.ResetMemoryCommand;
 import com.player2.playerengine.commands.SetAIBridgeEnabledCommand;
 import com.player2.playerengine.commands.StandGroundCommand;
 import com.player2.playerengine.commands.StopCommand;
+import com.player2.playerengine.commands.UseChestCommand;
 import com.player2.playerengine.commands.WithdrawCommand;
 import com.player2.playerengine.commands.random.ScanCommand;
 import com.player2.playerengine.commands.base.CommandException;
@@ -43,6 +44,8 @@ public class PlayerEngineCommands {
                   new DepositCommand(),
                   new ChestsCommand(),
                   new WithdrawCommand(),
+                  UseChestCommand.use(),
+                  UseChestCommand.forget(),
                   new GotoCommand(),
                   new DigCommand(),
                   new IdleCommand(),

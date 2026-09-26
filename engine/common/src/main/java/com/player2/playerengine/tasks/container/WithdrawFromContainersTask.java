@@ -92,22 +92,22 @@ public class WithdrawFromContainersTask extends VisitContainersTask {
       String got = this.takenFrom.isEmpty() ? "" : "Took " + String.join(", ", this.takenFrom) + ".";
       if (this.inventoryFull) {
          return new Outcome(false, got + " Stopped because the inventory is FULL after taking " + this.taken + " " + name
-            + ". Use `deposit` to make room first." + this.unreachableNote());
+            + ". Use `deposit` to make room first." + this.notes());
       }
       if (this.wanted == ALL) {
          return this.taken > 0
-            ? new Outcome(true, got + " That was all the " + name + " in the " + this.searched + " container(s) within reach." + this.unreachableNote())
+            ? new Outcome(true, got + " That was all the " + name + " in the " + this.searched + " container(s) within reach." + this.notes())
             : new Outcome(false, "There is no " + name + " in the " + this.searched + " container(s) within "
-               + ContainerAccess.SEARCH_RADIUS + " blocks." + this.unreachableNote());
+               + ContainerAccess.SEARCH_RADIUS + " blocks." + this.notes());
       }
       if (this.taken >= this.wanted) {
-         return new Outcome(true, got + this.unreachableNote());
+         return new Outcome(true, got + this.notes());
       }
-      if (this.searched == 0 && this.unreachable.isEmpty()) {
+      if (this.searched == 0 && this.unreachable.isEmpty() && this.notAllowed == 0) {
          return new Outcome(false, "There are no chests, barrels or shulker boxes within " + ContainerAccess.SEARCH_RADIUS + " blocks to take " + name + " from.");
       }
       return new Outcome(false, (got.isEmpty() ? "" : got + " ") + "Found only " + this.taken + " of the " + this.wanted + " " + name
-         + " asked for in the " + this.searched + " container(s) within " + ContainerAccess.SEARCH_RADIUS + " blocks." + this.unreachableNote()
+         + " asked for in the " + this.searched + " container(s) within " + ContainerAccess.SEARCH_RADIUS + " blocks." + this.notes()
          + " Use `get` to gather the rest, or ask the owner.");
    }
 
