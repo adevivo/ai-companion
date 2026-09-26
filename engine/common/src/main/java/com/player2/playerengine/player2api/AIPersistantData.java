@@ -120,6 +120,17 @@ public class AIPersistantData {
     }
 
     /**
+     * Swap in an edited identity (persona, description, voice) for a live companion. Follow with
+     * {@link #updateSystemPrompt()}. The name is expected to be unchanged: the history file is
+     * named after it.
+     */
+    public void setCharacter(Character character){
+        if (character != null) {
+            this.character = character;
+        }
+    }
+
+    /**
      * Write this companion's conversation history to disk now.
      *
      * <p>Called at server shutdown. Quitting a singleplayer world stops its server, so this is the
