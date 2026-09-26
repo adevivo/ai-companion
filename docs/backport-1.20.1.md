@@ -144,7 +144,7 @@ Check the 1.20.1 screen's labels before copying the table. It was generated from
 `engine/src/autoclef/java/adris/altoclef/tasks/movement/TimeoutWanderTask.java` has the same
 `isFinished()` that returns false for an infinite distance before checking `failCounter`.
 
-**Commit:** *Give up on a command whose wander has stood still for a minute* (this entry's commit).
+**Commit:** `4f364e6` — *Give up on a command whose wander has stood still for a minute*.
 
 **Symptom:** `[Alto Clef] Failed exploring.` in the server log every ~6 s with no end. The companion
 stands still, and the model is never told. Observed 2026-09-25: `get wool 3` in a snow biome with no
@@ -169,7 +169,7 @@ Verify in game: in a biome without sheep, `get wool 3` should give up after abou
 `StoreInContainerTask.java:159` grows the container's real stack during a simulated insert, and
 `PickupFromContainerTask.java:56` inserts a one-item probe that is never taken back.
 
-**Commit:** *Let companions list, take from and put into chests* (this entry's commit).
+**Commit:** `dcaef42` — *Let companions list, take from and put into chests*.
 
 **What changed:**
 - `ContainerAccess` (new, `util/helpers/`): finds storage containers in loaded chunks within 16 blocks,
@@ -199,7 +199,7 @@ Rename `PlayerEngineController` → `AltoClefController`.
 bounds with `(int)`, and the same `(int)` casts are at `:59` and `:63`. `BuildStructureTask` relies on
 `getBlocksTouchingPlayer` for its "never brick ourselves in" check.
 
-**Commit:** *Floor block coordinates so the build's body check looks where the body is* (this entry's commit).
+**Commit:** `44f2546` — *Floor block coordinates so the build's body check looks where the body is*.
 
 **Symptom:** observed 2026-09-25 at x≈-3, z≈-131. The build logged `no standing position reaches
 -3, 77, -131; placing it from here` 465 times in about 25 s. Health then fell about 2 HP/s, and the
@@ -222,7 +222,7 @@ per cell. Test: `WorldHelperBlocksTouchingTest`.
 **Status:** not ported. **Not yet checked on 1.20.1.** Powder snow exists there, so check its
 `MovementHelper.canWalkThrough` / `fullyPassable` and its `UnstuckChain.checkStuckInPowderSnow`.
 
-**Commit:** *Treat powder snow as an obstacle, and break out of it from any cell the body is in* (this entry's commit).
+**Commit:** `6204c3f` — *Treat powder snow as an obstacle, and break out of it from any cell the body is in*.
 
 **Cause:** `PowderSnowBlock.isPathfindable()` returns true, so the pathfinder treated drifts as air
 and routed through them. The body sank in, slowed and froze, and stood still logging
@@ -241,7 +241,7 @@ and routed through them. The body sank in, slowed and froze, and stood still log
 a server that keeps its own key in `aicompanion.json` never notices. A server run without a key, as
 the client-brain design intends, gets a 401 on every new build.
 
-**Commit:** *Send the build planner's model call to the owner's client* (this entry's commit).
+**Commit:** `dbebe35` — *Send the build planner's model call to the owner's client*.
 
 **Symptom (1.21.11, 2026-09-25):** `LLM Transport Error=HTTP 401 … Missing Authentication header` ×3,
 then `Could not build (…): the build plan failed to generate 3 times`. The companion told the owner
