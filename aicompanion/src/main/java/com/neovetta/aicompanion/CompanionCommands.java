@@ -693,10 +693,14 @@ public final class CompanionCommands {
 
     /**
      * Re-read {@code config/aicompanion.json} and apply it without a restart. LLM/TTS/behavior
-     * settings are volatile statics read at call time, so they take effect on the next request; the
-     * persona is re-applied to every live companion's brain via
-     * {@code AIPersistantData.updateSystemPrompt()}. Only name/description/skin stay baked into the
-     * entity — those need a despawn/spawn cycle, which the feedback says explicitly.
+     * settings are volatile statics read at call time, so they take effect on the next request.
+     *
+     * <p>⚠️ A roster edit does NOT reach a live companion. Every live companion's system prompt is
+     * rebuilt, but from the identity saved on the entity, which {@code CompanionConfig.entryFor}
+     * prefers on purpose (the file is the operator's and must not rewrite other players' companions).
+     * So persona, name, description and skin all keep what the companion was spawned with until it is
+     * despawned and spawned again. This message used to say "persona re-applied", which sent owners
+     * looking for why their edit had not taken.
      */
     private static int reload(CommandSourceStack source) {
         // The caller's own machine first, and without asking anyone's permission: these are the
@@ -731,10 +735,11 @@ public final class CompanionCommands {
         final int count = CompanionConfig.reloadAndApply(source.getServer());
         final int skillCount = CompanionSkills.all().size();
         source.sendSuccess(() -> Component.literal(String.format(
-                "Config reloaded. LLM/TTS/behavior settings apply from the next reply; persona re-applied to %d live companion(s); %d skill(s) loaded.",
+                "Config reloaded. LLM/TTS/behavior settings apply from the next reply; %d live companion(s) refreshed; %d skill(s) loaded.",
                 count, skillCount)), false);
         source.sendSuccess(() -> Component.literal(
-                "Note: name/description/skin changes need /companion despawn + /companion spawn."), false);
+                "Note: a companion keeps the persona, name, description and skin it was spawned with."
+                        + " To apply a roster edit to those, use /companion despawn then /companion spawn."), false);
         // Whatever reloadAndApply just found out about memory, said here rather than saved for the
         // next conversation turn. Someone who ran this command has usually just changed a memory or
         // embeddings setting, and this is the moment they are waiting to hear whether it took.
