@@ -27,8 +27,10 @@ Committed on `mc/1.21.11` (not pushed; the user pushes):
 | `d011086` | `tts.maxSpokenChars`, 0 = read everything (default); on the TTS tab |
 | `8a63dc2` | Doors open (empty-hand use) instead of being broken, and close behind her; no placement crash with torches; error chat once a minute |
 | `b070b3a` | Engine `1.21.11-1.0.36`, mod repinned |
+| `c095043` | `[gather ok]` counts only within 10 min of her asking; a finished build tells the model the block count and not to list features it has not seen |
+| `94245f7` | Engine `1.21.11-1.0.37`, mod repinned (deployed) |
 
-**Deployed on both machines:** engine 1.0.36 (2026-09-26, 08:47). The user deploys.
+**Deployed on both machines:** engine 1.0.37 (2026-09-26). The user deploys.
 
 **Verified in play 2026-09-26 (engine 1.0.29):** 120 s turn and 180 s plan timeouts load and a 110 s
 plan was accepted; `chests` sees only the allowed chest and `withdraw` takes from it, reporting the
@@ -72,6 +74,12 @@ closes it once she is 2.5 blocks clear (it stays open while she stands beside it
 - **`ConversationHistory.summarizeHistory` calls a model on the SERVER THREAD** (seen as 401s on the
   keyless server, 2026-09-26). On a server with a key it blocks the tick loop for the whole request.
   Move it off-thread or route it to the client.
+- **Stopping a build does not cancel its plan request.** The client keeps generating a plan nobody
+  will use (seen 2026-09-26: a stopped castle's plan timed out 3 minutes later). Send a cancel to the
+  client when `BuildStructureTask` stops mid-request, and have `ClientBrain` abort that HTTP call.
+- **The turn model sets build tags on its own.** It added `[gather ok]` unasked (now ignored unless
+  it asked within 10 min, `c095043`) and later `[use inventory]` for a request that never mentioned
+  the inventory, apparently carried over from earlier turns. Watch whether it keeps doing it.
 - **Door logging:** `OpenedDoors` logs nothing, so "did she open/close it" can only be seen in game.
   One INFO line per open/close/give-up would make it checkable from the log.
 - **Free-model latency:** turns have hit 124 s against the 120 s turn wait, and a plan once ran past
