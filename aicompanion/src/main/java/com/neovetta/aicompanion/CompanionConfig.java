@@ -210,6 +210,7 @@ public final class CompanionConfig {
                 // values into 'server', and the merge would otherwise fill that block with defaults.
                 migrateServerBlock(root, changes);
             }
+            migratePromptBudget(root, changes);
             String defaults = isDedicated() ? defaultServerJson() : DEFAULT_JSON;
             List<String> added = new ArrayList<>();
             addMissingRecursive(JsonParser.parseString(defaults).getAsJsonObject(), root, "", added);
@@ -774,6 +775,42 @@ public final class CompanionConfig {
      * <p>The rewrite goes through {@link #rewrite}, so the original file survives as
      * {@code aicompanion.json.bak}.
      */
+    /** The default before 2026-09-26, which the fixed part of the prompt has since outgrown. */
+    private static final int OLD_DEFAULT_PROMPT_CHARS = 20000;
+
+    /**
+     * Raise {@code llm.maxPromptChars} from the old default to the new one.
+     *
+     * <p>The system prompt grew to about 18k characters, so 20000 left room for the newest turn and
+     * nothing else: every earlier turn was dropped, and a companion asked to "plan the same build
+     * again" a minute later asked which build. Only the exact old default is moved, since any other
+     * value was chosen on purpose, perhaps for a small model's context.
+     */
+    private static void migratePromptBudget(JsonObject root, List<String> changes) {
+        JsonObject llm = obj(root, "llm");
+        JsonObject brain = obj(root, "brain");
+        if (llm == null && brain != null) {
+            JsonObject whenServer = obj(brain, "whenServer");
+            llm = whenServer == null ? null : obj(whenServer, "llm");
+        }
+        if (llm == null || !llm.has("maxPromptChars") || !llm.get("maxPromptChars").isJsonPrimitive()) {
+            return;
+        }
+        int current;
+        try {
+            current = llm.get("maxPromptChars").getAsInt();
+        } catch (RuntimeException e) {
+            return;
+        }
+        if (current == OLD_DEFAULT_PROMPT_CHARS) {
+            int raised = JsonParser.parseString(DEFAULT_JSON).getAsJsonObject()
+                    .getAsJsonObject("llm").get("maxPromptChars").getAsInt();
+            llm.addProperty("maxPromptChars", raised);
+            changes.add("raised llm.maxPromptChars from the old default " + OLD_DEFAULT_PROMPT_CHARS + " to " + raised
+                    + ", because the fixed part of the prompt no longer fits under it and every earlier turn was dropped");
+        }
+    }
+
     private static void migrateLegacyCompanion(JsonObject root, List<String> changes) {
         if (!root.has("companion")) {
             return;
@@ -1242,7 +1279,7 @@ public final class CompanionConfig {
                 "apiKey": "",
                 "maxRequests": 0,
                 "maxConcurrentRequests": 2,
-                "maxPromptChars": 20000,
+                "maxPromptChars": 32000,
                 "usageReportEveryTokens": 100000,
                 "clientBrain": true,
                 "clientBrainTimeoutMs": 45000,
@@ -1250,7 +1287,7 @@ public final class CompanionConfig {
                 "_clientBrain": "WHICH MACHINE THINKS, and on a dedicated server this is the most consequential setting in the file. On (default) the server hands each turn to the owner's own client, which runs THEIR model with THEIR api key against THEIR memory corpus — so a player's companion remembers what they taught it in singleplayer, and nobody spends the operator's tokens. Off, and this server thinks for everyone from the 'llm' block above and one shared corpus in its own config folder, which is why memory.enabled and embeddings.enabled matter here only when this is off. THE SYMPTOM OF GETTING THIS WRONG IS NOT AN ERROR: a companion thinking on the wrong machine still answers, in character, immediately — it has simply never heard of you. Check the boot line: brain=client-when-able is on, brain=server is off. IGNORED WITHOUT localMode, and ignored per-player for anyone whose client does not answer the capability handshake. ON A DEDICATED SERVER THIS KEY IS NOT HERE: that installation reads aicompanion-server.json instead, where the same decision is brain.mode. This copy governs singleplayer, where it changes nothing observable — client and server are one process reading one corpus — so it is left visible mainly so the concept is not a surprise the first time you run a server.",
                 "_clientBrainTimeoutMs": "How long the server waits for a client to think before giving up on that turn, in milliseconds. Not a latency budget — nothing is blocked while it runs — but a liveness check on a client that said it could think and then went quiet. Generous on purpose: a frontier model on a slow link can legitimately take many seconds, and cutting it off to run the turn again would spend twice and answer once. What happens after the timeout is server.serverAnswersWhenClientFails.",
                 "_clientPlanTimeoutMs": "How long the server waits for a client to write a BUILD PLAN, in milliseconds. Separate from the turn timeout because a plan is a whole program, not a short reply: a free model has taken 46-57 s for one plan, which the 45 s turn budget cut off every time although the client finished. A plan that runs out of time is not asked for again, since the client is most likely still working on it and a second request would pay twice for one answer.",
-                "_maxPromptChars": "Hard character budget for the prompt; the oldest turns are dropped to fit (0 = no limit). Message count alone does not bound the prompt because every turn carries a world/agent status blob, so the same 64 messages can be 13k or 25k characters. Once the prompt outgrows what your model can attend to, the JSON contract at the FRONT is what gets lost: the companion still reasons correctly off recent turns and picks the right command, but writes it as prose instead of JSON, so nothing runs. Lower this if the companion talks sensibly and then stands still; raise it if your model has a large context. There is a FLOOR: the system prompt (~15k) and the newest turn with its status blob (~1.7k) can never be dropped, so a budget below ~17k throws away all conversation history on every turn and is still over — the companion then remembers nothing you said two messages ago. 20000 is the default for that reason. Watch the log for 'dropped ALL ... droppable turn(s)', which is what being under the floor looks like.",
+                "_maxPromptChars": "Hard character budget for the prompt; the oldest turns are dropped to fit (0 = no limit). Message count alone does not bound the prompt because every turn carries a world/agent status blob, so the same 64 messages can be 13k or 25k characters. Once the prompt outgrows what your model can attend to, the JSON contract at the FRONT is what gets lost: the companion still reasons correctly off recent turns and picks the right command, but writes it as prose instead of JSON, so nothing runs. Lower this if the companion talks sensibly and then stands still; raise it if your model has a large context. There is a FLOOR: the system prompt (~18k) and the newest turn with its status blob (~2-3k) can never be dropped, so a budget below ~21k throws away all conversation history on every turn and is still over — the companion then remembers nothing you said a message ago. 32000 is the default for that reason, leaving about 11k for conversation. Watch the log for 'dropped ALL ... droppable turn(s)', which is what being under the floor looks like. Also in the config screen's LLM tab as 'Max Prompt Chars'.",
                 "_useGrammar": "JSON mode: sends response_format json_object so the endpoint forces every reply into JSON. On (default) stops a chatty model answering in bare prose, which runs no command — the companion describes work it never starts. Honoured by OpenRouter, xAI, OpenAI and llama.cpp; LM Studio refuses that form, so it is detected on the first request and sent json_schema instead, with JSON mode still on. Turn it OFF only if your server refuses both (the chat error says so), and choose a model that follows instructions well — with it off, some replies come back as prose and run nothing. Also in the config screen's LLM tab as 'JSON Mode'.",
                 "_maxConcurrentRequests": "How many LLM requests may be in flight at once across ALL companions. At 1 the roster is single-file: while one companion is thinking, the others cannot, which makes a second companion look broken while the first works a long task. 2 suits a local llama.cpp, which serves one request at a time anyway. Raise it for a hosted endpoint that parallelises, or when several companions are out and expected to work independently — it is also the concurrency half of the spend guardrail, since every extra slot is another request that can be burning tokens at the same instant. Clamped to 1-16.",
                 "_usage": "usageReportEveryTokens: print a running token-usage total to chat and the log every N tokens (0 = never). Purely informational — it never blocks a reply. maxRequests is the opposite: a hard per-session request cap that makes the companion stop responding once hit (0 = unlimited, the default). Leave maxRequests at 0 unless you are on a paid endpoint and want a hard stop.",

@@ -527,6 +527,31 @@ public final class CompanionConfigScreen {
                         Component.literal("why the default is 2000, not the 1000 floor."))
                 .setSaveConsumer(v -> llm.addProperty("maxTokens", v))
                 .build());
+        cat.addEntry(eb.startIntField(Component.literal("Max Prompt Chars"), intVal(llm, "maxPromptChars", 32000))
+                .setDefaultValue(32000)
+                .setMin(0)
+                .setTooltip(
+                        Component.literal("How long the prompt may get, in characters. The"),
+                        Component.literal("oldest conversation is dropped to fit. The fixed part"),
+                        Component.literal("(instructions plus the latest turn) is about 21000 on"),
+                        Component.literal("its own, so below that the companion forgets"),
+                        Component.literal("everything said before the current message."),
+                        Component.literal("Raise it for a model with a large context. Lower it"),
+                        Component.literal("if replies start coming back as prose that runs no"),
+                        Component.literal("command. 0 = no limit."),
+                        Component.literal("(llm.maxPromptChars in the config file.)"))
+                .setSaveConsumer(v -> llm.addProperty("maxPromptChars", v))
+                .build());
+        cat.addEntry(eb.startIntField(Component.literal("Request Timeout (ms)"), intVal(llm, "timeoutMs", 90000))
+                .setDefaultValue(90000)
+                .setMin(1000)
+                .setTooltip(
+                        Component.literal("How long one request to your endpoint may take"),
+                        Component.literal("before it is abandoned. Slow free models and big"),
+                        Component.literal("local ones can need more."),
+                        Component.literal("(llm.timeoutMs in the config file.)"))
+                .setSaveConsumer(v -> llm.addProperty("timeoutMs", v))
+                .build());
         cat.addEntry(eb.startBooleanToggle(Component.literal("JSON Mode"), bool(llm, "useGrammar", true))
                 .setDefaultValue(true)
                 .setTooltip(
@@ -585,6 +610,31 @@ public final class CompanionConfigScreen {
                         Component.literal("Print a running token-usage total to chat"),
                         Component.literal("every N tokens. Purely informational. 0 = never."))
                 .setSaveConsumer(v -> llm.addProperty("usageReportEveryTokens", v))
+                .build());
+        cat.addEntry(eb.startIntField(Component.literal("Turn Wait When Hosting (ms)"),
+                        intVal(llm, "clientBrainTimeoutMs", 45000))
+                .setDefaultValue(45000)
+                .setMin(1000)
+                .setTooltip(
+                        Component.literal("When YOUR game is the host (singleplayer or LAN):"),
+                        Component.literal("how long to wait for a player's game to think one"),
+                        Component.literal("turn. A dedicated server sets its own, in"),
+                        Component.literal("aicompanion-server.json (brain.clientTimeoutMs)."),
+                        Component.literal("(llm.clientBrainTimeoutMs in the config file.)"))
+                .setSaveConsumer(v -> llm.addProperty("clientBrainTimeoutMs", v))
+                .build());
+        cat.addEntry(eb.startIntField(Component.literal("Plan Wait When Hosting (ms)"),
+                        intVal(llm, "clientPlanTimeoutMs", 180000))
+                .setDefaultValue(180000)
+                .setMin(1000)
+                .setTooltip(
+                        Component.literal("When YOUR game is the host: how long to wait for a"),
+                        Component.literal("build plan. A plan is a whole program, so it takes"),
+                        Component.literal("far longer than a turn; free models have needed"),
+                        Component.literal("up to 3 minutes. A dedicated server sets its own"),
+                        Component.literal("(brain.planTimeoutMs)."),
+                        Component.literal("(llm.clientPlanTimeoutMs in the config file.)"))
+                .setSaveConsumer(v -> llm.addProperty("clientPlanTimeoutMs", v))
                 .build());
     }
 
