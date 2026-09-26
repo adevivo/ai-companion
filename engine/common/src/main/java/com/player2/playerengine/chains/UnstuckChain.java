@@ -2,6 +2,7 @@ package com.player2.playerengine.chains;
 
 import com.player2.playerengine.PlayerEngineController;
 import com.player2.playerengine.util.Debug;
+import com.player2.playerengine.util.helpers.WorldHelper;
 import com.player2.playerengine.tasks.construction.DestroyBlockTask;
 import com.player2.playerengine.tasks.movement.GetOutOfWaterTask;
 import com.player2.playerengine.tasks.movement.GetToBlockTask;
@@ -22,6 +23,8 @@ public class UnstuckChain extends SingleTaskChain {
    private final LinkedList<Vec3> posHistory = new LinkedList<>();
    private final TimerGame shimmyTimer = new TimerGame(5.0);
    private final TimerGame placeBlockGoToBlockTimeout = new TimerGame(5.0);
+   /** Tell the agent about powder snow at most this often; it re-fires every tick while stuck. */
+   private final TimerGame powderSnowNoticeTimer = new TimerGame(30.0);
    private boolean isProbablyStuck = false;
    private int eatingTicks = 0;
    private boolean interruptedEating = false;
@@ -94,23 +97,41 @@ public class UnstuckChain extends SingleTaskChain {
       }
    }
 
+   /**
+    * Break out of powder snow — the highest drift the body is in first, so the head clears before the
+    * feet — and shimmy when none is left but the body is still caught.
+    *
+    * <p>Checks every block the body touches rather than the one column under its centre: a companion
+    * half in the next column over was invisible to that. {@code isInPowderSnow} alone is not enough
+    * either — vanilla clears it at the start of each entity tick and sets it again during movement, so
+    * what it reads depends on when this chain ticks. The blocks do not.
+    */
    private void checkStuckInPowderSnow() {
       LivingEntity player = this.controller.getEntity();
-      if (player.isInPowderSnow) {
-         this.isProbablyStuck = true;
-         BlockPos playerPos = player.blockPosition();
-         BlockPos toBreak = null;
-         if (player.level().getBlockState(playerPos).is(Blocks.POWDER_SNOW)) {
-            toBreak = playerPos;
-         } else if (player.level().getBlockState(playerPos.above()).is(Blocks.POWDER_SNOW)) {
-            toBreak = playerPos.above();
+      BlockPos toBreak = null;
+      for (BlockPos pos : WorldHelper.getBlocksTouchingPlayer(player)) {
+         if (player.level().getBlockState(pos).is(Blocks.POWDER_SNOW) && (toBreak == null || pos.getY() > toBreak.getY())) {
+            toBreak = pos.immutable();
          }
+      }
 
-         if (toBreak != null) {
-            this.setTask(new DestroyBlockTask(toBreak));
-         } else {
-            this.setTask(new SafeRandomShimmyTask());
-         }
+      if (toBreak == null && !player.isInPowderSnow) {
+         return;
+      }
+
+      this.isProbablyStuck = true;
+      if (this.powderSnowNoticeTimer.elapsed()) {
+         this.powderSnowNoticeTimer.reset();
+         this.controller.logAgentInfo(
+            "Stuck in powder snow" + (player.getTicksFrozen() > 0 ? " and freezing" : "") + " — breaking out of it now. "
+               + "Powder snow swallows anything walking on it; leather boots let you walk on top instead, so `equip leather_boots` if you have them."
+         );
+      }
+
+      if (toBreak != null) {
+         this.setTask(new DestroyBlockTask(toBreak));
+      } else {
+         this.setTask(new SafeRandomShimmyTask());
       }
    }
 

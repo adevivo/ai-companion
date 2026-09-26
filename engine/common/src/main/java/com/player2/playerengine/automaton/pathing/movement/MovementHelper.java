@@ -126,7 +126,12 @@ public interface MovementHelper extends ActionCosts {
          && block != Blocks.GLOW_LICHEN
          && block != Blocks.CAVE_VINES
          && block != Blocks.CAVE_VINES_PLANT
-         && block != Blocks.END_ROD) {
+         && block != Blocks.END_ROD
+         // ⚠️ PowderSnowBlock.isPathfindable() is true, so without this the pathfinder routes straight
+         // through drifts as if they were air — and the body sinks in, slows to a crawl and freezes.
+         // Measured 2026-09-25 in a snowy-slopes biome: minutes of "Failed exploring." standing still.
+         // As an obstacle it is walked around, or broken on purpose like any other block in the way.
+         && block != Blocks.POWDER_SNOW) {
          if (settings.blocksToAvoid.get().contains(state.getBlock())) {
             return false;
          } else if (block instanceof DoorBlock || block instanceof FenceGateBlock) {
@@ -179,6 +184,7 @@ public interface MovementHelper extends ActionCosts {
                && !(block instanceof DoorBlock)
                && !(block instanceof FenceGateBlock)
                && !(block instanceof SnowLayerBlock)
+               && block != Blocks.POWDER_SNOW // see canWalkThrough
                && state.getFluidState().isEmpty()
                && !(block instanceof TrapDoorBlock)
                && !(block instanceof EndPortalBlock)
