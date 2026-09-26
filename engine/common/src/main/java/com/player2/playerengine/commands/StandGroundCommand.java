@@ -50,7 +50,7 @@ public class StandGroundCommand extends Command {
       seconds = Math.min(seconds, MAX_SECONDS);
 
       mod.getMobDefenseChain().standGroundFor(mod, seconds);
-      mod.log("Standing ground for " + seconds + "s — will not retreat until that runs out.");
+      mod.reportCommandResult("Standing ground for " + seconds + "s — will not retreat until that runs out.");
       this.finish();
    }
 }

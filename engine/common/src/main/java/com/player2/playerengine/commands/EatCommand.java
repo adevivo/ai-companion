@@ -93,7 +93,7 @@ public class EatCommand extends Command {
         String outcome = hunger.getFoodLevel() >= 20
                 ? " — full now."
                 : " — still hungry, but that is everything edible I am carrying.";
-        mod.log("Ate " + amount + " (food " + hunger.getFoodLevel() + "/20)" + outcome);
+        mod.reportCommandResult("Ate " + amount + " (food " + hunger.getFoodLevel() + "/20)" + outcome);
         this.finish();
     }
 

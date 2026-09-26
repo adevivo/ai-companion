@@ -51,25 +51,29 @@ public class ScanCommand extends Command {
       if (block.isEmpty()) {
          // Naming a mob is the failure the models actually make, and the generic "did you mean" reply
          // sent them round the same loop again. Say what went wrong and where the answer already is.
+         // Failures go to the agent, not stdout: mod.log() never reached the model, so `scan` answered
+         // nothing at all, found or not. Kept out of chat (null), as the owner did not ask.
          if (isEntityName(blockStr)) {
-            mod.log(
+            mod.logAgentNotice(
                "\""
                   + blockStr
                   + "\" is a mob, not a block — scan only finds blocks. Nearby mobs are already listed in your world"
                   + " status, so you do not need a command to find them. Use `attack "
                   + blockStr.toLowerCase().trim()
-                  + " 1` to go after one."
+                  + " 1` to go after one.",
+               null
             );
          } else {
             List<String> allBlockNames = BuiltInRegistries.BLOCK.keySet().stream().map(Identifier::getPath).toList();
             String closest = FuzzySearchHelper.getClosestMatchMinecraftItems(blockStr, allBlockNames);
-            mod.log(
+            mod.logAgentNotice(
                "Block named: \""
                   + blockStr
                   + "\" not a valid block. Perhaps the user meant \""
                   + closest
                   + "\"?"
-                  + (blockStr.contains("log") ? " Can try 'log' as well" : "")
+                  + (blockStr.contains("log") ? " Can try 'log' as well" : ""),
+               null
             );
          }
 
@@ -78,9 +82,9 @@ public class ScanCommand extends Command {
          BlockScanner blockScanner = mod.getBlockScanner();
          Optional<BlockPos> p = blockScanner.getNearestBlock(block.get(), mod.getPlayer().position());
          if (p.isPresent()) {
-            mod.log("Closest " + blockStr + ": " + p.get().toString());
+            mod.reportCommandResult("Closest " + blockStr + ": (" + p.get().toShortString() + ").");
          } else {
-            mod.log("No blocks of type " + blockStr + " found nearby.");
+            mod.reportCommandResult("No blocks of type " + blockStr + " found nearby.");
          }
 
          this.finish();
