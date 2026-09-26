@@ -67,23 +67,31 @@ public class TTSManager {
     private static final ExecutorService ttsThread = Executors.newSingleThreadExecutor();
 
     /**
-     * Longest line read aloud. Chat still shows the whole message; only the voice is cut.
+     * Longest line read aloud, from {@code tts.maxSpokenChars}; 0 reads the whole message. Chat always
+     * shows the whole message; only the voice is cut.
      *
-     * <p>The companion does not think again until its clip has finished playing, so a long clip is a
-     * long silence afterwards. Measured 2026-09-25: a 250-char inventory list took 29 s to read, and
-     * the owner's next message waited all of it.
+     * <p>The trade-off: the companion does not start its next reply until its clip has finished, so
+     * a long clip delays the answer to the owner's next message (its current command keeps running).
+     * Measured 2026-09-25: a 250-char inventory list took 29 s to read. Cut to 160 by default that
+     * day, and made a setting defaulting to "say it all" on 2026-09-26, when the owner preferred
+     * hearing everything.
      */
-    static final int MAX_SPOKEN_CHARS = 160;
+    public static volatile int maxSpokenChars = 0;
+
+    static String spokenText(String message) {
+        return spokenText(message, maxSpokenChars);
+    }
 
     /**
-     * The part of a message worth saying aloud: whole sentences up to {@link #MAX_SPOKEN_CHARS}, or —
-     * when even the first sentence is longer, as a list is — that sentence cut at a word and trailed off.
+     * The part of a message worth saying aloud: whole sentences up to {@code limit}, or, when even the
+     * first sentence is longer (as a list is), that sentence cut at a word and trailed off.
      */
-    static String spokenText(String message) {
+    static String spokenText(String message, int limit) {
         String text = message == null ? "" : message.strip();
-        if (text.length() <= MAX_SPOKEN_CHARS) {
+        if (limit <= 0 || text.length() <= limit) {
             return text;
         }
+        final int MAX_SPOKEN_CHARS = limit;
         int end = -1;
         for (int i = 0; i < MAX_SPOKEN_CHARS; i++) {
             char c = text.charAt(i);

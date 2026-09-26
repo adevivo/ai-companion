@@ -1062,6 +1062,7 @@ public final class CompanionConfig {
             TtsConfig.model = str(tts, "model", TtsConfig.model);
             TtsConfig.voice = str(tts, "voice", TtsConfig.voice);
             TtsConfig.speed = dbl(tts, "speed", TtsConfig.speed);
+            TTSManager.maxSpokenChars = intVal(tts, "maxSpokenChars", TTSManager.maxSpokenChars);
         }
     }
 
@@ -1333,6 +1334,8 @@ public final class CompanionConfig {
                 "model": "kokoro",
                 "voice": "af_heart",
                 "speed": 1.0,
+                "maxSpokenChars": 0,
+                "_maxSpokenChars": "Longest message read aloud, in characters; 0 (default) reads everything. Chat always shows the whole message. A long clip delays the companion's NEXT reply until it finishes (its current command keeps running), so set e.g. 160 to keep answers snappy: longer messages are then cut to whole sentences. On a dedicated server the server's value applies, as it does for voice and speed.",
                 "_help": "Local voice output via Kokoro. On by default and self-arming: start the stack — 'cd config/aicompanion/tts && docker compose up -d' — and companions start speaking, no config edit needed. Until then it costs nothing, because the client reports back that it has nowhere to play audio and the server stops asking it for a few minutes. The MINECRAFT CLIENT calls this endpoint (the server only sends it the text), so it must be reachable from the CLIENT machine, not the server, and 'endpoint' is therefore read from each PLAYER'S OWN file — a dedicated server's copy of it is ignored. With the default localhost that means each player runs their own container; point it at a LAN address (http://192.168.1.5:8880) to share one. Voices: curl http://localhost:8880/v1/audio/voices. 'voice' here is only the FALLBACK — set a voice per companion under 'companions' so they can be told apart by ear. Only the companion's spoken 'message' is voiced — never commands or reasoning."
               },
               "behavior": {

@@ -787,6 +787,19 @@ public final class CompanionConfigScreen {
                 .setTooltip(Component.literal("Playback speed multiplier (1.0 = normal)."))
                 .setSaveConsumer(v -> tts.addProperty("speed", v))
                 .build());
+        cat.addEntry(eb.startIntField(Component.literal("Max Spoken Chars"), intVal(tts, "maxSpokenChars", 0))
+                .setDefaultValue(0)
+                .setMin(0)
+                .setTooltip(
+                        Component.literal("Longest message read aloud. 0 = read everything."),
+                        Component.literal("Chat always shows the whole message. A long clip"),
+                        Component.literal("delays the companion's next reply until it ends (its"),
+                        Component.literal("current task keeps going). Try 160 for snappier"),
+                        Component.literal("answers: longer messages are cut to whole sentences."),
+                        Component.literal("On a dedicated server the server's value applies."),
+                        Component.literal("(tts.maxSpokenChars in the config file.)"))
+                .setSaveConsumer(v -> tts.addProperty("maxSpokenChars", v))
+                .build());
     }
 
     private static void buildBehavior(ConfigCategory cat, ConfigEntryBuilder eb, JsonObject config) {
