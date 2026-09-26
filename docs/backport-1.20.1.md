@@ -414,8 +414,10 @@ calls `ConversationManager.forget` the same way. Check whether its `forget` save
 which in single player is *before* the server stops, so `onServerStopping`'s save found an empty map
 ("saved history for 0 of 0"), and everything since the last periodic save (up to 7 messages) was lost on
 every logout. Found on a fresh install 2026-09-26: a four-message session wrote no history file at all.
-`forget` now flushes the history before dropping it, and logs "(history saved)". Death and
-`/companion despawn` go through the same path.
+`forget` now flushes the history before dropping it. Death and `/companion despawn` go through the
+same path. Follow-up `820053c` (1.0.40): the log says `history written` / `nothing unsaved` / `NOT saved`
+(the first version claimed "saved" when nothing was written), and every message counts as unsaved, not
+just replies.
 
 **Port:** trivial. The same few lines in the 1.20.1 `ConversationManager.forget`.
 
