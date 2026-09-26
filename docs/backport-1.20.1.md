@@ -377,6 +377,32 @@ engine code both lines share.
 
 ---
 
+## 18. The history summary blocks the thread that adds a message, and retries on every one 🔴
+
+**Status:** not ported. **Confirmed present** on `main` and `fix/perception-radius`:
+`engine/src/autoclef/java/adris/altoclef/player2api/ConversationHistory.java:103` calls
+`summarizeHistory` inline, `:107` removes one message on failure, and `:216` keeps the first 65 lines.
+
+**Commit:** `7d64565` — *Summarise old history off the calling thread, and try once per chunk*
+(engine 1.21.11-1.0.38).
+
+**What changed:**
+- Past 64 messages, `addAssistantMessage` called the model synchronously. On 1.21.11 the reply
+  path reaches it on the server thread for a client-brain turn, so every summary froze the tick loop.
+  On failure it removed **one** message, the history stayed over the limit, and every later message
+  made another blocking call. holly logged a 401 from it (no server key in client-brain mode).
+- The call now runs on one daemon executor (`aicompanion-history-summary`). The next `addHistory`
+  splices the result in, matched by message identity, so messages added meanwhile are kept. A failure
+  drops the chunk once. A summary that finishes after `clear()` is discarded.
+- `loadFromFile` keeps the system prompt and the **newest** 64 lines, not the first 65.
+- Tests: `ConversationHistorySummaryTest` (5).
+
+**Port:** plain Java, no Minecraft API. It should apply almost verbatim. On 1.20.1, where the local
+brain's reply callback runs on a completion thread rather than the server thread, the freeze is
+milder, but the retry-on-every-message loop is the same.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).
