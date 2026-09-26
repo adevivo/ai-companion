@@ -241,9 +241,9 @@ public class AgentConversationData {
             this.isGreetingResponse = false;
             boolean preempted = this.userMessagePreemptedTurn && replied != null && !replied.isBlank();
             if (preempted) {
-                // Keep the message so the companion still says something rather than going mute, but
-                // do not act: the user's message is already queued and drives the very next turn, which
-                // will decide what to actually do with full knowledge of what was asked.
+                // Do not act: the user's message is already queued and drives the very next turn, which
+                // will decide what to actually do with full knowledge of what was asked. It does not go
+                // mute either, since that next turn answers the user straight away.
                 LOGGER.info("Dropping command={} from a self-triggered turn — a user message arrived while it was"
                         + " in flight and takes precedence.", replied);
             }
@@ -252,7 +252,16 @@ public class AgentConversationData {
             LOGGER.info("[AICommandBridge/processCharWithAPI]: Processed LLM repsonse: message={} command={}",
                     llmMessage, command);
             try {
-                if (llmMessage != null || command != null) {
+                if (preempted) {
+                    // Neither said nor stored. The message announces the command that was just
+                    // dropped, so saying it is a false claim, and storing it made the next turn read
+                    // it as done. Observed 2026-09-26: "Building the house now!" with the build
+                    // dropped, then "House complete! Ready for the judges!" with nothing placed.
+                    mod.getAIPersistantData().addUserMessage("Info: your previous decision, `" + replied
+                            + "`, was NOT carried out, because a message arrived while you were deciding."
+                            + " Nothing was done. Decide again from the message below, and do not say it"
+                            + " was done.", mod.getPlayer2APIService());
+                } else if (llmMessage != null || command != null) {
                     // ⚠️ The condition is an OR, so a command with no message reaches here with
                     // llmMessage still null — which is an ordinary turn, a companion acting without
                     // speaking, and exactly what a build issues dozens of. Storing that null wrote a

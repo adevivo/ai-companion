@@ -81,6 +81,11 @@ public class AIPersistantData {
         return this.conversationHistory.getListJSON();
     }
 
+    /** A note for the model, in the transcript where the next turn will read it. */
+    public void addUserMessage(String text, Player2APIService player2apiService){
+        this.conversationHistory.addUserMessage(text, player2apiService);
+    }
+
     public void addAssistantMessage(String llmMessage, Player2APIService player2apiService){
         this.conversationHistory.addAssistantMessage(llmMessage, player2apiService);
     }
