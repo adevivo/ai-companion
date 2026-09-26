@@ -992,6 +992,8 @@ public final class CompanionCommands {
             return 0;
         }
         AgentConversationData data = ConversationManager.getOrCreateEventQueueData(ctrl);
+        // A skill is a direct instruction, so the owner's next few lines are for her too.
+        data.markDirectExchange();
         data.onEvent(new Event.UserMessage(
                 "Execute this skill now, step by step, using your available commands:\n\n" + sk.body(),
                 source.getTextName()));

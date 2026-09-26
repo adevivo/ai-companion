@@ -43,6 +43,8 @@ public class FoodChain extends SingleTaskChain {
 
    /** Throttle for {@link #logHungerState}, so a stuck companion reports once a second, not 20 times. */
    private long lastHungerLogMs;
+   /** The inputs the last "not eating" line reported; see {@link #logHungerState}. */
+   private String lastHungerLogKey;
 
    private static FoodChain.FoodChainConfig config;
    private static boolean hasFood;
@@ -111,23 +113,33 @@ public class FoodChain extends SingleTaskChain {
    }
 
    /**
-    * Say why a hungry companion is not eating, at most once a second.
+    * Say why a hungry companion is not eating, when the answer changes.
     *
     * <p>Three playtests could not tell "it did not want to eat" from "it wanted to and could not",
     * because the only observable was food not moving. Each input to that decision is cheap to print and
     * exactly one of them is always the answer.
+    *
+    * <p>Printed only when one of those inputs changes (health in whole hearts, since regeneration moves
+    * it by fractions every few seconds). It used to print once a second for as long as the companion was
+    * below full food or health, which is most of a session: the user called it "far too many food logs"
+    * on 2026-09-26. The same answer twice in a row says nothing new.
     */
    private void logHungerState(boolean threatened, boolean wantsToEat) {
       LivingEntity entity = this.controller.getEntity();
       int food = this.controller.getBaritone().getEntityContext().hungerManager().getFoodLevel();
       boolean hurt = entity != null && entity.getHealth() < entity.getMaxHealth();
       if (food >= 20 && !hurt) {
-         return; // nothing to explain: full and unhurt
-      }
-      long now = System.currentTimeMillis();
-      if (now - this.lastHungerLogMs < 1000L) {
+         this.lastHungerLogKey = null; // full and unhurt: nothing to explain, and the next dip is news
          return;
       }
+      String key = food + "|" + (entity == null ? -1 : (int) (entity.getHealth() / 2.0F)) + "|" + hasFood + "|"
+            + this.needsToEat() + "|" + wantsToEat + "|" + threatened + "|"
+            + this.cachedPerfectFood.map(Object::toString).orElse("none");
+      long now = System.currentTimeMillis();
+      if (key.equals(this.lastHungerLogKey) || now - this.lastHungerLogMs < 1000L) {
+         return;
+      }
+      this.lastHungerLogKey = key;
       this.lastHungerLogMs = now;
       LOGGER.info("FoodChain: not eating — food {}/20, health {}, hasFood={}, needsToEat={}, "
                   + "wantsToEat={}, threatened={}, bestFood={}",

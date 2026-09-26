@@ -339,12 +339,13 @@ public class ConversationManager {
             List<String> others = otherPlayersOnline(target, msg.userName());
             if (!others.isEmpty() && !hasTriggerPrefix(msg.speakerUuid())) {
                 boolean forAPlayer = ChatAddressing.mentionsAnyPlayer(msg.message(), others);
-                boolean inConversation = target.getLastSpokeNanos() != 0L
-                        && System.nanoTime() - target.getLastSpokeNanos() < CONVERSATION_WINDOW_NANOS;
+                boolean inConversation = target.getLastDirectNanos() != 0L
+                        && System.nanoTime() - target.getLastDirectNanos() < CONVERSATION_WINDOW_NANOS;
                 if (forAPlayer || !inConversation) {
                     LOGGER.info("ConversationManager: not passing \"{}\" from {} to {} — other players are online"
                                     + " and it {}", msg.message(), msg.userName(), target.getName(),
-                            forAPlayer ? "names one of them" : "neither names her nor answers her");
+                            forAPlayer ? "names one of them"
+                                    : "does not name her, and nothing passed between them in the last 30 s");
                     if (forAPlayer) {
                         return List.of();
                     }
@@ -355,6 +356,11 @@ public class ConversationManager {
             }
         }
         boolean delivered = target != null && targetDistance < messagePassingMaxDistance;
+        if (delivered) {
+            // Any line that reaches her restarts the window, a follow-up included, so a steady
+            // back-and-forth never needs her name (the user's rule, 2026-09-26).
+            target.markDirectExchange();
+        }
         if (delivered) {
             target.onEvent(addressed
                     ? new UserMessage(addressedBody, msg.userName(), false, msg.speakerUuid())
@@ -373,11 +379,16 @@ public class ConversationManager {
             return List.of();
         }
         // Silence here is otherwise indistinguishable from the model being down: the message is
-        // logged on arrival and then simply never acted on.
-        LOGGER.warn("ConversationManager: message from {} reached no companion "
-                        + "({} in queueData) — {}",
-                msg.userName(), queueData.size(),
-                diagnostics.length() == 0 ? "queueData is empty" : diagnostics.toString());
+        // logged on arrival and then simply never acted on. A WARN only when the speaker has a
+        // companion of their own that it could have reached; a player without one is just chatting,
+        // and on a server that was a WARN for every line one player said to another.
+        String line = "ConversationManager: message from {} reached no companion ({} in queueData) — {}";
+        String detail = diagnostics.length() == 0 ? "queueData is empty" : diagnostics.toString();
+        if (nearestData == null) {
+            LOGGER.info(line, msg.userName(), queueData.size(), detail);
+        } else {
+            LOGGER.warn(line, msg.userName(), queueData.size(), detail);
+        }
         if (target == null || targetDistance == Float.MAX_VALUE) {
             return List.of(); // nothing to point at: no companion, or it is not in this world
         }
@@ -501,11 +512,12 @@ public class ConversationManager {
     private static final ConcurrentHashMap<String, Long> lastEarshotNotice = new ConcurrentHashMap<>();
 
     /**
-     * How long after a companion speaks an owner's unaddressed line still counts as an answer to her,
-     * when other people are online. Long enough to read a reply and type "yes", short enough that
-     * chat with somebody else a few minutes later is not swept up.
+     * How long after the last exchange (any line of the owner's that reached her, a skill sent to
+     * her, or her speaking) an owner's unnamed line still reaches her when other people are online.
+     * Every exchange restarts it. The user's rule, 2026-09-26: "Ava, go collect wood", then "I
+     * changed my mind, come back" still reaches her; after 30 quiet seconds her name is needed again.
      */
-    private static final long CONVERSATION_WINDOW_NANOS = TimeUnit.SECONDS.toNanos(60);
+    private static final long CONVERSATION_WINDOW_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     /** The held-line explanation is for learning the rule, so it is rare: once per ten minutes. */
     private static final long HELD_HINT_INTERVAL_NANOS = TimeUnit.MINUTES.toNanos(10);
@@ -549,7 +561,7 @@ public class ConversationManager {
             return Optional.empty();
         }
         return Optional.of("(" + companionName + " didn't take that as meant for her: other players are online, so she"
-                + " hears lines with her name in them, or replies within a minute of her talking to you.)");
+                + " hears lines with her name in them, and your follow-ups within 30 seconds of you last talking.)");
     }
 
     private static Optional<String> notYoursNotice(String userName, AgentConversationData companion) {

@@ -100,14 +100,22 @@ public class AgentConversationData {
     private volatile long firstPendingSince = 0L;
 
     /**
-     * When this companion last said something aloud (nanoTime), 0 if never. With other players
-     * online, a line from the owner that does not name her still reaches her shortly after she
-     * spoke, so "yes" answers her question. See {@code ConversationManager.onUserChatMessage}.
+     * When the owner and this companion last exchanged anything (nanoTime), 0 if never.
+     *
+     * <p>With other players online, an owner's line that does not name her still reaches her for 30
+     * seconds after this, so "Ava, go collect wood" then "I changed my mind, come back" both reach
+     * her, and "yes" answers her question. Set by every owner line that reaches her (named or not),
+     * a skill sent to her, and her own speech, so a steady conversation never needs her name (the
+     * user's rule, 2026-09-26). See {@code ConversationManager.onUserChatMessage}.
      */
-    private volatile long lastSpokeNanos = 0L;
+    private volatile long lastDirectNanos = 0L;
 
-    public long getLastSpokeNanos() {
-        return this.lastSpokeNanos;
+    public long getLastDirectNanos() {
+        return this.lastDirectNanos;
+    }
+
+    public void markDirectExchange() {
+        this.lastDirectNanos = System.nanoTime();
     }
 
     private MessageBuffer playerEngineMsgBuffer = new MessageBuffer(10);
@@ -281,7 +289,7 @@ public class AgentConversationData {
                     mod.getAIPersistantData().addAssistantMessage(
                             llmMessage == null ? "" : llmMessage, mod.getPlayer2APIService());
                     if (llmMessage != null && !llmMessage.isBlank()) {
-                        this.lastSpokeNanos = System.nanoTime();
+                        this.markDirectExchange();
                     }
                     onCharacterEvent.accept(new Event.CharacterMessage(llmMessage, command, this));
                     // Learn from the exchange only after the player has their answer, so a slow or dead
