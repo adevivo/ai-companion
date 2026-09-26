@@ -423,6 +423,28 @@ just replies.
 
 ---
 
+## 20. Every companion's history uses the shared legacy file, whoever owns it 🔴
+
+**Status:** not ported. **Confirmed present** on `main` and `fix/perception-radius`: `AltoClefController.java:150`
+builds `AIPersistantData` in the constructor, and `AIPersistantData.java:24` reads `mod.getOwnerUuid()`, which
+is null until `setOwner` runs afterwards.
+
+**Commit:** see `git log -S"bindHistoryToOwner"` (engine 1.21.11-1.0.41).
+
+**What changed:** the per-owner history path (`config/aicompanion/history/<owner>/<Name>.txt`) was never used.
+The owner is always null when the history is built, so every companion on every server read and wrote
+`config/<Name>_<Name>.txt`. Two players whose companions share a name (the default roster makes that
+likely) read each other's conversations into their prompts and overwrote each other's file. Found
+2026-09-26: holly had `config/Ava_Ava.txt` and no `history/` directory. `setOwner` now calls
+`AIPersistantData.bindHistoryToOwner`, which moves to the owner's file the first time an owner is known.
+The shared file's contents are dropped, since whose they are cannot be known.
+
+**Port:** the same two edits on 1.20.1 (`AltoClefController.setOwner`, `AIPersistantData`). Check the
+1.20.1 `ConversationHistory` constructor takes an owner at all; if it predates the per-owner path, port
+that first.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).
