@@ -74,7 +74,7 @@ public class ProjectileProtectionWallTask extends Task implements ITaskRequiresG
             double x = playerPos.x - 2.0 * direction.x;
             double y = playerPos.y + direction.y;
             double z = playerPos.z - 2.0 * direction.z;
-            this.targetPlacePos = new BlockPos((int)x, (int)y + 1, (int)z);
+            this.targetPlacePos = BlockPos.containing(x, y, z).above();
             this.setDebugState("Placing at " + this.targetPlacePos.toString());
             this.waitForBlockPlacement.reset();
          }

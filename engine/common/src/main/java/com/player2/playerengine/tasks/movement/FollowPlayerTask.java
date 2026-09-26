@@ -65,7 +65,7 @@ public class FollowPlayerTask extends Task {
          } else {
             Optional<Player> player = mod.getEntityTracker().getPlayerEntity(this.playerName);
             return (Task)(player.isEmpty()
-               ? new GetToBlockTask(new BlockPos((int)target.x, (int)target.y, (int)target.z), false)
+               ? new GetToBlockTask(BlockPos.containing(target), false)
                : new GetToEntityTask((Entity)player.get(), this.followDistance));
          }
       }

@@ -55,11 +55,11 @@ public interface WorldHelper {
    }
 
    static Vec3i toVec3i(Vec3 pos) {
-      return new Vec3i((int)pos.x(), (int)pos.y(), (int)pos.z());
+      return BlockPos.containing(pos); // floor, not (int) — see getBlocksTouchingBox
    }
 
    static BlockPos toBlockPos(Vec3 pos) {
-      return new BlockPos((int)pos.x(), (int)pos.y(), (int)pos.z());
+      return BlockPos.containing(pos);
    }
 
    static boolean isSourceBlock(PlayerEngineController controller, BlockPos pos, boolean onlyAcceptStill) {
@@ -344,8 +344,12 @@ public interface WorldHelper {
    }
 
    static Iterable<BlockPos> getBlocksTouchingBox(AABB box) {
-      BlockPos min = new BlockPos((int)box.minX, (int)box.minY, (int)box.minZ);
-      BlockPos max = new BlockPos((int)box.maxX, (int)box.maxY, (int)box.maxZ);
+      // ⚠️ Floor, never (int): a cast rounds toward zero, which is one block off for every negative
+      // coordinate. Measured 2026-09-25 at x≈-3, z≈-131: the build's "never brick ourselves in" check
+      // was told the body was a block away from where it stood, deferred a free cell 465 times, and
+      // placed a solid block into the one the companion was actually in. It suffocated.
+      BlockPos min = BlockPos.containing(box.minX, box.minY, box.minZ);
+      BlockPos max = BlockPos.containing(box.maxX, box.maxY, box.maxZ);
       return scanRegion(min, max);
    }
 

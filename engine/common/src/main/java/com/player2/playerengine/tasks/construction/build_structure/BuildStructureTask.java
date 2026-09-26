@@ -308,6 +308,8 @@ public class BuildStructureTask extends Task {
         private final BitSet handled = new BitSet();
         /** Per-index count of "was in reach, then wasn't". Three strikes and the cell is placed remotely. */
         private final Map<Integer, Integer> deferrals = new HashMap<>();
+        /** Cells already logged as having nowhere to stand, so a retried one is not logged every tick. */
+        private final java.util.Set<Integer> loggedNoStation = new java.util.HashSet<>();
         /** Cells broken to dig free of our own structure; re-placed later without being billed twice. */
         private final Set<BlockPos> paidFor = new HashSet<>();
         /** Standing positions that timed out. Never offered again for this build. */
@@ -976,8 +978,10 @@ public class BuildStructureTask extends Task {
             if (chosen.isEmpty()) {
                 // Genuinely nowhere to stand for this cell — the middle of a wide roof, a ceiling under
                 // solid rock. Hand it to the remote path rather than stalling the whole build on it.
-                LOGGER.info("Build ({}): no standing position reaches {}; placing it from here",
-                        description, target.toShortString());
+                if (loggedNoStation.add(focus)) {
+                    LOGGER.info("Build ({}): no standing position reaches {}; placing it from here",
+                            description, target.toShortString());
+                }
                 // Return value ignored deliberately: a false means it ran out of materials and has
                 // already set abortReason, which isFinished() picks up on this same tick.
                 placeOne(focus, true);
