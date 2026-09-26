@@ -28,6 +28,7 @@ import com.player2.playerengine.player2api.ConversationHistory;
 import com.player2.playerengine.player2api.LLMCompleter;
 import com.player2.playerengine.player2api.Player2APIService;
 import com.player2.playerengine.player2api.Prompts;
+import com.player2.playerengine.player2api.brain.NetworkBrainTransport;
 import com.player2.playerengine.player2api.utils.Utils;
 import com.player2.playerengine.tasks.construction.build_structure.StructureFromCode.SetBlockCommand;
 import com.player2.playerengine.tasks.construction.build_structure.templates.TemplateLibrary;
@@ -109,6 +110,12 @@ public class BuildStructureTask extends Task {
     private int numErrors;
     /** Last codegen/parse failure, so the give-up notice can say what kept going wrong. */
     private String lastError;
+    /**
+     * Whether {@link #lastError} came from the model call itself (timeout, 503, refused key) rather
+     * than from running the plan it returned. The owner is told different things for the two: "I
+     * couldn't come up with a workable plan" is wrong when no plan ever arrived.
+     */
+    private boolean lastErrorWasModelCall;
 
     private Task actuallyRunningTask;
     private ConversationHistory history;
@@ -1569,16 +1576,36 @@ public class BuildStructureTask extends Task {
                 : "Still collecting: " + BuildMaterials.describeForPlayer(remaining) + " to go.");
     }
 
+    /**
+     * Whether to stop after a failure rather than ask again. Checked BEFORE the next request is
+     * created: a new {@code RequestLLMCode} sends in its {@code onStart}, so creating it and checking
+     * on the next tick sent one request more than allowed. Observed 2026-09-25: a plan arrived 31 s
+     * after its build had been abandoned. A timeout also stops at once: the client is most likely
+     * still working on the first request, so asking again pays twice for one answer.
+     */
+    private boolean shouldGiveUp() {
+        return numErrors > maxNumErrors
+                || (lastErrorWasModelCall && lastError != null
+                        && lastError.contains(NetworkBrainTransport.DID_NOT_ANSWER));
+    }
+
+    private Task giveUp() {
+        // The task system only knows "finished", so without a notice the agent reads this as a
+        // success and tells the player the structure is built. Say what actually happened.
+        mod.logAgentNotice(String.format(
+                "Could not build (%s): the build plan failed %d time(s) (last error: %s). Nothing was placed. Do not claim it was built.",
+                shortDescription(), numErrors, lastError == null ? "unknown" : lastError),
+                lastErrorWasModelCall
+                        ? "Build failed, nothing was placed: " + NetworkBrainTransport.adviseOn(lastError)
+                        : "Build failed: I couldn't come up with a workable plan for that. Nothing was placed.");
+        isDone = true;
+        actuallyRunningTask = null;
+        return null;
+    }
+
     @Override
     protected Task onTick() {
-        if (numErrors > maxNumErrors) {
-            // The task system only knows "finished", so without a notice the agent reads this as a
-            // success and tells the player the structure is built. Say what actually happened.
-            mod.logAgentNotice(String.format(
-                    "Could not build (%s): the build plan failed to generate %d times in a row (last error: %s). Nothing was placed. Do not claim it was built.",
-                    shortDescription(), numErrors, lastError == null ? "unknown" : lastError),
-                    "Build failed: I couldn't come up with a workable plan for that. Nothing was placed.");
-            isDone = true;
+        if (isDone) {
             return null;
         }
         if (actuallyRunningTask == null || !actuallyRunningTask.isFinished()) {
@@ -1599,6 +1626,11 @@ public class BuildStructureTask extends Task {
                     }, errStr -> {
                         ++numErrors;
                         lastError = errStr;
+                        lastErrorWasModelCall = true;
+                        if (shouldGiveUp()) {
+                            giveUp();
+                            return null;
+                        }
                         String tryAgainMessage = String.format(
                                 "When trying to call the llm with the description, got this error: \n(%s)\n. Try again and generate code using the same description:\n(%s)",
                                 errStr, description);
@@ -1616,6 +1648,11 @@ public class BuildStructureTask extends Task {
                     errStr -> {
                         ++numErrors;
                         lastError = errStr;
+                        lastErrorWasModelCall = false;
+                        if (shouldGiveUp()) {
+                            giveUp();
+                            return;
+                        }
                         history.addAssistantMessage(planTask.code, service);
                         String tryAgainMessage = String.format(
                                 "The code was executed, but got error \n(%s)\nTry again and generate code with the same description:\n(%s)",

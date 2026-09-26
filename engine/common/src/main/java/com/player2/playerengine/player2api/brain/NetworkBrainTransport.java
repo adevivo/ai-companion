@@ -86,7 +86,7 @@ public final class NetworkBrainTransport implements BrainTransport {
      * new key, and three 401s in a row, because the game still held the key it read at launch.
      * "Check llm.apiKey" was correct advice and led to a file that was already right.
      */
-    static String adviseOn(String clientError) {
+    public static String adviseOn(String clientError) {
         String e = clientError == null ? "" : clientError.toLowerCase(java.util.Locale.ROOT);
         if (e.contains("429") || e.contains("rate limit") || e.contains("too many requests")) {
             return "your model provider is rate-limiting you. Free tiers cap requests per DAY — "
@@ -111,6 +111,30 @@ public final class NetworkBrainTransport implements BrainTransport {
             return "your model provider says the account is out of credit. Top it up, or point "
                     + "llm.endpoint at a local model.";
         }
+        if (e.contains(DID_NOT_ANSWER)) {
+            // The server's own patience ran out, not the endpoint. Checked before the endpoint branch
+            // below, which matches "timeout" too and would send the owner to a working endpoint.
+            // Observed 2026-09-25: a free model took 46-57 s per build plan against a 45 s budget.
+            boolean plan = e.contains("plantimeoutms");
+            // Only the number is quoted: the raw reason arrives wrapped in the planner's own
+            // "could not answer (...)" and reads as nested brackets in chat.
+            java.util.regex.Matcher secs =
+                    java.util.regex.Pattern.compile(DID_NOT_ANSWER + " (\\d+) s").matcher(e);
+            String waited = secs.find() ? " of " + secs.group(1) + " s" : "";
+            return "your model took longer than the server's wait" + waited + ". Big or busy"
+                    + " models can need more time: raise "
+                    + (plan ? "brain.planTimeoutMs" : "brain.clientTimeoutMs")
+                    + " in the server's aicompanion-server.json, or "
+                    + (plan ? "llm.clientPlanTimeoutMs" : "llm.clientBrainTimeoutMs")
+                    + " in aicompanion.json when your own game is the host." + APPLY;
+        }
+        if (e.contains("could not be sent")) {
+            return "the server could not send the request to your game. Rejoining usually fixes it.";
+        }
+        if (e.contains("503") || e.contains("overloaded") || e.contains("service unavailable")) {
+            return "your model provider is overloaded right now (HTTP 503). Free models hit this"
+                    + " often. Try again in a minute, or pick a less busy model.";
+        }
         if (e.contains("connection refused") || e.contains("unknownhost")
                 || e.contains("no route to host") || e.contains("timed out")
                 || e.contains("timeout") || e.contains("connect")) {
@@ -123,6 +147,24 @@ public final class NetworkBrainTransport implements BrainTransport {
         // Say what happened rather than guessing at it — an unclassified failure is still a
         // better clue in the player's own words than a wrong diagnosis.
         return "your model returned an error — " + clientError;
+    }
+
+    /** The words every server-side timeout uses, so the advice can tell one from an endpoint fault. */
+    public static final String DID_NOT_ANSWER = "did not answer within";
+
+    /**
+     * How long the server waits for a client to write a BUILD PLAN, in milliseconds. Separate from
+     * {@code LlmConfig.clientBrainTimeoutMs} because a plan is a whole program, not a short JSON turn.
+     * Observed 2026-09-25: a free model took 46-57 s per full-size plan, so every second-storey plan
+     * hit the 45 s turn budget and was dropped although the client finished it.
+     *
+     * <p>Kept here rather than in the core's {@code LlmConfig}: only this line sends plans to the
+     * client, and a core field would mean a core release shared with the 1.20.1 line for nothing.
+     */
+    public static volatile int planTimeoutMs = 180_000;
+
+    static String timeoutReason(int ms, String key) {
+        return "the client " + DID_NOT_ANSWER + " " + (ms / 1000) + " s, " + key;
     }
 
     /** A running game reads its config at launch, so an edit to the file changes nothing until applied. */
@@ -302,10 +344,11 @@ public final class NetworkBrainTransport implements BrainTransport {
             pending.fail("the request could not be sent");
             return true;
         }
+        int budget = planTimeoutMs;
         pending.timeout = TIMEOUTS.schedule(() -> {
             PENDING_TEXT.remove(requestId);
-            pending.fail("the client did not answer within " + LlmConfig.clientBrainTimeoutMs + " ms");
-        }, LlmConfig.clientBrainTimeoutMs, TimeUnit.MILLISECONDS);
+            pending.fail(timeoutReason(budget, "brain.planTimeoutMs"));
+        }, budget, TimeUnit.MILLISECONDS);
         return true;
     }
 
@@ -474,13 +517,13 @@ public final class NetworkBrainTransport implements BrainTransport {
         }
 
         void armTimeout() {
+            int budget = LlmConfig.clientBrainTimeoutMs;
             this.timeout = TIMEOUTS.schedule(
                     () -> {
                         PENDING.remove(requestId);
-                        fail("the client did not answer within " + LlmConfig.clientBrainTimeoutMs
-                                + " ms");
+                        fail(timeoutReason(budget, "brain.clientTimeoutMs"));
                     },
-                    LlmConfig.clientBrainTimeoutMs, TimeUnit.MILLISECONDS);
+                    budget, TimeUnit.MILLISECONDS);
         }
 
         void complete(String replyJson, String error) {
@@ -513,7 +556,9 @@ public final class NetworkBrainTransport implements BrainTransport {
             }
             cancelTimeout();
             LOGGER.warn("Brain: {}.", why);
-            runOnServer(null);
+            // The reason goes through: with null, adviseOn said "your client did not say why. Check
+            // llm.endpoint" after a timeout, and sent the owner to a working endpoint.
+            runOnServer(why);
         }
 
         /**

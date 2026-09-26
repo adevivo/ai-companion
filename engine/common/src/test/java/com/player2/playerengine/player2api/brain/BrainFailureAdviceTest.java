@@ -84,6 +84,34 @@ class BrainFailureAdviceTest {
     }
 
     @Test
+    @DisplayName("a turn the server stopped waiting for names the server's timeout, not the endpoint")
+    void turnTimeoutNamesTheTimeoutKey() {
+        String advice = advise(NetworkBrainTransport.timeoutReason(45_000, "brain.clientTimeoutMs"));
+        assertTrue(advice.contains("brain.clientTimeoutMs") && advice.contains("45 s"), advice);
+        assertFalse(advice.contains("llm.endpoint"),
+                "the endpoint answered, just slowly; this is the bug the case exists to fix");
+    }
+
+    @Test
+    @DisplayName("a plan timeout names the plan key, even wrapped in the planner's own error text")
+    void planTimeoutNamesThePlanKey() {
+        String wrapped = "your client's model could not answer ("
+                + NetworkBrainTransport.timeoutReason(180_000, "brain.planTimeoutMs") + ")";
+        String advice = advise(wrapped);
+        assertTrue(advice.contains("brain.planTimeoutMs") && advice.contains("180 s"), advice);
+        assertFalse(advice.contains("brain.clientTimeoutMs"), "that key does not govern plans");
+        assertFalse(advice.contains("(("), "the raw nested reason is not repeated in chat");
+    }
+
+    @Test
+    @DisplayName("an overloaded free model is named as overload, not as an endpoint fault")
+    void overloadIsItsOwnAdvice() {
+        String advice = advise("HTTP 503: Service Unavailable Body: {\"error\":\"model overloaded\"}");
+        assertTrue(advice.contains("overloaded"), advice);
+        assertFalse(advice.contains("llm.endpoint"));
+    }
+
+    @Test
     @DisplayName("a silent client says so instead of inventing a reason")
     void nullErrorAdmitsIgnorance() {
         assertTrue(advise(null).contains("did not say why"));

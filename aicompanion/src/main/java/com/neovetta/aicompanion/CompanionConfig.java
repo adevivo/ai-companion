@@ -8,6 +8,7 @@ import com.neovetta.aicompanion.core.MemoryConfig;
 import com.player2.playerengine.player2api.Prompts;
 import com.neovetta.aicompanion.core.ServerPolicy;
 import com.neovetta.aicompanion.core.TtsConfig;
+import com.player2.playerengine.player2api.brain.NetworkBrainTransport;
 import com.player2.playerengine.player2api.manager.ConversationManager;
 import com.player2.playerengine.player2api.manager.TTSManager;
 import com.player2.playerengine.PlayerEngineController;
@@ -284,6 +285,14 @@ public final class CompanionConfig {
      */
 
 
+    /** Help for {@code brain.planTimeoutMs}; the same words as {@code llm._clientPlanTimeoutMs}. */
+    private static final String PLAN_TIMEOUT_HELP = "How long the server waits for a client to"
+            + " write a BUILD PLAN, in milliseconds. Separate from the turn timeout because a plan"
+            + " is a whole program, not a short reply: a free model has taken 46-57 s for one plan,"
+            + " which the 45 s turn budget cut off every time although the client finished. A plan"
+            + " that runs out of time is not asked for again, since the client is most likely still"
+            + " working on it and a second request would pay twice for one answer.";
+
     /** Keys of the flat schema that only mean anything when THIS server does the thinking. */
     private static final String[] SERVER_BRAIN_BLOCKS = {"llm", "memory", "embeddings"};
 
@@ -329,6 +338,8 @@ public final class CompanionConfig {
         brain.addProperty("mode", clientBrain ? "client" : "server");
         brain.addProperty("clientTimeoutMs", flatLlm != null && flatLlm.has("clientBrainTimeoutMs")
                 ? flatLlm.get("clientBrainTimeoutMs").getAsInt() : 45000);
+        brain.addProperty("planTimeoutMs", flatLlm != null && flatLlm.has("clientPlanTimeoutMs")
+                ? flatLlm.get("clientPlanTimeoutMs").getAsInt() : 180000);
         brain.addProperty("_mode", "WHICH MACHINE THINKS — the most consequential setting on this"
                 + " server. \"client\" (default) hands each turn to the owner's own game, which runs"
                 + " THEIR model with THEIR api key against THEIR memory corpus: a player's companion"
@@ -346,6 +357,7 @@ public final class CompanionConfig {
                 + " quiet. Generous on purpose: a frontier model on a slow link can legitimately take"
                 + " many seconds, and cutting it off to run the turn again would spend twice and"
                 + " answer once.");
+        brain.addProperty("_planTimeoutMs", PLAN_TIMEOUT_HELP);
 
         JsonObject whenServer = new JsonObject();
         whenServer.addProperty("_help", "READ ONLY WHEN mode IS \"server\". With mode \"client\" every"
@@ -366,6 +378,8 @@ public final class CompanionConfig {
             copy.remove("clientBrainTimeoutMs");
             copy.remove("_clientBrain");
             copy.remove("_clientBrainTimeoutMs");
+            copy.remove("clientPlanTimeoutMs");
+            copy.remove("_clientPlanTimeoutMs");
             whenServer.add(block, copy);
         }
         brain.add("whenServer", whenServer);
@@ -447,6 +461,9 @@ public final class CompanionConfig {
         llm.addProperty("clientBrain", client);
         if (brain != null && brain.has("clientTimeoutMs")) {
             llm.addProperty("clientBrainTimeoutMs", brain.get("clientTimeoutMs").getAsInt());
+        }
+        if (brain != null && brain.has("planTimeoutMs")) {
+            llm.addProperty("clientPlanTimeoutMs", brain.get("planTimeoutMs").getAsInt());
         }
         flat.add("llm", llm);
         for (String keep : new String[] {"tts", "server", "companions"}) {
@@ -947,6 +964,8 @@ public final class CompanionConfig {
             LlmConfig.clientBrain = bool(llm, "clientBrain", LlmConfig.clientBrain);
             LlmConfig.clientBrainTimeoutMs =
                     intVal(llm, "clientBrainTimeoutMs", LlmConfig.clientBrainTimeoutMs);
+            NetworkBrainTransport.planTimeoutMs =
+                    intVal(llm, "clientPlanTimeoutMs", NetworkBrainTransport.planTimeoutMs);
             // API key: env/sysprop wins (so the secret need not live on disk); otherwise the file
             // value applies unconditionally. The check must be "did the env supply it?", not "is the
             // current value blank?" — after the first load the static holds the file's key, and a
@@ -1227,8 +1246,10 @@ public final class CompanionConfig {
                 "usageReportEveryTokens": 100000,
                 "clientBrain": true,
                 "clientBrainTimeoutMs": 45000,
+                "clientPlanTimeoutMs": 180000,
                 "_clientBrain": "WHICH MACHINE THINKS, and on a dedicated server this is the most consequential setting in the file. On (default) the server hands each turn to the owner's own client, which runs THEIR model with THEIR api key against THEIR memory corpus — so a player's companion remembers what they taught it in singleplayer, and nobody spends the operator's tokens. Off, and this server thinks for everyone from the 'llm' block above and one shared corpus in its own config folder, which is why memory.enabled and embeddings.enabled matter here only when this is off. THE SYMPTOM OF GETTING THIS WRONG IS NOT AN ERROR: a companion thinking on the wrong machine still answers, in character, immediately — it has simply never heard of you. Check the boot line: brain=client-when-able is on, brain=server is off. IGNORED WITHOUT localMode, and ignored per-player for anyone whose client does not answer the capability handshake. ON A DEDICATED SERVER THIS KEY IS NOT HERE: that installation reads aicompanion-server.json instead, where the same decision is brain.mode. This copy governs singleplayer, where it changes nothing observable — client and server are one process reading one corpus — so it is left visible mainly so the concept is not a surprise the first time you run a server.",
                 "_clientBrainTimeoutMs": "How long the server waits for a client to think before giving up on that turn, in milliseconds. Not a latency budget — nothing is blocked while it runs — but a liveness check on a client that said it could think and then went quiet. Generous on purpose: a frontier model on a slow link can legitimately take many seconds, and cutting it off to run the turn again would spend twice and answer once. What happens after the timeout is server.serverAnswersWhenClientFails.",
+                "_clientPlanTimeoutMs": "How long the server waits for a client to write a BUILD PLAN, in milliseconds. Separate from the turn timeout because a plan is a whole program, not a short reply: a free model has taken 46-57 s for one plan, which the 45 s turn budget cut off every time although the client finished. A plan that runs out of time is not asked for again, since the client is most likely still working on it and a second request would pay twice for one answer.",
                 "_maxPromptChars": "Hard character budget for the prompt; the oldest turns are dropped to fit (0 = no limit). Message count alone does not bound the prompt because every turn carries a world/agent status blob, so the same 64 messages can be 13k or 25k characters. Once the prompt outgrows what your model can attend to, the JSON contract at the FRONT is what gets lost: the companion still reasons correctly off recent turns and picks the right command, but writes it as prose instead of JSON, so nothing runs. Lower this if the companion talks sensibly and then stands still; raise it if your model has a large context. There is a FLOOR: the system prompt (~15k) and the newest turn with its status blob (~1.7k) can never be dropped, so a budget below ~17k throws away all conversation history on every turn and is still over — the companion then remembers nothing you said two messages ago. 20000 is the default for that reason. Watch the log for 'dropped ALL ... droppable turn(s)', which is what being under the floor looks like.",
                 "_useGrammar": "JSON mode: sends response_format json_object so the endpoint forces every reply into JSON. On (default) stops a chatty model answering in bare prose, which runs no command — the companion describes work it never starts. Honoured by OpenRouter, xAI, OpenAI and llama.cpp; LM Studio refuses that form, so it is detected on the first request and sent json_schema instead, with JSON mode still on. Turn it OFF only if your server refuses both (the chat error says so), and choose a model that follows instructions well — with it off, some replies come back as prose and run nothing. Also in the config screen's LLM tab as 'JSON Mode'.",
                 "_maxConcurrentRequests": "How many LLM requests may be in flight at once across ALL companions. At 1 the roster is single-file: while one companion is thinking, the others cannot, which makes a second companion look broken while the first works a long task. 2 suits a local llama.cpp, which serves one request at a time anyway. Raise it for a hosted endpoint that parallelises, or when several companions are out and expected to work independently — it is also the concurrency half of the spend guardrail, since every extra slot is another request that can be burning tokens at the same instant. Clamped to 1-16.",
