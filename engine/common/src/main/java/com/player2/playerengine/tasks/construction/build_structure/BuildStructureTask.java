@@ -197,14 +197,29 @@ public class BuildStructureTask extends Task {
         // volatile: written from the LLM thread, the brain timeout thread or the server thread,
         // depending on which machine answered; read on the server thread.
         volatile Optional<Either<String, String>> llmResult = Optional.empty();
+        /** One request per instance, however often the task is restarted. */
+        private boolean sent;
 
+        /**
+         * Identity. This compared {@code llmResult} by reference, and every empty Optional is the same
+         * object, so a new request "equalled" the old one while both were waiting. After an
+         * interruption the runner kept ticking the old instance, restarted it (a second request),
+         * then switched to the new one when the first plan arrived (a third). Observed 2026-09-26:
+         * three plan requests for one two-storey build, and the first finished plan discarded.
+         */
         @Override
         protected boolean isEqual(Task var1) {
-            return var1 instanceof RequestLLMCode && ((RequestLLMCode) var1).llmResult == llmResult;
+            return var1 == this;
         }
 
         @Override
         protected void onStart() {
+            // An interrupted task is started again when it resumes. The request it already sent is
+            // still coming, so sending another would pay twice and orphan the first answer.
+            if (sent) {
+                return;
+            }
+            sent = true;
             java.util.function.Consumer<String> onCode = codeResult -> {
                 String code = normalizeCode(codeResult);
                 LOGGER.info("LLM generated code={}", code);
@@ -1516,6 +1531,21 @@ public class BuildStructureTask extends Task {
 
     @Override
     protected void onStart() {
+        // Resuming after an interruption (a fight, an escape from powder snow): the plan being asked
+        // for or run is still on its way, so carry on with it rather than design the build again.
+        if (!isDone && actuallyRunningTask instanceof RequestLLMCode) {
+            LOGGER.info("Build ({}) resuming: still waiting for the plan already asked for", description);
+            return;
+        }
+        if (!isDone && actuallyRunningTask instanceof GenerateBlockPlan running) {
+            // Its worker thread was shut down when it was interrupted, so a result may never come.
+            // Run the same code again: that is local and free, unlike asking the model again.
+            if (!running.isFinished()) {
+                actuallyRunningTask = new GenerateBlockPlan(running.code);
+            }
+            LOGGER.info("Build ({}) resuming: re-running the plan already received", description);
+            return;
+        }
         // A previous attempt at this exact request that only failed on materials left its plan
         // behind. Reuse it, so collecting what was missing actually finishes the job rather than
         // buying materials for a building that no longer exists.
