@@ -101,4 +101,18 @@ class LocalServerQuirksTest {
         String note = Player2APIService.truncationNote("{\"reason\": \"a long but real answer");
         assertTrue(note.contains("above 2000"), note);
     }
+
+    @Test
+    @DisplayName("prose is told apart from JSON gone wrong (llama.cpp b364 ignoring json_object, 2026-09-26)")
+    void proseIsNotBrokenJson() {
+        assertTrue(Player2APIService.looksLikeProse("The chest didn't have any rotten_flesh."));
+        assertTrue(Player2APIService.looksLikeProse("  Running bodyguard now! *gears whir*"));
+        assertTrue(Player2APIService.looksLikeProse("*adjusts goggles* hi"));
+        assertFalse(Player2APIService.looksLikeProse("{\"message\": \"cut off"));
+        assertFalse(Player2APIService.looksLikeProse("```json\n{}\n```"));
+        assertFalse(Player2APIService.looksLikeProse("\"just a string\""));
+        assertFalse(Player2APIService.looksLikeProse("[1, 2]"));
+        assertFalse(Player2APIService.looksLikeProse(""));
+        assertFalse(Player2APIService.looksLikeProse(null));
+    }
 }

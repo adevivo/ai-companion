@@ -185,6 +185,24 @@ public class Player2APIService {
    }
 
    /**
+    * Whether a reply is prose rather than a malformed attempt at JSON: its first visible character
+    * is a letter (or an emoji, or anything else that cannot start a JSON value). A server honouring
+    * JSON mode cannot produce this, so it marks a server that ignored the request. A fenced block,
+    * a brace, a bracket or a quote is JSON gone wrong and is left to the ordinary retry.
+    */
+   static boolean looksLikeProse(String content) {
+      if (content == null) {
+         return false;
+      }
+      String s = content.strip();
+      if (s.isEmpty()) {
+         return false;
+      }
+      char c = s.charAt(0);
+      return c != '{' && c != '[' && c != '"' && c != '`';
+   }
+
+   /**
    * The JSON-mode request field.
    *
    * <p>{@code json_object} is the OpenAI-compatible form, honoured by OpenRouter, xAI, OpenAI and
@@ -530,9 +548,35 @@ public class Player2APIService {
             LOGGER.warn("LLM response was not the expected JSON object ({}); retrying once. {} Raw=<<{}>>",
                   first.getMessage(), jsonModeNote(), content);
          }
-         String retried = requestContent(requestBody, lastMessageForDebug);
+         // A prose reply to a json_object request means the server ignored the request, not that
+         // the model slipped: an honouring backend cannot emit prose. Observed 2026-09-26 on a
+         // llama.cpp build (b364) with Qwen2.5-14B: bare {"type":"json_object"} is ignored, while the
+         // same request as json_schema comes back as JSON. So the retry asks in that form, and if it
+         // works the endpoint keeps it (the same memory as LM Studio's refusal in chatCompletion). A
+         // server that refuses json_schema just gets the old retry, and nothing is remembered.
+         boolean trySchema = !firstTruncated && !needsJsonSchema() && requestBody.has("response_format")
+               && looksLikeProse(content);
+         String retried;
+         if (trySchema) {
+            requestBody.add("response_format", responseFormat(true));
+            try {
+               retried = requestContent(requestBody, lastMessageForDebug);
+            } catch (HttpApiException refused) {
+               trySchema = false;
+               requestBody.add("response_format", responseFormat(false));
+               retried = requestContent(requestBody, lastMessageForDebug);
+            }
+         } else {
+            retried = requestContent(requestBody, lastMessageForDebug);
+         }
          try {
-            return Utils.parseCleanedJson(retried);
+            JsonObject parsed = Utils.parseCleanedJson(retried);
+            if (trySchema) {
+               schemaOnlyEndpoint = LlmConfig.baseUrl;
+               LOGGER.warn("{} ignores response_format json_object (it answered in prose) but honours "
+                     + "json_schema; asking in that form from now on. JSON Mode stays on.", LlmConfig.baseUrl);
+            }
+            return parsed;
          } catch (Exception second) {
             boolean truncated = lastReplyTruncated;
             if (truncated) {
