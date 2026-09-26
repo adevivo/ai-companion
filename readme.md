@@ -134,6 +134,59 @@ reuse its source — we write our own equivalent glue, informed by its structure
 
 ---
 
+## How the pieces fit
+
+**What's in the download.** One jar, three parts, built from two repositories. The memory core is
+shared by every Minecraft version and contains no Minecraft code at all. That is what lets one memory
+engine, and one set of settings and server rules, serve every branch of this repo.
+
+```mermaid
+flowchart TB
+  subgraph jar["aicompanion-0.4.0+mc1.21.11.jar: the one download"]
+    mod["<b>AI Companion</b> (the mod)<br/>companion entity · /companion · chat routing<br/>settings screen · HUDs · client brain"]
+    pe["<b>PlayerEngine</b> (bundled fork, LGPL)<br/>pathfinding · tasks · combat · building<br/>model calls · conversation"]
+    mem["<b>aicompanion-memory</b> (bundled)<br/>memory records · recall scoring<br/>settings and server rules<br/><i>no Minecraft code</i>"]
+  end
+  mod --> pe
+  mod --> mem
+  pe --> mem
+  repoMod["github.com/adevivo/ai-companion<br/>one branch per Minecraft version"] -. builds .-> mod
+  repoMod -. builds .-> pe
+  repoMem["github.com/adevivo/ai-companion-memory<br/>one version for every Minecraft"] -. builds .-> mem
+```
+
+**Where a turn runs.** The server moves the companion's body. The thinking happens on its owner's own
+computer, with their model, their key and their memories, none of which the server ever sees. In
+single player both halves are the same machine.
+
+```mermaid
+flowchart LR
+  subgraph server["Minecraft server"]
+    body["Companion body<br/>moves · fights · builds"]
+  end
+  subgraph client["The owner's computer"]
+    direction TB
+    brain["Client brain<br/>builds the prompt"]
+    store[("Their memories<br/>aicompanion-memory")]
+    voice["Voice playback"]
+  end
+  subgraph ext["Services the owner chooses"]
+    direction TB
+    llm["Their model<br/>local or hosted"]
+    emb["Embedding model<br/>optional, for memory"]
+    tts["Kokoro<br/>optional voice"]
+  end
+  body -- "what's happening + what they said" --> brain
+  brain -- "what she says and does" --> body
+  body -. "a line to speak" .-> voice
+  brain <--> llm
+  brain <--> store
+  store <--> emb
+  voice --> tts
+```
+
+---
+
 ## Architecture (verified from source)
 
 ```

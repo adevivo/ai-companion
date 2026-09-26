@@ -76,6 +76,9 @@ The pathfinding and task engine is bundled inside the jar. **Don't** install a s
 
 ## Multiplayer and servers *(1.21.11)*
 
+![Where a turn runs: the server moves the companion; the owner's computer holds their memories, builds the prompt and calls their model](https://raw.githubusercontent.com/adevivo/ai-companion/mc/1.21.11/docs/images/where-a-turn-runs.png)
+
+
 - **Everyone brings their own.** Each player's companions, model, API key and memories live on their own computer, and the server never pays for anyone's model.
 - **Companions answer only their owner** and can't be commanded by other players. They're put away when their owner logs off.
 - **Server settings** live in `config/aicompanion-server.json`: per-player companion limits, who may use the commands, and more.
