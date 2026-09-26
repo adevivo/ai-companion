@@ -353,6 +353,28 @@ re-apply the persona there, and the old message is correct.
 
 ---
 
+## 17. Prompt budget, spoken length, doors, and the placement crash
+
+**Status:** not ported. Check each against 1.20.1 before porting; the door and placement parts are in
+engine code both lines share.
+
+**Commits:**
+- `d157373`, `38ca4dd` — `llm.maxPromptChars` default 20000 → 32000, and a file holding exactly the
+  old default is raised on load; the fixed prompt had outgrown it and every earlier turn was dropped.
+  LLM tab gains Max Prompt Chars, Request Timeout and the two host-side waits. Cut-off warning reports
+  the cap the request was sent with.
+- `d011086` — `tts.maxSpokenChars` (0 = read everything, the default); on the TTS tab.
+- `8a63dc2` — `LivingEntityInteractionManager.interactBlock` now does vanilla's empty-hand use
+  (`useWithoutItem`), which is what opens a door, and places block items through `EntityPlaceContext`.
+  Without either, a door was clicked with a torch, the tick crashed, and the door was broken. New
+  `OpenedDoors` closes doors and gates the companion opened. The AI-error chat line is rate-limited.
+
+**Port:** 1.20.1 has no `useItemOn` / `useWithoutItem` split (that is 1.20.5+): there,
+`BlockState.use` does both, so check whether the door bug exists at all before porting that part.
+`EntityPlaceContext` needs the 1.20.1 `BlockPlaceContext` constructor.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).

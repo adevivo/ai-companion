@@ -23,9 +23,12 @@ Committed on `mc/1.21.11` (not pushed; the user pushes):
 | `576f47c` | Stalled build gather (3 min, no inventory change) stops and asks; mid-gather resume keeps gathering; build gather uses allowed chests; `/companion list` shows subtasks |
 | `6a583f0` | Planner sees inventory and seen allowed containers; `[use inventory]` / `[gather ok]` tags from the turn model; >64 missing items asks first |
 | `551054b` | Engine `1.21.11-1.0.33`, mod repinned |
+| `d157373`, `38ca4dd` | Prompt budget default 32000 (old default migrated); LLM tab has every LLM setting; cut-off warning reports the real cap |
+| `d011086` | `tts.maxSpokenChars`, 0 = read everything (default); on the TTS tab |
+| `8a63dc2` | Doors open (empty-hand use) instead of being broken, and close behind her; no placement crash with torches; error chat once a minute |
+| `b070b3a` | Engine `1.21.11-1.0.36`, mod repinned |
 
-**Built, not yet deployed:** `aicompanion/build/libs/aicompanion-0.4.0+mc1.21.11.jar` with engine
-1.0.33. Deployed on both machines: engine 1.0.29 (from 07:02 on 2026-09-26). The user deploys.
+**Deployed on both machines:** engine 1.0.36 (2026-09-26, 08:47). The user deploys.
 
 **Verified in play 2026-09-26 (engine 1.0.29):** 120 s turn and 180 s plan timeouts load and a 110 s
 plan was accepted; `chests` sees only the allowed chest and `withdraw` takes from it, reporting the
@@ -35,9 +38,16 @@ other container as not allowed.
 `config/aicompanion-server.json` (backup beside it as `.bak`). It takes effect at the next restart or
 `/companion reload`. **Confirm it in the log or with a slow turn.**
 
+**Verified in play 2026-09-26 (engines 1.0.33–1.0.36):** "with items from your inv" became
+`[use inventory]` and a 120-block cottage was planned from the inventory and built with no gathering;
+conversation memory is back after the budget change (recalled a remark three messages back); whole
+messages are spoken; `chests` sees both opened chests; she opens a door instead of breaking it and
+closes it once she is 2.5 blocks clear (it stays open while she stands beside it, by design).
+
 ## Verify in play (first thing next session)
 
-1. The 120 s turn timeout loaded; a two-storey build plans without timing out.
+1. A large build with no tag stops and asks (gather, or smaller from inventory); "yes" reruns it with
+   `[gather ok]`, which takes from allowed chests first. A stalled gather stops after 3 minutes.
 2. `withdraw` from a chest nobody has opened: the companion skips it and asks, not takes.
 3. Open that chest yourself, `withdraw` again: it works.
 4. Stand at another chest, say "use this chest": `usechest` runs and it is allowed.
@@ -62,6 +72,10 @@ other container as not allowed.
 - **`ConversationHistory.summarizeHistory` calls a model on the SERVER THREAD** (seen as 401s on the
   keyless server, 2026-09-26). On a server with a key it blocks the tick loop for the whole request.
   Move it off-thread or route it to the client.
+- **Door logging:** `OpenedDoors` logs nothing, so "did she open/close it" can only be seen in game.
+  One INFO line per open/close/give-up would make it checkable from the log.
+- **Free-model latency:** turns have hit 124 s against the 120 s turn wait, and a plan once ran past
+  180 s by running to the token cap. Config (waits, `llm.maxTokens` ~8000) or a faster model.
 - Low priority, unchanged: noisy WARN/WARN/ERROR
   on one client failure; free Nvidia models return 503 often (accepted, do not "fix").
 
