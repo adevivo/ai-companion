@@ -15,6 +15,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -99,58 +103,142 @@ public class ConversationHistory {
    }
 
    public void addHistory(JsonObject text, boolean doCutOff, Player2APIService player2apiService) {
-      this.conversationHistory.add(text);
-      if (doCutOff && this.conversationHistory.size() > 64) {
-         List<JsonObject> toSummarize = new ArrayList<>(this.conversationHistory.subList(1, 49));
-         String summary = this.summarizeHistory(toSummarize, player2apiService);
-         // .isEmpty(), not == "": summarizeHistory returns the "" literal on failure, which happens to
-         // be interned and so happens to compare equal, but an empty string from the API would not.
-         if (summary.isEmpty()) {
-            this.conversationHistory.remove(1);
-         } else {
-            JsonObject systemPrompt = this.conversationHistory.get(0);
-            int tailStart = this.conversationHistory.size() - 16;
-            List<JsonObject> tail = new ArrayList<>(
-                  this.conversationHistory.subList(tailStart, this.conversationHistory.size()));
-            this.conversationHistory.clear();
-            this.conversationHistory.add(systemPrompt);
-            JsonObject summaryMsg = new JsonObject();
-            // "system", not "assistant". Written as an assistant turn, the summary is a third layer
-            // of the companion reading its own words back as its own speech — the same failure the
-            // grounding guard exists to stop in the store, in the one place that guard cannot see.
-            // Measured on 2026-08-20: a fact the player stated aged out under the prompt budget and
-            // only the companion's paraphrases of it survived, so it went on citing itself as the
-            // source. As a system line it reads as notes about the conversation, which is what it is.
-            summaryMsg.addProperty("role", "system");
-            summaryMsg.addProperty("content", "Summary of earlier events: " + summary);
-            this.conversationHistory.add(summaryMsg);
-            this.conversationHistory.addAll(tail);
-         }
+      this.addHistory(text, doCutOff, messages -> summarizeHistory(messages, player2apiService), SUMMARY_EXECUTOR);
+   }
 
-         if (this.historyFile != null) {
-            this.saveToFile();
+   /** Turns old messages into one line of notes. Throws, or returns blank, when it cannot. */
+   interface Summarizer {
+      String summarize(List<JsonObject> messages) throws Exception;
+   }
+
+   /**
+    * One thread for every companion's summaries. A daemon, so a model call still running at shutdown
+    * cannot hold the JVM open; the summary is only ever an optimisation of the transcript.
+    */
+   private static final ExecutorService SUMMARY_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+      Thread t = new Thread(r, "aicompanion-history-summary");
+      t.setDaemon(true);
+      return t;
+   });
+
+   /** A summary running, or finished and waiting to be spliced in. At most one per history. */
+   private volatile SummaryJob summaryJob;
+
+   /**
+    * The messages a summary replaces, and its text once known.
+    *
+    * <p>The chunk is held by identity: the live list keeps the same objects, so the splice can find
+    * exactly what was summarised however many messages have arrived since. {@code summary} is blank
+    * when the call failed.
+    */
+   private static final class SummaryJob {
+      final List<JsonObject> chunk;
+      volatile boolean finished;
+      volatile String summary = "";
+
+      SummaryJob(List<JsonObject> chunk) {
+         this.chunk = chunk;
+      }
+   }
+
+   /**
+    * Append, and once the history is long enough, summarise its oldest part without waiting for it.
+    *
+    * <p>⚠️ This used to call the model inline. {@code addAssistantMessage} is reached from the reply
+    * path, which for a client-brain turn is the server thread, so every summary froze the tick loop for
+    * a whole model call. Worse, a failed call dropped a single message and returned, which left the
+    * history over the limit, so <b>every later message made another blocking call</b>. holly logged a
+    * 401 from it (the server has no key when players think on their own clients); a free provider's
+    * 503s would have done the same with a key.
+    *
+    * <p>Now the call runs on {@link #SUMMARY_EXECUTOR} and its result is spliced in by the next call
+    * here, so every write to the list still happens where it always did. A failed summary drops the
+    * chunk it was given, the history shrinks, and nothing is tried again until it has grown back.
+    */
+   void addHistory(JsonObject text, boolean doCutOff, Summarizer summarizer, Executor executor) {
+      boolean spliced = this.applyFinishedSummary();
+      this.conversationHistory.add(text);
+      if (doCutOff && this.summaryJob == null && this.conversationHistory.size() > MAX_HISTORY) {
+         SummaryJob job = new SummaryJob(new ArrayList<>(this.conversationHistory.subList(1, SUMMARY_COUNT + 1)));
+         this.summaryJob = job;
+         List<JsonObject> copies = new ArrayList<>(job.chunk.size());
+         for (JsonObject msg : job.chunk) {
+            copies.add(Utils.deepCopy(msg));
          }
+         Runnable work = () -> {
+            try {
+               String summary = summarizer.summarize(copies);
+               job.summary = summary == null ? "" : summary;
+            } catch (Throwable e) {
+               LOGGER.warn("ConversationHistory: could not summarise the {} oldest messages ({}); they are "
+                     + "dropped without a summary.", copies.size(), e.toString());
+            }
+            job.finished = true;
+         };
+         try {
+            executor.execute(work);
+         } catch (RejectedExecutionException e) {
+            job.finished = true;
+         }
+         // A direct executor has already finished, so splice now rather than one message late.
+         spliced |= this.applyFinishedSummary();
+      }
+
+      if (spliced && this.historyFile != null) {
+         this.saveToFile();
       } else if (doCutOff && this.historyFile != null && ++this.unsavedMessages >= SAVE_EVERY) {
          this.saveToFile();
       }
    }
 
-   private String summarizeHistory(List<JsonObject> messages, Player2APIService player2apiService) {
+   /**
+    * Replace a finished summary's chunk with the summary, or with nothing if it failed.
+    *
+    * @return whether the list changed
+    */
+   private boolean applyFinishedSummary() {
+      SummaryJob job = this.summaryJob;
+      if (job == null || !job.finished) {
+         return false;
+      }
+      this.summaryJob = null;
+      // clear() ran while it was out: the chunk is gone, and notes about it would describe a
+      // conversation that was deliberately forgotten.
+      if (!containsIdentity(this.conversationHistory, job.chunk.get(0))) {
+         return false;
+      }
+      this.conversationHistory.removeIf(msg -> containsIdentity(job.chunk, msg));
+      if (!job.summary.isBlank()) {
+         JsonObject summaryMsg = new JsonObject();
+         // "system", not "assistant". Written as an assistant turn, the summary is a third layer
+         // of the companion reading its own words back as its own speech — the same failure the
+         // grounding guard exists to stop in the store, in the one place that guard cannot see.
+         // Measured on 2026-08-20: a fact the player stated aged out under the prompt budget and
+         // only the companion's paraphrases of it survived, so it went on citing itself as the
+         // source. As a system line it reads as notes about the conversation, which is what it is.
+         summaryMsg.addProperty("role", "system");
+         summaryMsg.addProperty("content", "Summary of earlier events: " + job.summary);
+         this.conversationHistory.add(Math.min(1, this.conversationHistory.size()), summaryMsg);
+      }
+      return true;
+   }
+
+   /** By reference: two messages with the same text are still two messages. */
+   private static boolean containsIdentity(List<JsonObject> list, JsonObject target) {
+      for (JsonObject msg : list) {
+         if (msg == target) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   private static String summarizeHistory(List<JsonObject> messages, Player2APIService player2apiService)
+         throws Exception {
       String summarizationPrompt = "    Our AI agent that has been chatting with user and playing minecraft.\n    Update agent's memory by summarizing the following conversation in the next response.\n\n    Use natural language, not JSON format.\n\n    Prioritize preserving important facts, things user asked agent to remember, useful tips.\n    Do not record stats, inventory, code or docs; limit to 500 chars.\n";
       ConversationHistory temp = new ConversationHistory(summarizationPrompt);
-
-      for (JsonObject msg : messages) {
-         temp.addHistory(Utils.deepCopy(msg), false, player2apiService);
-      }
-
-      try {
-         String resp = player2apiService.completeConversationToString(temp);
-         return resp;
-      } catch (Exception var6) {
-         var6.printStackTrace();
-         System.err.println("Error communicating with API");
-         return "";
-      }
+      temp.conversationHistory.addAll(messages);
+      return player2apiService.completeConversationToString(temp);
    }
 
    /**
@@ -215,9 +303,17 @@ public class ConversationHistory {
                JsonObject obj = repairLoadedLine(Utils.parseCleanedJson(line));
 
                loaded.add(obj);
-               if (loaded.size() > 64) {
-                  break;
-               }
+            }
+
+            // Keep the system prompt and the NEWEST messages. This used to stop reading after 65
+            // lines, which kept the oldest; harmless while the file could never be longer, but a
+            // summary still running when the history is saved leaves it longer, and the reload
+            // then forgot the most recent turns instead of the stalest.
+            if (loaded.size() > MAX_HISTORY + 1) {
+               List<JsonObject> trimmed = new ArrayList<>(MAX_HISTORY + 1);
+               trimmed.add(loaded.get(0));
+               trimmed.addAll(loaded.subList(loaded.size() - MAX_HISTORY, loaded.size()));
+               loaded = trimmed;
             }
 
             this.conversationHistory.clear();
