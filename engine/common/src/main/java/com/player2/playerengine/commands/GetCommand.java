@@ -9,13 +9,14 @@ import com.player2.playerengine.commands.base.CommandException;
 import com.player2.playerengine.commands.base.ItemList;
 import com.player2.playerengine.player2api.AgentCommandUtils;
 import com.player2.playerengine.tasks.base.Task;
+import com.player2.playerengine.tasks.container.GetFromStorageFirstTask;
 import com.player2.playerengine.util.ItemTarget;
 
 public class GetCommand extends Command {
    public GetCommand() throws CommandException {
       super(
          "get",
-         "Get a resource or Craft an item in Minecraft. You can craft item even if you don't have ingredients in inventory already. Examples: `get log 20` gets 20 logs, `get diamond_chestplate 1` gets 1 diamond chestplate. For equipments you have to specify the type of equipments like wooden, stone, iron, golden and diamond.",
+         "Get a resource or Craft an item in Minecraft. Takes it from the containers your owner has allowed first, then gathers or crafts the rest. You can craft item even if you don't have ingredients in inventory already. Examples: `get log 20` gets 20 logs, `get diamond_chestplate 1` gets 1 diamond chestplate. For equipments you have to specify the type of equipments like wooden, stone, iron, golden and diamond.",
          new Arg<>(ItemList.class, "items")
       );
    }
@@ -31,12 +32,19 @@ public class GetCommand extends Command {
          }
 
          if (targetTask != null) {
-            mod.runUserTask(targetTask, () -> this.finish());
+            GetFromStorageFirstTask task = new GetFromStorageFirstTask(items, targetTask);
+            mod.runUserTask(task, () -> {
+               String report = task.storageReport();
+               if (!report.isEmpty()) {
+                  mod.reportCommandResult(report);
+               }
+               this.finish();
+            });
          } else {
             this.finish();
          }
       } else {
-         mod.log("You must specify at least one item!");
+         mod.logAgentNotice("You must specify at least one item!", null);
          this.finish();
       }
    }

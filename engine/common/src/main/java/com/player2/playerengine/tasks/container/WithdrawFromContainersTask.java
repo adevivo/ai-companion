@@ -29,12 +29,24 @@ public class WithdrawFromContainersTask extends VisitContainersTask {
    private int searched;
    private boolean inventoryFull;
    private final List<String> takenFrom = new ArrayList<>();
+   /** Skip containers already seen without the item. For `get`, which can gather it instead. */
+   private final boolean skipKnownWithout;
 
    /** @param name what the agent called the item, used in the reply */
    public WithdrawFromContainersTask(ItemTarget target, String name, int count) {
+      this(target, name, count, false);
+   }
+
+   public WithdrawFromContainersTask(ItemTarget target, String name, int count, boolean skipKnownWithout) {
       this.target = target;
       this.name = name;
       this.wanted = count;
+      this.skipKnownWithout = skipKnownWithout;
+   }
+
+   /** How many were taken out. */
+   public int taken() {
+      return this.taken;
    }
 
    private int remaining() {
@@ -60,7 +72,9 @@ public class WithdrawFromContainersTask extends VisitContainersTask {
       }
       List<BlockPos> order = new ArrayList<>(has);
       order.addAll(unknown);
-      order.addAll(hasNot);
+      if (!this.skipKnownWithout) {
+         order.addAll(hasNot);
+      }
       return order;
    }
 
@@ -120,7 +134,8 @@ public class WithdrawFromContainersTask extends VisitContainersTask {
 
    @Override
    protected boolean isEqual(Task other) {
-      return other instanceof WithdrawFromContainersTask task && task.target.equals(this.target) && task.wanted == this.wanted;
+      return other instanceof WithdrawFromContainersTask task && task.target.equals(this.target) && task.wanted == this.wanted
+         && task.skipKnownWithout == this.skipKnownWithout;
    }
 
    @Override
