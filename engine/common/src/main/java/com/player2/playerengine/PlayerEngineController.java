@@ -169,6 +169,7 @@ public class PlayerEngineController {
       this.taskRunner.tick();
       this.inputControls.onTickPost();
       this.baritone.serverTick();
+      com.player2.playerengine.automaton.utils.OpenedDoors.tick(this.getEntity());
       this.player2apiService.trySendHeartbeat();
    }
 
@@ -181,6 +182,7 @@ public class PlayerEngineController {
       LifecycleEvent.SERVER_STOPPING.register(server -> {
          ConversationManager.onServerStopping();
          BaritoneComponents.clearAll();
+         com.player2.playerengine.automaton.utils.OpenedDoors.clearAll();
          ServerClock.detach();
       });
    }

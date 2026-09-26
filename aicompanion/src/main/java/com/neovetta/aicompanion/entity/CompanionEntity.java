@@ -461,6 +461,9 @@ public class CompanionEntity extends LivingEntity
     }
 
     private int aiFailures;
+    /** When the owner was last told about an AI failure; see onAiTickFailed. */
+    private long lastFailureToldAt;
+    private static final long FAILURE_TELL_INTERVAL_MILLIS = 60_000L;
     /** Set once the AI has failed too many times in a row; cleared by `/companion reload`. */
     private boolean aiDisabled;
     /**
@@ -499,7 +502,14 @@ public class CompanionEntity extends LivingEntity
             if (aiFailures == 1) {
                 AiCompanion.LOGGER.error("[{}] {}'s AI threw during tick; skipping this update",
                         AiCompanion.MOD_ID, name, failure);
-                tellOwner(name + " hit an internal error and skipped a step. Watch for it repeating.");
+                // At most once a minute. The counter above resets on every clean tick, so an error
+                // every few ticks was "the first of a run" each time: 21 identical chat lines in five
+                // seconds on 2026-09-26.
+                long now = System.currentTimeMillis();
+                if (now - lastFailureToldAt > FAILURE_TELL_INTERVAL_MILLIS) {
+                    lastFailureToldAt = now;
+                    tellOwner(name + " hit an internal error and skipped a step. Watch for it repeating.");
+                }
             }
             if (aiDisabled) {
                 AiCompanion.LOGGER.error("[{}] {}'s AI failed {} times in a row; disabling it. Last error:",

@@ -17,6 +17,9 @@
 
 package com.player2.playerengine.automaton.api.entity;
 
+import com.player2.playerengine.automaton.utils.OpenedDoors;
+import com.player2.playerengine.automaton.utils.EntityPlaceContext;
+import net.minecraft.world.item.BlockItem;
 import com.player2.playerengine.automaton.api.utils.IBucketAccessor;
 import com.mojang.logging.LogUtils;
 import java.util.Objects;
@@ -428,23 +431,43 @@ public class LivingEntityInteractionManager {
                if (actionResult.consumesAction()) {
                   return actionResult;
                }
+               // Vanilla's next step, which this fork left out: a block with nothing to do for the held
+               // item is used with an empty hand. That is what opens a door. Without it, right-clicking a
+               // closed door with anything in hand fell through to placing the held item AGAINST the
+               // door (a torch, 2026-09-26, which crashed the tick 21 times), the door never opened, and
+               // the pathfinder broke it down instead.
+               if (actionResult instanceof InteractionResult.TryEmptyHandInteraction && hand == InteractionHand.MAIN_HAND) {
+                  boolean wasClosed = OpenedDoors.isClosedDoorOrGate(blockState);
+                  InteractionResult emptyHand = blockState.useWithoutItem(world, null, hitResult);
+                  if (emptyHand.consumesAction()) {
+                     if (wasClosed) {
+                        OpenedDoors.opened(player, blockPos);
+                     }
+                     return emptyHand;
+                  }
+               }
             } catch (NullPointerException var14) {
             }
          }
 
          if (!stack.isEmpty()) {
-            UseOnContext itemUsageContext = new UseOnContext(player.level(), null, hand, player.getItemInHand(hand), hitResult) {
-               public boolean isSecondaryUseActive() {
-                  return this.isSecondaryUseActive();
-               }
-            };
             InteractionResult actionResult2;
-            if (this.isCreative()) {
-               int i = stack.getCount();
-               actionResult2 = stack.useOn(itemUsageContext);
-               stack.setCount(i);
+            int i = stack.getCount();
+            if (stack.getItem() instanceof BlockItem blockItem) {
+               // Placed through the entity-aware context, not stack.useOn: BlockItem.useOn builds its
+               // own context from a null player, and every block that orients itself to the placer
+               // (torches, stairs, doors) dereferences it. See EntityPlaceContext.
+               actionResult2 = blockItem.place(new EntityPlaceContext(player, player.level(), hand, player.getItemInHand(hand), hitResult));
             } else {
+               UseOnContext itemUsageContext = new UseOnContext(player.level(), null, hand, player.getItemInHand(hand), hitResult) {
+                  public boolean isSecondaryUseActive() {
+                     return false;
+                  }
+               };
                actionResult2 = stack.useOn(itemUsageContext);
+            }
+            if (this.isCreative()) {
+               stack.setCount(i);
             }
 
             return actionResult2;
