@@ -197,6 +197,26 @@ public class MobDefenseChain extends SingleTaskChain {
       this.reportedStandReason = false;
    }
 
+   /** Game tick until which a bodyguard job is running; see {@link #guardFor}. */
+   private long guardUntilTick = 0L;
+
+   /**
+    * Do not retreat, from a fight or from a fusing creeper, for {@code seconds}.
+    *
+    * <p>Set every tick by {@code BodyguardTask}, with a one-second life, so it lapses on its own the
+    * moment the task stops or is interrupted; 0 clears it at once. Unlike {@link #standGroundFor} it
+    * also covers the creeper escape, which runs before any fight logic and was what sent a guarding
+    * companion backing away from the creeper that then hurt its owner (holly, 2026-09-26).
+    */
+   public void guardFor(PlayerEngineController mod, double seconds) {
+      this.guardUntilTick = seconds <= 0.0 ? 0L : mod.getWorld().getGameTime() + (long) (seconds * 20.0);
+   }
+
+   /** Whether a bodyguard job is suppressing retreat right now. */
+   public boolean isGuarding(PlayerEngineController mod) {
+      return this.guardUntilTick > 0L && mod.getWorld().getGameTime() < this.guardUntilTick;
+   }
+
    /** Whether a {@code stand_ground} override is currently suppressing retreat. */
    public boolean isStandingGround(PlayerEngineController mod) {
       return this.standGroundUntilTick > 0L && mod.getWorld().getGameTime() < this.standGroundUntilTick;
@@ -257,6 +277,9 @@ public class MobDefenseChain extends SingleTaskChain {
     * something hits you is strictly worse than swinging back.
     */
    private boolean shouldFleeNow(PlayerEngineController mod, List<LivingEntity> toDealWithList) {
+      if (this.isGuarding(mod)) {
+         return false; // BodyguardTask decides; it gives up the fight itself when she is nearly dead
+      }
       if (this.isStandingGround(mod)) {
          if (!this.reportedStandReason) {
             this.reportedStandReason = true;
@@ -443,7 +466,9 @@ public class MobDefenseChain extends SingleTaskChain {
                Slot offhandSlot = PlayerSlot.getOffhandSlot(mod.getInventory());
                Item offhandItem = StorageHelper.getItemStackInSlot(offhandSlot).getItem();
                Creeper blowingUp = this.getClosestFusingCreeper(mod);
-               if (blowingUp != null && blowingUp.distanceTo(mod.getEntity()) <= 16.0F) {
+               // Not while bodyguarding: the creeper is the threat she is there to stop, and backing
+               // away from it is what let one hurt her owner. She fights it instead (hit, step back).
+               if (blowingUp != null && blowingUp.distanceTo(mod.getEntity()) <= 16.0F && !this.isGuarding(mod)) {
                   if (mod.getFoodChain().needsToEat() && !(mod.getPlayer().getHealth() < 9.0F)
                      || !hasShield(mod)
                      || mod.getEntityTracker().entityFound(AbstractThrownPotion.class)

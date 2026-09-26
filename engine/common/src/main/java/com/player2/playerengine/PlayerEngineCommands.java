@@ -2,6 +2,7 @@ package com.player2.playerengine;
 
 import com.player2.playerengine.commands.AttackPlayerOrMobCommand;
 import com.player2.playerengine.commands.BodyLanguageCommand;
+import com.player2.playerengine.commands.BodyguardCommand;
 import com.player2.playerengine.commands.BuildStructureCommand;
 import com.player2.playerengine.commands.ChestsCommand;
 import com.player2.playerengine.commands.DepositCommand;
@@ -50,6 +51,7 @@ public class PlayerEngineCommands {
                   new DigCommand(),
                   new IdleCommand(),
                   new HeroCommand(),
+                  new BodyguardCommand(),
                   new LocateStructureCommand(),
                   new StopCommand(),
                   new FoodCommand(),
