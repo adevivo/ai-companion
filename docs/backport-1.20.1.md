@@ -348,6 +348,8 @@ re-apply the persona there, and the old message is correct.
 - `6a583f0` — the codegen request lists the inventory and seen allowed containers. Tags
   `[use inventory]` and `[gather ok]`, written by the turn model, control gathering; a plan short
   of more than 64 items asks first. Tests: `BuildTagsTest`.
+- `c095043` — `[gather ok]` counts only within 10 minutes of the companion asking; a finished build
+  reports the block count to the model and tells it not to list features it has not seen.
 
 **Port:** depends on 14 (`ChestPermissions`, `GetFromStorageFirstTask`) for the container parts.
 
