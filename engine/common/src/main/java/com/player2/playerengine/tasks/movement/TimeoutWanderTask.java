@@ -1,6 +1,7 @@
 package com.player2.playerengine.tasks.movement;
 
 import com.player2.playerengine.PlayerEngineController;
+import com.player2.playerengine.chains.UserTaskChain;
 import com.player2.playerengine.util.Debug;
 import com.player2.playerengine.tasks.entity.KillEntitiesTask;
 import com.player2.playerengine.tasks.base.ITaskRequiresGrounded;
@@ -54,6 +55,23 @@ public class TimeoutWanderTask extends Task implements ITaskRequiresGrounded {
    private Task unstuckTask = null;
    private int failCounter;
    private double wanderDistanceExtension;
+
+   /**
+    * Consecutive stalled progress checks (under 0.1 blocks moved in 6 s) before the user's command is
+    * given up on — 10 is about a minute of standing still.
+    *
+    * <p>⚠️ An unbounded wander ({@link #TimeoutWanderTask()}, what most resource tasks fall back to
+    * when nothing they want is loaded) can never finish: {@link #isFinished()} returns false for an
+    * infinite distance before it ever looks at {@link #failCounter}. Measured 2026-09-25: "get wool 3"
+    * in a snow biome with no sheep logged "Failed exploring." every 6 s for three minutes and would
+    * have gone on forever, with the model told nothing and the owner watching a companion stand still.
+    * Finishing only the wander would not help either — the parent hands back a new one next tick.
+    */
+   private static final int STALLS_BEFORE_GIVING_UP = 10;
+   /** A gap this long between stalls means it moved in between, so the streak starts over. */
+   private static final long STALL_STREAK_GAP_MS = 15_000L;
+   private int stallStreak;
+   private long lastStallMs;
 
    public TimeoutWanderTask(float distanceToWander, boolean increaseRange) {
       this.distanceToWander = distanceToWander;
@@ -239,10 +257,49 @@ public class TimeoutWanderTask extends Task implements ITaskRequiresGrounded {
                if (this.progressChecker.lastBreakingBlock != null) {
                }
             }
+
+            // Counted for forceExplore too: it skips the log line above, not the being stuck.
+            this.giveUpIfStalled(mod);
          }
 
          return null;
       }
+   }
+
+   /**
+    * Fail the user's whole command once this wander has stood still for too long.
+    *
+    * <p>The ROOT task is failed, not this one: the chain sees it stopped on its next tick and runs
+    * the command's finish handler, which is what reports the recorded failure to the model. Only
+    * when the wander is part of the user's own command — a food or defence chain's wander is not
+    * ours to cancel, and the idle task has nobody waiting on it.
+    */
+   private void giveUpIfStalled(PlayerEngineController mod) {
+      long now = System.currentTimeMillis();
+      this.stallStreak = now - this.lastStallMs > STALL_STREAK_GAP_MS ? 1 : this.stallStreak + 1;
+      this.lastStallMs = now;
+      if (this.stallStreak < STALLS_BEFORE_GIVING_UP) {
+         return;
+      }
+
+      UserTaskChain chain = mod.getUserTaskChain();
+      // Identity, not contains(): Task.equals is isEqual, and every unbounded wander equals every other.
+      if (mod.getTaskRunner().getCurrentTaskChain() != chain
+            || chain.isRunningIdleTask()
+            || chain.getTasks().isEmpty()
+            || chain.getTasks().stream().noneMatch(t -> t == this)) {
+         return;
+      }
+
+      Task root = chain.getTasks().get(0);
+      this.stallStreak = 0;
+      mod.logAgentNotice(
+         "Gave up on " + root + ": stood still for about a minute searching for what it needs, and "
+            + "nothing reachable turned up nearby. Running the same command again here will get stuck "
+            + "the same way — use what is already in the inventory, try a different material or "
+            + "approach, or ask the owner for the items.",
+         "I gave up — I searched for a minute and couldn't find what I needed anywhere I could reach.");
+      root.fail("stuck exploring for " + STALLS_BEFORE_GIVING_UP + " progress checks");
    }
 
    @Override
