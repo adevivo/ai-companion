@@ -36,8 +36,8 @@ The model decides *what* to do and *what to say*. Walking, mining, crafting and 
 - **Bodyguard** *(1.21.11)*. "Protect me" keeps her at your side, taking on anything that comes for you, creepers first.
 - **Remembers you** *(1.21.11, optional)*. Facts you tell her carry over to later sessions, other worlds and servers.
 - **Chests, with permission** *(1.21.11)*. She uses only the chests you've opened yourself or told her to use.
-- **More than one.** Keep a roster, each companion with its own name, personality, skin (any Minecraft username, or your own PNG) and voice.
-- **Skills.** Ready-made routines (lumberjack, farming, fishing, harvest, bodyguard, staircase mine, and more) are plain Markdown files you can edit or add to.
+- **More than one.** Keep a roster, each companion with its own name, personality, skin (your own PNG, or any Minecraft username *(1.21.11)*) and voice.
+- **Skills.** Ready-made routines (lumberjack, farming, fishing, harvest, home guard, staircase mine, and bodyguard *(1.21.11)*) are plain Markdown files you can edit or add to.
 - **See how it's going.** On-screen panels show her health and hunger, where she is, and how many tokens you're spending.
 
 ## Talking to her
@@ -59,7 +59,7 @@ Just chat. `Ava, get me 20 logs` reaches Ava. `all: back to base` reaches every 
 The mod needs an **OpenAI-compatible chat endpoint** to think with:
 
 - **Local, private and free:** [llama.cpp](https://github.com/ggml-org/llama.cpp), [Ollama](https://ollama.com), LM Studio or similar, on your own machine or LAN. Use a non-thinking instruct model; Qwen2.5 7B–14B works well.
-- **Hosted:** any OpenAI-compatible API with your own key (OpenRouter, xAI, OpenAI…). Most of each request is cached, which keeps turns cheap, and an optional hard cap stops runaway spending.
+- **Hosted:** any OpenAI-compatible API with your own key (OpenRouter, xAI, OpenAI…). An optional hard cap stops runaway spending, and on 1.21.11 most of each request is cached, which keeps turns cheap.
 
 **Memory** (optional, off by default) also needs an embedding model. The easy route is Ollama with `nomic-embed-text`.
 
