@@ -71,9 +71,13 @@ public final class CompanionConfigChat {
 
     private static final Gson PRETTY = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 
-    /** Substrings that mark a value as secret; shown redacted by {@code show} and {@code get}. */
-    private static final List<String> SECRET_HINTS =
-            List.of("apikey", "api_key", "token", "secret", "password");
+    /**
+     * Substrings of a key's own name that mark its value as secret; shown redacted by {@code show}
+     * and {@code get}. A key ENDING in "token" is secret too (an auth token), but not one containing
+     * it: "token" as a plain substring hid {@code llm.maxTokens}, the setting a player without Cloth
+     * most needs to read (observed 2026-09-26).
+     */
+    private static final List<String> SECRET_HINTS = List.of("apikey", "api_key", "secret", "password");
 
     public static boolean clothPresent() {
         return FabricLoader.getInstance().isModLoaded(CLOTH_ID);
@@ -192,6 +196,9 @@ public final class CompanionConfigChat {
         }
         List<Leaf> leaves = new ArrayList<>();
         flatten("", root, leaves);
+        // Settings only. The "_" keys are help paragraphs, about half the file; listing them buried
+        // the values under screens of prose. They are still readable one at a time with get.
+        leaves.removeIf(leaf -> leaf.path().substring(leaf.path().lastIndexOf('.') + 1).startsWith("_"));
         source.sendFeedback(Component.literal("aicompanion.json - " + leaves.size() + " settings")
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD));
         for (Leaf leaf : leaves) {
@@ -200,7 +207,8 @@ public final class CompanionConfigChat {
                     .append(Component.literal(redactIfSecret(leaf.path(), leaf.value()))
                             .withStyle(ChatFormatting.WHITE)));
         }
-        source.sendFeedback(Component.literal("Change one with /aicompanion config set <path> <value>")
+        source.sendFeedback(Component.literal("Change one with /aicompanion config set <path> <value>;"
+                + " read a setting's help with /aicompanion config get <section>._<name>")
                 .withStyle(ChatFormatting.DARK_GRAY));
         return 1;
     }
@@ -393,11 +401,18 @@ public final class CompanionConfigChat {
      * in someone's upload, so anything that looks like a credential prints as its length only.
      */
     private static String redactIfSecret(String dotted, String value) {
-        String lower = dotted.toLowerCase(Locale.ROOT);
+        // Only the last segment, and never a "_" help text: "_apiKey" is advice about the key, not
+        // the key, and was being hidden along with it.
+        String key = dotted.substring(dotted.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+        if (key.startsWith("_")) {
+            return value;
+        }
+        boolean secret = key.endsWith("token");
         for (String hint : SECRET_HINTS) {
-            if (lower.contains(hint)) {
-                return value.isEmpty() ? "(unset)" : "(" + value.length() + " chars, hidden)";
-            }
+            secret |= key.contains(hint);
+        }
+        if (secret) {
+            return value.isEmpty() ? "(unset)" : "(" + value.length() + " chars, hidden)";
         }
         return value;
     }

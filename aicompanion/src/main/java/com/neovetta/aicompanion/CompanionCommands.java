@@ -145,7 +145,13 @@ public final class CompanionCommands {
                         .then(Commands.literal("reload").requires(player("reload"))
                                 .executes(ctx -> reload(ctx.getSource())))
                         .then(Commands.literal("config").requires(player("config"))
-                                .executes(ctx -> config(ctx.getSource())))
+                                .executes(ctx -> config(ctx.getSource()))
+                                // The chat editor is a CLIENT command under /aicompanion, so
+                                // "/companion config show" was a bare "Incorrect argument". Typed
+                                // twice from habit on 2026-09-26; say where it actually lives.
+                                .then(Commands.argument("rest", StringArgumentType.greedyString())
+                                        .executes(ctx -> configMisrouted(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "rest")))))
                         .then(Commands.literal("radar").requires(player("radar"))
                                 .executes(ctx -> radar(ctx.getSource())))
                         .then(Commands.literal("hud").requires(player("hud"))
@@ -801,6 +807,12 @@ public final class CompanionCommands {
         }
         NetworkManager.sendToPlayer(player, AiCompanion.OPEN_CONFIG_SCREEN, emptyBuf(player));
         return 1;
+    }
+
+    private static int configMisrouted(CommandSourceStack source, String rest) {
+        source.sendFailure(Component.literal("Settings from chat live under /aicompanion: try /aicompanion config "
+                + rest.trim() + " (show, get <path>, set <path> <value>, path). /companion config opens the screen."));
+        return 0;
     }
 
     /**
