@@ -403,6 +403,24 @@ milder, but the retry-on-every-message loop is the same.
 
 ---
 
+## 19. Parking on logout drops the unsaved end of every conversation 🔴
+
+**Status:** not ported. **Likely present** on `main` and `fix/perception-radius`: `CompanionParking.java:136`
+calls `ConversationManager.forget` the same way. Check whether its `forget` saves first.
+
+**Commit:** see `git log -S"history saved"` (engine 1.21.11-1.0.39).
+
+**What changed:** `ConversationManager.forget` saved nothing. Parking calls it when the owner disconnects,
+which in single player is *before* the server stops, so `onServerStopping`'s save found an empty map
+("saved history for 0 of 0"), and everything since the last periodic save (up to 7 messages) was lost on
+every logout. Found on a fresh install 2026-09-26: a four-message session wrote no history file at all.
+`forget` now flushes the history before dropping it, and logs "(history saved)". Death and
+`/companion despawn` go through the same path.
+
+**Port:** trivial. The same few lines in the 1.20.1 `ConversationManager.forget`.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).
