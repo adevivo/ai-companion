@@ -149,6 +149,8 @@ public class ConversationManager {
         }
         queueData.clear();
         lastEarshotNotice.clear();
+        lastHeldHint.clear();
+        lastNotYours.clear();
         // The pool is static, so an in-flight request at shutdown would otherwise leave a slot
         // permanently "busy" and shrink the pool for the rest of the game process.
         llmCompleters.forEach(LLMCompleter::reset);
@@ -265,6 +267,9 @@ public class ConversationManager {
         AgentConversationData addressedData = null;
         String addressedBody = null;
         float addressedDistance = Float.MAX_VALUE;
+        AgentConversationData mentionedData = null;
+        float mentionedDistance = Float.MAX_VALUE;
+        AgentConversationData someoneElses = null;
         StringBuilder diagnostics = new StringBuilder();
         for (AgentConversationData data : queueData.values()) {
             float distance = StatusUtils.getDistanceToUsername(data.getMod(), msg.userName());
@@ -276,6 +281,9 @@ public class ConversationManager {
             // for the name match or the nearest-wins fallback. Skipped after the diagnostics line so
             // "why did nothing answer me" is still answerable from the log.
             if (!mine) {
+                if (close && someoneElses == null && ChatAddressing.mentions(msg.message(), data.getName())) {
+                    someoneElses = data;
+                }
                 continue;
             }
             if (distance < nearest) {
@@ -289,6 +297,26 @@ public class ConversationManager {
                 addressedData = data;
                 addressedBody = body;
                 addressedDistance = distance;
+            }
+            // Named anywhere else in the line ("thanks ava", "hiya ava!"): hers too, delivered whole.
+            if (body == null && ChatAddressing.mentions(msg.message(), data.getName())
+                    && distance < mentionedDistance) {
+                mentionedData = data;
+                mentionedDistance = distance;
+            }
+        }
+        if (addressedData == null && mentionedData != null) {
+            addressedData = mentionedData;
+            addressedBody = msg.message();
+            addressedDistance = mentionedDistance;
+        }
+
+        // Talking to a companion that is not theirs: say so once in a while, instead of the silence
+        // that reads as a broken mod from the speaker's seat.
+        if (addressedData == null && someoneElses != null) {
+            Optional<String> notOurs = notYoursNotice(msg.userName(), someoneElses);
+            if (notOurs.isPresent()) {
+                return List.of(Component.literal(notOurs.get()).withStyle(ChatFormatting.GRAY));
             }
         }
 
@@ -305,6 +333,27 @@ public class ConversationManager {
         boolean addressed = addressedData != null;
         AgentConversationData target = addressed ? addressedData : nearestData;
         float targetDistance = addressed ? addressedDistance : nearest;
+
+        // With other people online, an unaddressed line is not assumed to be for the companion.
+        if (!addressed && target != null && targetDistance < messagePassingMaxDistance) {
+            List<String> others = otherPlayersOnline(target, msg.userName());
+            if (!others.isEmpty() && !hasTriggerPrefix(msg.speakerUuid())) {
+                boolean forAPlayer = ChatAddressing.mentionsAnyPlayer(msg.message(), others);
+                boolean inConversation = target.getLastSpokeNanos() != 0L
+                        && System.nanoTime() - target.getLastSpokeNanos() < CONVERSATION_WINDOW_NANOS;
+                if (forAPlayer || !inConversation) {
+                    LOGGER.info("ConversationManager: not passing \"{}\" from {} to {} — other players are online"
+                                    + " and it {}", msg.message(), msg.userName(), target.getName(),
+                            forAPlayer ? "names one of them" : "neither names her nor answers her");
+                    if (forAPlayer) {
+                        return List.of();
+                    }
+                    Optional<String> hint = heldLineHint(msg.userName(), target.getName());
+                    return hint.map(h -> List.of((Component) Component.literal(h).withStyle(ChatFormatting.GRAY)))
+                            .orElse(List.of());
+                }
+            }
+        }
         boolean delivered = target != null && targetDistance < messagePassingMaxDistance;
         if (delivered) {
             target.onEvent(addressed
@@ -450,6 +499,79 @@ public class ConversationManager {
     private static final long EARSHOT_NOTICE_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private static final ConcurrentHashMap<String, Long> lastEarshotNotice = new ConcurrentHashMap<>();
+
+    /**
+     * How long after a companion speaks an owner's unaddressed line still counts as an answer to her,
+     * when other people are online. Long enough to read a reply and type "yes", short enough that
+     * chat with somebody else a few minutes later is not swept up.
+     */
+    private static final long CONVERSATION_WINDOW_NANOS = TimeUnit.SECONDS.toNanos(60);
+
+    /** The held-line explanation is for learning the rule, so it is rare: once per ten minutes. */
+    private static final long HELD_HINT_INTERVAL_NANOS = TimeUnit.MINUTES.toNanos(10);
+    private static final long NOT_YOURS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(60);
+    private static final ConcurrentHashMap<String, Long> lastHeldHint = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Long> lastNotYours = new ConcurrentHashMap<>();
+
+    /**
+     * Other human players online, by name, excluding the speaker. Empty in single player and for the
+     * only person on a server, which is what keeps "everything I say is for her" there. A world
+     * opened to LAN with a friend in it counts as multiplayer, as it should.
+     */
+    private static List<String> otherPlayersOnline(AgentConversationData data, String speaker) {
+        try {
+            MinecraftServer server = data.getMod().getWorld().getServer();
+            List<String> out = new ArrayList<>();
+            for (var p : server.getPlayerList().getPlayers()) {
+                String name = p.getName().getString();
+                if (!name.equalsIgnoreCase(speaker)) {
+                    out.add(name);
+                }
+            }
+            return out;
+        } catch (Throwable e) {
+            return List.of(); // never let routing fail closed on a lookup problem
+        }
+    }
+
+    /**
+     * Whether this speaker set a trigger prefix. Their chat has then already been filtered to the
+     * prefixed lines, which are aimed at the companion by definition. Asked through
+     * {@code applyTriggerPrefix} because the core has no getter: a line that cannot carry any
+     * prefix comes back null only when one is set.
+     */
+    private static boolean hasTriggerPrefix(UUID speaker) {
+        return speaker != null && PlayerPreferences.applyTriggerPrefix(speaker, "\u0000") == null;
+    }
+
+    private static Optional<String> heldLineHint(String userName, String companionName) {
+        if (!throttle(lastHeldHint, userName, HELD_HINT_INTERVAL_NANOS)) {
+            return Optional.empty();
+        }
+        return Optional.of("(" + companionName + " didn't take that as meant for her: other players are online, so she"
+                + " hears lines with her name in them, or replies within a minute of her talking to you.)");
+    }
+
+    private static Optional<String> notYoursNotice(String userName, AgentConversationData companion) {
+        if (!throttle(lastNotYours, userName, NOT_YOURS_INTERVAL_NANOS)) {
+            return Optional.empty();
+        }
+        String owner = companion.getMod() == null || companion.getMod().getOwner() == null
+                ? null : companion.getMod().getOwnerUsername();
+        return Optional.of(companion.getName() + " belongs to " + (owner == null ? "another player" : owner)
+                + " and only answers them.");
+    }
+
+    /** True, and records now, when {@code key} has not been let through within {@code interval}. */
+    private static boolean throttle(ConcurrentHashMap<String, Long> last, String key, long interval) {
+        long now = System.nanoTime();
+        Long prev = last.get(key);
+        if (prev != null && now - prev < interval) {
+            return false;
+        }
+        last.put(key, now);
+        return true;
+    }
 
     private static Optional<String> outOfEarshotNotice(String userName, String companionName, float distance) {
         long now = System.nanoTime();
