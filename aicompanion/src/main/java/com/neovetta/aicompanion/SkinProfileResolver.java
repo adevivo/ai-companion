@@ -98,6 +98,10 @@ public final class SkinProfileResolver {
                                     AiCompanion.MOD_ID, username);
                             return;
                         }
+                        // Said on success too: otherwise a working lookup and one that never ran
+                        // look identical in the log.
+                        AiCompanion.LOGGER.info("[{}] resolved the skin of username '{}'",
+                                AiCompanion.MOD_ID, username);
                         server.execute(() -> onResolved.accept(blob));
                     });
         } catch (Exception e) {

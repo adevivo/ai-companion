@@ -735,12 +735,13 @@ public final class CompanionCommands {
      * Re-read {@code config/aicompanion.json} and apply it without a restart. LLM/TTS/behavior
      * settings are volatile statics read at call time, so they take effect on the next request.
      *
-     * <p>⚠️ A roster edit does NOT reach a live companion. Every live companion's system prompt is
+     * <p>⚠️ This server-side half does NOT apply roster edits. Every live companion's system prompt is
      * rebuilt, but from the identity saved on the entity, which {@code CompanionConfig.entryFor}
      * prefers on purpose (the file is the operator's and must not rewrite other players' companions).
-     * So persona, name, description and skin all keep what the companion was spawned with until it is
-     * despawned and spawned again. This message used to say "persona re-applied", which sent owners
-     * looking for why their edit had not taken.
+     * A player's OWN edit arrives instead through the client half: the reload makes their client
+     * re-announce its roster, and {@code ClientProfiles.announce} applies it to that player's live
+     * companions (skin, voice, persona, description; a rename is a new companion). Before
+     * 2026-09-26 nothing did, and an edit waited for a despawn and spawn.
      */
     private static int reload(CommandSourceStack source) {
         // The caller's own machine first, and without asking anyone's permission: these are the

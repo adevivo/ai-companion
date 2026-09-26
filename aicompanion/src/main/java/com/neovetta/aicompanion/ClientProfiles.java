@@ -99,10 +99,58 @@ public final class ClientProfiles {
         } else {
             ROSTERS.put(id, List.copyOf(accepted));
         }
-        AiCompanion.LOGGER.info("[{}] {} announced {} companion(s), {} accepted{}",
+        int refreshed = applyToLiveCompanions(player, accepted);
+        AiCompanion.LOGGER.info("[{}] {} announced {} companion(s), {} accepted{}{}",
                 AiCompanion.MOD_ID, player.getName().getString(), announced.size(), accepted.size(),
+                refreshed == 0 ? "" : ", " + refreshed + " live companion(s) updated",
                 result.rejections().isEmpty() ? "" : " — " + String.join("; ", result.rejections()));
         return result.rejections();
+    }
+
+    /**
+     * Put an edited roster onto this player's companions that are already out.
+     *
+     * <p>A companion keeps its identity on its own body so that the operator's file can never
+     * rewrite somebody else's companion. But that also meant the OWNER's edits never reached a live
+     * one: on 2026-09-26 a skin changed to a Mojang username was announced on every join, reload and
+     * save, and the companion, restored from its park file each time, kept the old face. The owner's
+     * own announcement is the authority for the owner's own companions, so it is applied here: skin,
+     * voice, persona and description, matched by name. Unchanged entries are skipped, so the join
+     * that announces the same roster again costs nothing and does not restart a skin lookup.
+     *
+     * @return how many live companions changed
+     */
+    private static int applyToLiveCompanions(ServerPlayer player, List<CompanionConfig.RosterEntry> accepted) {
+        MinecraftServer server = player.level().getServer();
+        if (server == null || accepted.isEmpty()) {
+            return 0;
+        }
+        UUID owner = player.getUUID();
+        int changed = 0;
+        for (net.minecraft.server.level.ServerLevel level : server.getAllLevels()) {
+            for (net.minecraft.world.entity.Entity entity : level.getAllEntities()) {
+                if (!(entity instanceof com.neovetta.aicompanion.entity.CompanionEntity companion)
+                        || !owner.equals(companion.getOwnerUuid()) || companion.identity() == null) {
+                    continue;
+                }
+                for (CompanionConfig.RosterEntry entry : accepted) {
+                    if (!entry.name().equalsIgnoreCase(companion.identity().name())) {
+                        continue;
+                    }
+                    if (!entry.equals(companion.identity())) {
+                        companion.applyRosterEntry(entry);
+                        com.player2.playerengine.PlayerEngineController ctrl = companion.getController();
+                        if (ctrl != null && ctrl.getAIPersistantData() != null) {
+                            ctrl.getAIPersistantData().setCharacter(CompanionConfig.character(entry));
+                            ctrl.getAIPersistantData().updateSystemPrompt();
+                        }
+                        changed++;
+                    }
+                    break;
+                }
+            }
+        }
+        return changed;
     }
 
     /** They left. Drop everything of theirs — see the class note on why this is not a cache. */
