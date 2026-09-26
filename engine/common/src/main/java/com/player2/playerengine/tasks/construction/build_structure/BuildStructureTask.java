@@ -135,6 +135,14 @@ public class BuildStructureTask extends Task {
     private final boolean inventoryOnly;
     /** The owner has agreed to a large gather for this build. */
     private final boolean gatherApproved;
+    /**
+     * When each companion last asked its owner about gathering. {@link #TAG_GATHER_OK} counts only
+     * within {@link #ASK_VALID_MILLIS} of that question. Observed 2026-09-26: asked for "a large stone
+     * brick castle", the turn model added [gather ok] on its own, so the build never asked at all.
+     */
+    private static final Map<UUID, Long> ASKED_ABOUT_GATHERING = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long ASK_VALID_MILLIS = 10 * 60_000L;
+
     /** A plan bigger than this in missing items asks the owner before setting off to gather. */
     private static final int ASK_BEFORE_GATHERING_OVER = 64;
     /** Where the plan being built came from; only a model's plan can be sent back to be redesigned. */
@@ -1625,6 +1633,7 @@ public class BuildStructureTask extends Task {
      * <p>No chat line of its own: the model asks, in its own words and so in the player's language.
      */
     private Task askBeforeGathering(List<SetBlockCommand> plan, Map<Item, Integer> missing, String why) {
+        ASKED_ABOUT_GATHERING.put(mod.getPlayer().getUUID(), System.currentTimeMillis());
         BuildPlanCache.remember(mod, description, plan);
         String what = BuildMaterials.describe(missing);
         mod.logAgentNotice(String.format(
@@ -1637,6 +1646,12 @@ public class BuildStructureTask extends Task {
         isDone = true;
         actuallyRunningTask = null;
         return null;
+    }
+
+    /** Whether this companion asked its owner about gathering recently enough for a yes to count. */
+    private boolean askedRecently() {
+        Long at = ASKED_ABOUT_GATHERING.get(mod.getPlayer().getUUID());
+        return at != null && System.currentTimeMillis() - at < ASK_VALID_MILLIS;
     }
 
     private static int total(Map<Item, Integer> counts) {
@@ -1915,7 +1930,11 @@ public class BuildStructureTask extends Task {
                 return askBeforeGathering(placeTask.plan(), short_,
                         "you were asked to use only what you carry, and no design that fits was found.");
             }
-            if (!needed.isEmpty() && !gatherApproved && planSource != PlanSource.SAVED
+            boolean approved = gatherApproved && askedRecently();
+            if (gatherApproved && !approved) {
+                LOGGER.info("Build ({}) ignoring [gather ok]: the owner was never asked about gathering", description);
+            }
+            if (!needed.isEmpty() && !approved && planSource != PlanSource.SAVED
                     && total(short_) > ASK_BEFORE_GATHERING_OVER) {
                 return askBeforeGathering(placeTask.plan(), short_,
                         "gathering this much takes a long time and some of it may not be anywhere near.");
@@ -1967,6 +1986,15 @@ public class BuildStructureTask extends Task {
                 // build reported as finished that never placed a block; this is the line that is
                 // only ever printed when blocks really went into the world.
                 mod.tellOwner(String.format("Done — placed %d blocks.", placeTask.changed()));
+                // The model has not seen the result, only its own description of what was wanted.
+                // Observed 2026-09-26: after a cut-down retry placed 162 blocks, it announced "four
+                // corner towers, battlements, gatehouse, interior floors — all done".
+                mod.reportCommandResult(String.format(
+                        "Placed %d blocks. You have not seen the result, and a plan often comes out simpler than its"
+                                + " description%s. Say it is built and how many blocks; do not list features that were"
+                                + " asked for as if you saw them.",
+                        placeTask.changed(),
+                        numErrors > 0 ? " (this one was redesigned after the first attempt failed, so it is likely simpler)" : ""));
             }
             if (placeTask.planWorthKeeping()) {
                 BuildPlanCache.remember(mod, description, placeTask.plan());
