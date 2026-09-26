@@ -138,6 +138,123 @@ Check the 1.20.1 screen's labels before copying the table. It was generated from
 
 ---
 
+## 8. A companion that finds nothing nearby wanders in place forever 🔴
+
+**Status:** not ported. **Confirmed present:** 1.20.1's
+`engine/src/autoclef/java/adris/altoclef/tasks/movement/TimeoutWanderTask.java` has the same
+`isFinished()` that returns false for an infinite distance before checking `failCounter`.
+
+**Commit:** *Give up on a command whose wander has stood still for a minute* (this entry's commit).
+
+**Symptom:** `[Alto Clef] Failed exploring.` in the server log every ~6 s with no end. The companion
+stands still, and the model is never told. Observed 2026-09-25: `get wool 3` in a snow biome with no
+sheep ran more than three minutes before a human stepped in.
+
+**Cause:** most resource tasks fall back to an unbounded `new TimeoutWanderTask()` when nothing they
+want is loaded, and an unbounded wander can never finish. Ending only the wander does not help,
+because the parent hands back a new one on the next tick.
+
+**Port:** `giveUpIfStalled()` and its four fields go into the 1.20.1 `TimeoutWanderTask`, called
+after the `Failed exploring.` block. Rename for the old engine: `PlayerEngineController` →
+`AltoClefController`, and `chains.UserTaskChain` stays at `adris.altoclef.chains`. `logAgentNotice`,
+`isRunningIdleTask`, `TaskChain.getTasks()` and `TaskRunner.getCurrentTaskChain()` all exist there.
+Verify in game: in a biome without sheep, `get wool 3` should give up after about a minute and show
+"I gave up —" in chat.
+
+---
+
+## 9. Chests: `chests`, `withdraw`, a working `deposit`, and two item dupes 🔴
+
+**Status:** not ported. **Both dupes are confirmed present** on 1.20.1:
+`StoreInContainerTask.java:159` grows the container's real stack during a simulated insert, and
+`PickupFromContainerTask.java:56` inserts a one-item probe that is never taken back.
+
+**Commit:** *Let companions list, take from and put into chests* (this entry's commit).
+
+**What changed:**
+- `ContainerAccess` (new, `util/helpers/`): finds storage containers in loaded chunks within 16 blocks,
+  combines both halves of a double chest into one, and `take`/`put` items without creating or losing
+  any. Tests: `ContainerAccessTest`. These bootstrap Minecraft's registries, the first tests to do so.
+- `VisitContainersTask` (new): walks to each container, skips any it cannot reach in 30 s, and opens
+  the chest lid while it is using it. Subclasses: `SurveyContainersTask` (`chests`),
+  `WithdrawFromContainersTask` (`withdraw`), `DepositInContainersTask` (`deposit`).
+- `deposit` no longer uses `StoreInAnyContainerTask`. That task counted items already in the chest
+  toward the deposit, and never finished a partial deposit.
+- `pendingResult` / `reportCommandResult`: a command's answer is written into the finish event, the
+  same way `pendingFailure` is. `mod.log()` only reaches stdout, never the model.
+- The dupes are fixed in place in `StoreInContainerTask` (the stash task still uses it) and in
+  `PickupFromContainerTask`.
+
+**Port:** the new classes have no mappings-specific code beyond Mojmap Minecraft names, and the
+engine is Mojmap on 1.20.1 too. Check `ChestBlock.getContainer`, `ChestBlockEntity.getOpenCount`,
+`LevelChunk.getBlockEntities` and `ItemStack.isSameItemSameComponents` against the 1.20.1 jar with
+`javap`. **`isSameItemSameComponents` is 1.20.5+; on 1.20.1 it is `ItemStack.isSameItemSameTags`.**
+Rename `PlayerEngineController` → `AltoClefController`.
+
+---
+
+## 10. A companion building at negative coordinates walls itself in and suffocates 🔴
+
+**Status:** not ported. **Confirmed present:** 1.20.1's `WorldHelper.java:348-349` builds the box
+bounds with `(int)`, and the same `(int)` casts are at `:59` and `:63`. `BuildStructureTask` relies on
+`getBlocksTouchingPlayer` for its "never brick ourselves in" check.
+
+**Commit:** *Floor block coordinates so the build's body check looks where the body is* (this entry's commit).
+
+**Symptom:** observed 2026-09-25 at x≈-3, z≈-131. The build logged `no standing position reaches
+-3, 77, -131; placing it from here` 465 times in about 25 s. Health then fell about 2 HP/s, and the
+companion died: *"suffocated in a wall"* at -4, 77, -132.
+
+**Cause:** `(int)` rounds toward zero, so every negative X or Z comes out one block off. The body check
+wrongly treated a free cell as occupied, deferring it every tick, and treated the occupied cell as free,
+so a solid block was placed in it. Every other caller of `getBlocksTouchingPlayer` was also a block
+off at negative coordinates: the survival, mob-defence and food chains, and the stuck tracker.
+
+**Port:** `BlockPos.containing(...)` in `getBlocksTouchingBox`, `toBlockPos` and `toVec3i`, plus
+`FollowPlayerTask` and `ProjectileProtectionWallTask`. Check that `BlockPos.containing` exists on
+1.20.1 with `javap`; if not, use `Mth.floor` on each axis. The no-station log line is now written once
+per cell. Test: `WorldHelperBlocksTouchingTest`.
+
+---
+
+## 11. Powder snow: the pathfinder walks into it, and the escape misses half the cases
+
+**Status:** not ported. **Not yet checked on 1.20.1.** Powder snow exists there, so check its
+`MovementHelper.canWalkThrough` / `fullyPassable` and its `UnstuckChain.checkStuckInPowderSnow`.
+
+**Commit:** *Treat powder snow as an obstacle, and break out of it from any cell the body is in* (this entry's commit).
+
+**Cause:** `PowderSnowBlock.isPathfindable()` returns true, so the pathfinder treated drifts as air
+and routed through them. The body sank in, slowed and froze, and stood still logging
+`Failed exploring.`. The escape looked only at the column under the body's centre, relied on
+`isInPowderSnow` (which vanilla clears every tick), and used the off-by-one box from entry 10.
+
+**Port:** `Blocks.POWDER_SNOW` excluded in `canWalkThrough` and `fullyPassable`; the rewritten
+`checkStuckInPowderSnow` plus its 30 s notice timer. Needs entry 10 first.
+
+---
+
+## 12. The build planner calls a model from the server, even with the client brain on
+
+**Status:** not ported. **Present but latent** on 1.20.1: `BuildStructureTask.java:197` calls
+`completer.processToString(service, …)` on the server. 1.20.1 has no separate server config file, so
+a server that keeps its own key in `aicompanion.json` never notices. A server run without a key, as
+the client-brain design intends, gets a 401 on every new build.
+
+**Commit:** *Send the build planner's model call to the owner's client* (this entry's commit).
+
+**Symptom (1.21.11, 2026-09-25):** `LLM Transport Error=HTTP 401 … Missing Authentication header` ×3,
+then `Could not build (…): the build plan failed to generate 3 times`. The companion told the owner
+"the build service had an auth error".
+
+**Port:** `BrainWire.PLAN_REQUEST`, registered in `registerServerToClientChannels`, with
+`writePlanRequest` / `readPlanMessages` and `MAX_RESULT_BYTES`. `NetworkBrainTransport.completeTextOnClient`
+and `PendingText`, plus the `deliver` and `forget` hooks. `RequestLLMCode.onStart` tries the client
+first. `ClientBrain` gets the `PLAN_REQUEST` receiver and `plan()`. The answer rides `TURN_RESULT`,
+so the server's C2S receiver is unchanged.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).
