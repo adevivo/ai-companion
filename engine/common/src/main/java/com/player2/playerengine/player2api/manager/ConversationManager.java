@@ -163,10 +163,28 @@ public class ConversationManager {
      * Drop a companion's conversation state. Must be called when its entity goes away — nothing else
      * removes from {@code queueData}, so without this a spawn/despawn cycle leaks an entry and leaves
      * stale data whose distance checks reference a discarded entity.
+     *
+     * <p>⚠️ Saves the history first. Parking calls this when the owner disconnects, which in single
+     * player happens <em>before</em> the server stops, so {@link #onServerStopping}'s save found
+     * nothing left to save and up to {@code SAVE_EVERY - 1} messages were lost on every quit.
+     * Observed 2026-09-26 on a fresh install: a four-message session wrote no history file at all,
+     * and the stop line read "saved history for 0 of 0".
      */
     public static void forget(UUID companionUuid) {
-        if (queueData.remove(companionUuid) != null) {
-            LOGGER.info("ConversationManager/forget: dropped conversation data for {}", companionUuid);
+        AgentConversationData data = queueData.remove(companionUuid);
+        if (data != null) {
+            boolean saved = false;
+            try {
+                if (data.getMod() != null && data.getMod().getAIPersistantData() != null) {
+                    data.getMod().getAIPersistantData().flushHistory();
+                    saved = true;
+                }
+            } catch (Throwable e) {
+                LOGGER.warn("ConversationManager/forget: could not save history for {} ({})",
+                        data.getName(), e.toString());
+            }
+            LOGGER.info("ConversationManager/forget: dropped conversation data for {}{}", companionUuid,
+                    saved ? " (history saved)" : "");
         }
     }
 
