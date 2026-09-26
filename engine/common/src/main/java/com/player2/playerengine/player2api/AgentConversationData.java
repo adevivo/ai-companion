@@ -108,6 +108,13 @@ public class AgentConversationData {
      */
     private volatile String pendingFailure = null;
 
+    /**
+     * What the running command found out, or null — a container listing, say. Consumed by the next
+     * {@link #onCommandFinish} for the same reason as {@link #pendingFailure}: an answer left only in the
+     * rolling debug buffer is gone a turn later, and the model is asked about it again.
+     */
+    private volatile String pendingResult = null;
+
     public AgentConversationData(PlayerEngineController mod) {
         this.mod = mod;
     }
@@ -388,6 +395,11 @@ public class AgentConversationData {
         this.pendingFailure = message;
     }
 
+    /** Remember what the running command found, so {@link #onCommandFinish} can put it in the history. */
+    public void recordCommandResult(String result) {
+        this.pendingResult = result;
+    }
+
     public void onEvent(Event event) {
         if (event instanceof Event.UserMessage) {
             // Somebody is talking to us: the companion is no longer running on its own initiative, so
@@ -439,6 +451,8 @@ public class AgentConversationData {
             }
             String failure = pendingFailure;
             pendingFailure = null;
+            String result = pendingResult;
+            pendingResult = null;
             if (failure != null) {
                 // A failure means the owner's request is still unmet, so this is not the companion
                 // drifting off on its own — it is recovery, and it needs room to run. Without this
@@ -454,6 +468,14 @@ public class AgentConversationData {
                 addEventToQueue(new InfoMessage(String.format(
                         "Command feedback: %s finished, but it did NOT do what was asked. %s Do not tell the owner it succeeded or that the result exists — say what actually happened and act on it. If nothing further is needed, generate empty command `\"\"`.",
                         stopReason.commandName(), failure)));
+            } else if (result != null) {
+                // Queued whatever the autonomous budget says: the command was run to find this out, and
+                // somebody is usually waiting on the answer. Dropping it would leave the question
+                // unanswered and the finding in a buffer that empties on the next read.
+                LOGGER.info("adding cmd={} finish to queue with its result", stopReason.commandName());
+                addEventToQueue(new InfoMessage(String.format(
+                        "Command feedback: %s finished. Result: %s If nothing further is needed, generate empty command `\"\"`.",
+                        stopReason.commandName(), result)));
             } else if (eventQueue.isEmpty()) {
                 if (autonomousBudgetSpent()) {
                     LOGGER.info("Not prompting for a next step after cmd={}: {} self-triggered turns already taken"
@@ -469,6 +491,7 @@ public class AgentConversationData {
                 LOGGER.info("Skipping command stop for cmd={} because queue not empty", stopReason.commandName());
             }
         } else if (stopReason instanceof CommandExecutionStopReason.Error) {
+            pendingResult = null; // an errored command found nothing; do not let it attach to the next one
             String failed = stopReason.commandName();
             String error = ((CommandExecutionStopReason.Error) stopReason).errMsg();
             String signature = failed + "\0" + error;

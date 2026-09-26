@@ -156,9 +156,12 @@ public class StoreInContainerTask extends Task {
             int space = slotStack.getMaxStackSize() - slotStack.getCount();
             int toTransfer = Math.min(stack.getCount(), space);
             if (toTransfer > 0) {
-               slotStack.grow(toTransfer);
+               // ⚠️ Only the incoming stack is a copy when simulating — slotStack is the container's own.
+               // Growing it unconditionally made every simulated deposit a real one, so a deposit onto a
+               // partial stack added the items twice.
                stack.shrink(toTransfer);
                if (!simulate) {
+                  slotStack.grow(toTransfer);
                   inventory.setItem(i, slotStack);
                }
             }

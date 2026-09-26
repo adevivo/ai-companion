@@ -388,6 +388,20 @@ public class PlayerEngineController {
    }
 
    /**
+    * Hand the agent what the running command found — a container listing, say — in the event that
+    * reports the command finished, so it survives in the conversation history. Not shown in chat: the
+    * agent says it in its own words.
+    */
+   public void reportCommandResult(String result) {
+      log(result);
+      try {
+         ConversationManager.getOrCreateEventQueueData(this).recordCommandResult(result);
+      } catch (Exception e) {
+         Debug.logWarning("Could not deliver the result to the agent: " + e);
+      }
+   }
+
+   /**
     * Tell the agent something without claiming the running command failed.
     *
     * <p>For notices that are not about a command at all — a health warning raised from the entity

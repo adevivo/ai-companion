@@ -296,8 +296,8 @@ public class TimeoutWanderTask extends Task implements ITaskRequiresGrounded {
       mod.logAgentNotice(
          "Gave up on " + root + ": stood still for about a minute searching for what it needs, and "
             + "nothing reachable turned up nearby. Running the same command again here will get stuck "
-            + "the same way — use what is already in the inventory, try a different material or "
-            + "approach, or ask the owner for the items.",
+            + "the same way — check nearby chests with `chests` and take it with `withdraw`, use what "
+            + "is already in the inventory, try a different material, or ask the owner for the items.",
          "I gave up — I searched for a minute and couldn't find what I needed anywhere I could reach.");
       root.fail("stuck exploring for " + STALLS_BEFORE_GIVING_UP + " progress checks");
    }

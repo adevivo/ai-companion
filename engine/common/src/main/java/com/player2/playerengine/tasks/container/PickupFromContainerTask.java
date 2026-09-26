@@ -5,13 +5,13 @@ import com.player2.playerengine.tasks.movement.GetToBlockTask;
 import com.player2.playerengine.tasks.slot.EnsureFreeInventorySlotTask;
 import com.player2.playerengine.tasks.base.Task;
 import com.player2.playerengine.util.ItemTarget;
+import com.player2.playerengine.util.helpers.ContainerAccess;
 import com.player2.playerengine.automaton.api.entity.IInventoryProvider;
 import com.player2.playerengine.automaton.api.entity.LivingEntityInventory;
 import java.util.Arrays;
 import java.util.Objects;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.RandomizableContainerBlockEntity;
 
 public class PickupFromContainerTask extends Task {
@@ -49,26 +49,15 @@ public class PickupFromContainerTask extends Task {
          for (ItemTarget target : this.targets) {
             int needed = target.getTargetCount() - this.controller.getItemStorage().getItemCount(target);
             if (needed > 0) {
-               for (int i = 0; i < containerInventory.getContainerSize(); i++) {
-                  ItemStack stack = containerInventory.getItem(i);
-                  if (target.matches(stack.getItem())) {
-                     this.setDebugState("Looting " + target);
-                     if (!playerInventory.insertStack(new ItemStack(stack.getItem()))) {
-                        return new EnsureFreeInventorySlotTask();
-                     }
-
-                     ItemStack toMove = stack.copy();
-                     int moveAmount = Math.min(toMove.getCount(), needed);
-                     toMove.setCount(moveAmount);
-                     if (playerInventory.insertStack(toMove)) {
-                        stack.shrink(moveAmount);
-                        containerInventory.setItem(i, stack);
-                        container.setChanged();
-                        this.controller.getItemStorage().registerSlotAction();
-                     }
-
-                     return null;
+               if (ContainerAccess.count(containerInventory, target::matches) > 0) {
+                  this.setDebugState("Looting " + target);
+                  // This used to insert a one-item probe to test for room and never take it back: a free
+                  // item on every move. ContainerAccess.take moves exactly what it removes.
+                  if (ContainerAccess.take(containerInventory, playerInventory, target::matches, needed) == 0) {
+                     return new EnsureFreeInventorySlotTask();
                   }
+                  this.controller.getItemStorage().registerSlotAction();
+                  return null;
                }
             }
          }

@@ -6,7 +6,8 @@ import com.player2.playerengine.commands.base.ArgParser;
 import com.player2.playerengine.commands.base.Command;
 import com.player2.playerengine.commands.base.CommandException;
 import com.player2.playerengine.commands.base.ItemList;
-import com.player2.playerengine.tasks.container.StoreInAnyContainerTask;
+import com.player2.playerengine.tasks.container.DepositInContainersTask;
+import com.player2.playerengine.tasks.container.WithdrawFromContainersTask;
 import com.player2.playerengine.util.ItemTarget;
 import com.player2.playerengine.util.helpers.ItemHelper;
 import com.player2.playerengine.util.helpers.StorageHelper;
@@ -33,7 +34,7 @@ public class DepositCommand extends Command {
    public DepositCommand() throws CommandException {
       super(
          "deposit",
-         "Deposit our items to a nearby chest, making a chest if one doesn't exist. Pass no arguments to depisot ALL items. Examples: `deposit` deposits ALL items, `deposit diamond 2` deposits 2 diamonds.",
+         "Put items into the chests, barrels and shulker boxes within 16 blocks, walking to them; places a chest if there is none with room. The count is how many to put in. Pass no arguments to deposit ALL items except tools and armour. Examples: `deposit` deposits ALL items, `deposit diamond 2` deposits 2 diamonds.",
          new Arg<>(ItemList.class, "items (empty for ALL non gear items)", null, 0, false)
       );
    }
@@ -104,6 +105,15 @@ public class DepositCommand extends Command {
          items = clamped.toArray(new ItemTarget[0]);
       }
 
-      mod.runUserTask(new StoreInAnyContainerTask(false, items), () -> this.finish());
+      DepositInContainersTask task = new DepositInContainersTask(items);
+      mod.runUserTask(task, () -> {
+         WithdrawFromContainersTask.Outcome outcome = task.outcome();
+         if (outcome.success()) {
+            mod.reportCommandResult(outcome.message());
+         } else {
+            mod.logAgentNotice(outcome.message(), "I couldn't store everything — the chests nearby are full.");
+         }
+         this.finish();
+      });
    }
 }

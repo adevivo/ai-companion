@@ -3,6 +3,7 @@ package com.player2.playerengine;
 import com.player2.playerengine.commands.AttackPlayerOrMobCommand;
 import com.player2.playerengine.commands.BodyLanguageCommand;
 import com.player2.playerengine.commands.BuildStructureCommand;
+import com.player2.playerengine.commands.ChestsCommand;
 import com.player2.playerengine.commands.DepositCommand;
 import com.player2.playerengine.commands.DigCommand;
 import com.player2.playerengine.commands.EquipCommand;
@@ -27,6 +28,7 @@ import com.player2.playerengine.commands.ResetMemoryCommand;
 import com.player2.playerengine.commands.SetAIBridgeEnabledCommand;
 import com.player2.playerengine.commands.StandGroundCommand;
 import com.player2.playerengine.commands.StopCommand;
+import com.player2.playerengine.commands.WithdrawCommand;
 import com.player2.playerengine.commands.random.ScanCommand;
 import com.player2.playerengine.commands.base.CommandException;
 
@@ -39,6 +41,8 @@ public class PlayerEngineCommands {
                   new BuildStructureCommand(),
                   new BodyLanguageCommand(),
                   new DepositCommand(),
+                  new ChestsCommand(),
+                  new WithdrawCommand(),
                   new GotoCommand(),
                   new DigCommand(),
                   new IdleCommand(),
