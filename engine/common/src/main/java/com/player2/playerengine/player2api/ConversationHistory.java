@@ -184,9 +184,13 @@ public class ConversationHistory {
          spliced |= this.applyFinishedSummary();
       }
 
-      if (spliced && this.historyFile != null) {
-         this.saveToFile();
-      } else if (doCutOff && this.historyFile != null && ++this.unsavedMessages >= SAVE_EVERY) {
+      if (this.historyFile == null) {
+         return;
+      }
+      // Every message counts as unsaved, not just the companion's replies: a player's message sent
+      // just before logging out, with the reply still in flight, is exactly what flush() must keep.
+      this.unsavedMessages++;
+      if (spliced || (doCutOff && this.unsavedMessages >= SAVE_EVERY)) {
          this.saveToFile();
       }
    }
@@ -247,14 +251,18 @@ public class ConversationHistory {
     * <p>For shutdown. The periodic save above bounds how much a crash can lose; this is what makes an
     * orderly quit lose nothing, and quitting to the title screen is the common case — a singleplayer
     * world stops its server every time.
+    *
+    * @return whether a file was actually written: false when there was nothing unsaved, when this
+    *         history is not persisted, or when the write failed
     */
-   public void flush() {
+   public boolean flush() {
       if (this.historyFile != null && this.unsavedMessages > 0) {
-         this.saveToFile();
+         return this.saveToFile();
       }
+      return false;
    }
 
-   private void saveToFile() {
+   private boolean saveToFile() {
       this.unsavedMessages = 0;
       try {
          // The path is nested under the owner now, so the directory may not exist. Without this the
@@ -286,8 +294,10 @@ public class ConversationHistory {
 
             throw var5;
          }
+         return true;
       } catch (IOException var6) {
-         var6.printStackTrace();
+         LOGGER.warn("ConversationHistory: could not write {} ({})", this.historyFile, var6.toString());
+         return false;
       }
    }
 

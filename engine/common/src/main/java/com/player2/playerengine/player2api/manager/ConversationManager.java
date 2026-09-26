@@ -138,8 +138,8 @@ public class ConversationManager {
         int flushed = 0;
         for (AgentConversationData data : queueData.values()) {
             try {
-                if (data.getMod() != null && data.getMod().getAIPersistantData() != null) {
-                    data.getMod().getAIPersistantData().flushHistory();
+                if (data.getMod() != null && data.getMod().getAIPersistantData() != null
+                        && data.getMod().getAIPersistantData().flushHistory()) {
                     flushed++;
                 }
             } catch (Throwable e) {
@@ -173,18 +173,20 @@ public class ConversationManager {
     public static void forget(UUID companionUuid) {
         AgentConversationData data = queueData.remove(companionUuid);
         if (data != null) {
-            boolean saved = false;
+            // Says what happened, not what was attempted: the first version of this line printed
+            // "(history saved)" after a session with no chat at all, when nothing was written.
+            String outcome = " (nothing unsaved)";
             try {
-                if (data.getMod() != null && data.getMod().getAIPersistantData() != null) {
-                    data.getMod().getAIPersistantData().flushHistory();
-                    saved = true;
+                if (data.getMod() != null && data.getMod().getAIPersistantData() != null
+                        && data.getMod().getAIPersistantData().flushHistory()) {
+                    outcome = " (history written)";
                 }
             } catch (Throwable e) {
+                outcome = " (history NOT saved)";
                 LOGGER.warn("ConversationManager/forget: could not save history for {} ({})",
                         data.getName(), e.toString());
             }
-            LOGGER.info("ConversationManager/forget: dropped conversation data for {}{}", companionUuid,
-                    saved ? " (history saved)" : "");
+            LOGGER.info("ConversationManager/forget: dropped conversation data for {}{}", companionUuid, outcome);
         }
     }
 

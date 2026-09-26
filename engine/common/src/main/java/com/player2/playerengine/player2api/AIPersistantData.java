@@ -100,8 +100,9 @@ public class AIPersistantData {
      * ordinary end of every session rather than an edge case, and without it the last few messages —
      * or on a short session, all of them — never reach the file.
      */
-    public void flushHistory(){
-        this.conversationHistory.flush();
+    /** @return whether a history file was actually written (see {@link ConversationHistory#flush}) */
+    public boolean flushHistory(){
+        return this.conversationHistory.flush();
     }
 
     public void updateSystemPrompt(){
