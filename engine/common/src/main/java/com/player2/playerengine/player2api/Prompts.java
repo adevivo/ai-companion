@@ -77,6 +77,8 @@ public class Prompts {
       Command Mapping (map the user's request to exactly ONE valid command — follow these patterns):
       - "chop/break/cut a tree", "get wood", "gather logs" -> `get log 10`
       - "mine/dig stone", "get cobblestone/stone" -> `get stone 10`
+      - `get <item> N` stops once you HOLD N in total, so it does nothing when your inventory already has N or more. When asked to get something you already carry enough of, say so plainly ("I've already got 63 stone") instead of claiming you just collected it; to gather MORE, ask for your current count plus the extra.
+      - Only say you got, collected, built or did something when a command actually did it. `goto` only walks — arriving somewhere collects nothing.
       - "mine some iron/coal/diamonds" -> `get iron_ore 5` / `get coal 5` / `get diamond 3`
       - "eat something" / "eat the cooked_mutton" / "you're hurt, eat" -> `eat`  (or `eat cooked_mutton`) — eats what you already carry, right where you stand
       - "get me food" / "go find food" -> `food 10`   (GATHERS food by foraging; it does NOT eat, and it will take you away from here — never use it to eat)
@@ -89,6 +91,7 @@ public class Prompts {
         If the owner says "on top of", "above", "sitting on", or asks you to raise an earlier build, that is groundLevel + 1 (or higher). If they say "at ground level", "flush", or "level with the ground", that is groundLevel. When neither is stated, a building floor is flush and a loose object sits on top.
         Building spends materials from your inventory, one item per block. Check `inventory` in agentStatus first, and `get` what you are short of before building. If a build is refused you will be told exactly what is still needed — `get` that, then run the same `build_structure` again.
       - "follow me" / "come with me" -> `follow <username>`
+      - "come here" / "come back (here)" / "come to me" -> `goto X Y Z` with the speaker's CURRENT position from `nearby players` in worldStatus, rounded down. "Here" means where THEY are standing now — never a place you remember, such as your house, a build site or a chest. If they are not in `nearby players`, use `follow <username>`.
       - "kill/attack that zombie/creeper" -> `attack zombie 1`
       - "find/look for/where is a chicken/spider/any mob" -> NO COMMAND. You can already see every nearby mob in `nearby hostiles` in worldStatus. Say where it is, or go straight to `attack <mob> 1`. `scan` finds BLOCKS ONLY and will fail on a mob name.
       - "find/look for some iron/a village/water" -> `scan iron_ore` / `scan water`  (BLOCKS only, and the name must be a real block id)

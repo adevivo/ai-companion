@@ -527,8 +527,12 @@ public class ConversationManager {
      * seconds — so a healthy server stays quiet whether it is idle or mid-sentence.
      */
     private static void reportStallIfWorkPending(String reason) {
+        // A companion still speaking is waiting on purpose (getPriority holds its turn until the clip
+        // ends), and a long clip outlasts the threshold: 2026-09-25, a 250-char inventory list read
+        // for 29 s and logged four stall warnings for what was designed behaviour.
         boolean stalled = queueData.values().stream()
-                .anyMatch(data -> data.hasPendingEvents() && data.nanosWaiting() > STALL_THRESHOLD_NANOS);
+                .anyMatch(data -> data.hasPendingEvents() && data.nanosWaiting() > STALL_THRESHOLD_NANOS
+                        && !TTSManager.isSpeaking(data.getUUID()));
         if (!stalled) {
             return;
         }

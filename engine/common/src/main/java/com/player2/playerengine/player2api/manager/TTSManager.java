@@ -66,8 +66,45 @@ public class TTSManager {
 
     private static final ExecutorService ttsThread = Executors.newSingleThreadExecutor();
 
-    public static void TTS(String message, Character character, Player2APIService player2apiService,
+    /**
+     * Longest line read aloud. Chat still shows the whole message; only the voice is cut.
+     *
+     * <p>The companion does not think again until its clip has finished playing, so a long clip is a
+     * long silence afterwards. Measured 2026-09-25: a 250-char inventory list took 29 s to read, and
+     * the owner's next message waited all of it.
+     */
+    static final int MAX_SPOKEN_CHARS = 160;
+
+    /**
+     * The part of a message worth saying aloud: whole sentences up to {@link #MAX_SPOKEN_CHARS}, or —
+     * when even the first sentence is longer, as a list is — that sentence cut at a word and trailed off.
+     */
+    static String spokenText(String message) {
+        String text = message == null ? "" : message.strip();
+        if (text.length() <= MAX_SPOKEN_CHARS) {
+            return text;
+        }
+        int end = -1;
+        for (int i = 0; i < MAX_SPOKEN_CHARS; i++) {
+            char c = text.charAt(i);
+            if ((c == '.' || c == '!' || c == '?') && (i + 1 == text.length() || java.lang.Character.isWhitespace(text.charAt(i + 1)))) {
+                end = i + 1;
+            }
+        }
+        if (end > 0) {
+            return text.substring(0, end);
+        }
+        int cut = text.lastIndexOf(' ', MAX_SPOKEN_CHARS);
+        String head = text.substring(0, cut > 0 ? cut : MAX_SPOKEN_CHARS);
+        return head.replaceAll("[,;:\\s]+$", "") + "…";
+    }
+
+    public static void TTS(String fullMessage, Character character, Player2APIService player2apiService,
             UUID speaker) {
+        String message = spokenText(fullMessage);
+        if (message.isEmpty()) {
+            return;
+        }
         // Voice is opt-in on the endpoint being reachable from the CLIENT, which is the one thing
         // this side cannot check. Off => stay silent and, importantly, never take the lock below.
         if (!com.neovetta.aicompanion.core.TtsConfig.enabled) {
