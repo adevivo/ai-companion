@@ -28,8 +28,8 @@ dependencies {
     // classloader, so the classes are there at runtime. Declaring it `implementation` would bundle
     // a second copy — two versions of the same scorer is the silent-divergence failure this exists
     // to prevent. Pinned exact, never '+': Gradle caches dynamic-version resolution.
-    compileOnly 'libs:aicompanion-memory:0.5.0'
-    testImplementation 'libs:aicompanion-memory:0.5.0'
+    compileOnly 'libs:aicompanion-memory:0.5.1'
+    testImplementation 'libs:aicompanion-memory:0.5.1'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
