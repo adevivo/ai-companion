@@ -809,10 +809,20 @@ public final class CompanionCommands {
         return 1;
     }
 
+    /**
+     * One short line with the right command on it, clickable. The first version was a long red
+     * failure that the user, on 2026-09-26, could not read and ran into twice.
+     */
     private static int configMisrouted(CommandSourceStack source, String rest) {
-        source.sendFailure(Component.literal("Settings from chat live under /aicompanion: try /aicompanion config "
-                + rest.trim() + " (show, get <path>, set <path> <value>, path). /companion config opens the screen."));
-        return 0;
+        String command = "/aicompanion config " + rest.trim();
+        source.sendSuccess(() -> Component.literal("That one is ").withStyle(ChatFormatting.GRAY)
+                .append(Component.literal(command).withStyle(style -> style
+                        .withColor(ChatFormatting.YELLOW).withUnderlined(true)
+                        .withClickEvent(new net.minecraft.network.chat.ClickEvent.RunCommand(command))
+                        .withHoverEvent(new net.minecraft.network.chat.HoverEvent.ShowText(
+                                Component.literal("Click to run it")))))
+                .append(Component.literal(" (click it)").withStyle(ChatFormatting.GRAY)), false);
+        return 1;
     }
 
     /**
