@@ -30,6 +30,10 @@ import com.player2.playerengine.player2api.Player2APIService;
 import com.player2.playerengine.player2api.Prompts;
 import com.player2.playerengine.player2api.brain.NetworkBrainTransport;
 import com.player2.playerengine.tasks.container.GetFromStorageFirstTask;
+import java.util.UUID;
+import com.player2.playerengine.util.helpers.ItemHelper;
+import com.player2.playerengine.util.helpers.ContainerAccess;
+import com.player2.playerengine.util.helpers.ChestPermissions;
 import com.player2.playerengine.player2api.utils.Utils;
 import com.player2.playerengine.tasks.construction.build_structure.StructureFromCode.SetBlockCommand;
 import com.player2.playerengine.tasks.construction.build_structure.templates.TemplateLibrary;
@@ -107,6 +111,37 @@ public class BuildStructureTask extends Task {
 
     private boolean isDone = false;
     private String description;
+    /**
+     * Written into the description by the TURN model, which has read the player's request in whatever
+     * words and language it came in. The player never types these; the model decides what they meant
+     * and says so in a form the code can read exactly. See {@code BuildStructureCommand}.
+     */
+    public static final String TAG_USE_INVENTORY = "[use inventory]";
+    public static final String TAG_GATHER_OK = "[gather ok]";
+    static boolean hasTag(String description, String tag) {
+        return description != null && description.toLowerCase(java.util.Locale.ROOT).contains(tag);
+    }
+
+    /**
+     * The description without its tags, so they change neither the template match nor the plan
+     * cache key: the same house asked for again with [gather ok] must find the plan it asked about.
+     */
+    static String stripTags(String description) {
+        return description == null ? null
+                : description.replaceAll("(?i)\\s*\\[(use inventory|gather ok)\\]", "").strip();
+    }
+
+    /** Build only from what the companion carries: never gather, and redesign smaller instead. */
+    private final boolean inventoryOnly;
+    /** The owner has agreed to a large gather for this build. */
+    private final boolean gatherApproved;
+    /** A plan bigger than this in missing items asks the owner before setting off to gather. */
+    private static final int ASK_BEFORE_GATHERING_OVER = 64;
+    /** Where the plan being built came from; only a model's plan can be sent back to be redesigned. */
+    private enum PlanSource { MODEL, TEMPLATE, SAVED }
+    private PlanSource planSource;
+    /** The last program the model wrote, so a redesign request can show it what it asked for. */
+    private String lastCode;
     private PlayerEngineController mod;
     private Player2APIService service;
     private int numErrors;
@@ -1516,7 +1551,9 @@ public class BuildStructureTask extends Task {
     }
 
     public BuildStructureTask(String description, PlayerEngineController mod) {
-        this.description = description;
+        this.inventoryOnly = hasTag(description, TAG_USE_INVENTORY);
+        this.gatherApproved = hasTag(description, TAG_GATHER_OK);
+        this.description = stripTags(description);
         this.mod = mod;
         this.service = mod.getPlayer2APIService();
         this.numErrors = 0;
@@ -1535,9 +1572,75 @@ public class BuildStructureTask extends Task {
         }
         history = new ConversationHistory(Prompts.getBuildStructurePrompt());
         history.addUserMessage(
-                String.format("Build with the following description: (%s)", description),
+                String.format("Build with the following description: (%s)\n\n%s", description, materialsBrief()),
                 service);
         completer = new LLMCompleter();
+    }
+
+    /**
+     * What the planner may build with. It used to see only the description, so "build it from what
+     * you have" reached a model that had never been told what that was. Observed 2026-09-26: asked
+     * to use the inventory, it designed a house needing 560 oak planks and 9 bookshelves, with 122
+     * cobblestone, 62 stone and 48 glass in the bag.
+     */
+    private String materialsBrief() {
+        Map<String, Integer> carried = new java.util.TreeMap<>();
+        for (int i = 0; i < mod.getInventory().getContainerSize(); i++) {
+            ItemStack stack = mod.getInventory().getItem(i);
+            if (!stack.isEmpty()) {
+                carried.merge(ItemHelper.stripItemName(stack.getItem()), stack.getCount(), Integer::sum);
+            }
+        }
+        String carriedText = carried.isEmpty() ? "nothing" : join(carried);
+        if (inventoryOnly) {
+            return "MATERIALS — THE OWNER ASKED FOR THIS TO BE BUILT FROM WHAT THE BOT ALREADY CARRIES. The bot carries: "
+                    + carriedText + ". Use ONLY these blocks, and never more of one than the count shown; anything else"
+                    + " would have to be gathered, which the owner does not want. Make the design as small and simple as"
+                    + " it needs to be to fit. Items that are not blocks (food, tools) cannot be placed.";
+        }
+        // Allowed containers the companion has already looked in. Not the rest: knowing what is in a
+        // chest it has never opened is past player parity.
+        Map<String, Integer> stored = new java.util.TreeMap<>();
+        UUID owner = mod.getOwnerUuid();
+        for (var cache : mod.getItemStorage().containers.getCachedContainers(
+                c -> ChestPermissions.isAllowed(mod.getWorld(), owner, c.getBlockPos())
+                        && c.getBlockPos().getCenter().distanceTo(mod.getPlayer().position()) <= ContainerAccess.SEARCH_RADIUS)) {
+            cache.getItemCounts().forEach((item, n) -> stored.merge(ItemHelper.stripItemName(item), n, Integer::sum));
+        }
+        return "MATERIALS. The bot carries: " + carriedText + "."
+                + (stored.isEmpty() ? "" : " Its owner's containers nearby hold: " + join(stored) + ".")
+                + " Prefer these. Every other block has to be gathered or crafted first, which can take a long time"
+                + " or be impossible nearby, so keep other materials to a minimum.";
+    }
+
+    private static String join(Map<String, Integer> counts) {
+        return counts.entrySet().stream().map(e -> e.getValue() + " " + e.getKey()).collect(Collectors.joining(", "));
+    }
+
+    /**
+     * Stop before gathering and ask the owner. The plan is kept, so either answer continues from it:
+     * the same description with {@link #TAG_GATHER_OK} gathers for this plan, and a new description
+     * with {@link #TAG_USE_INVENTORY} designs something smaller.
+     *
+     * <p>No chat line of its own: the model asks, in its own words and so in the player's language.
+     */
+    private Task askBeforeGathering(List<SetBlockCommand> plan, Map<Item, Integer> missing, String why) {
+        BuildPlanCache.remember(mod, description, plan);
+        String what = BuildMaterials.describe(missing);
+        mod.logAgentNotice(String.format(
+                "Did not start the build (%s): %s It needs materials you do not have: %s. Nothing was placed. ASK YOUR OWNER"
+                        + " which they want, and wait for the answer: (1) gather the materials: run build_structure with the same"
+                        + " description and " + TAG_GATHER_OK + " added; or (2) build something smaller from what you carry: run"
+                        + " build_structure with a new description and " + TAG_USE_INVENTORY + " added. They can also bring you the"
+                        + " materials, or show you a container you may use.",
+                shortDescription(), why, what), null);
+        isDone = true;
+        actuallyRunningTask = null;
+        return null;
+    }
+
+    private static int total(Map<Item, Integer> counts) {
+        return counts.values().stream().mapToInt(Integer::intValue).sum();
     }
 
     @Override
@@ -1573,6 +1676,7 @@ public class BuildStructureTask extends Task {
                     description, remembered.get().size());
             // Ground-checked when it was first designed. Re-checking now would measure the part of it
             // that already exists — see the PlaceBlocks(List, boolean) contract.
+            planSource = PlanSource.SAVED;
             actuallyRunningTask = new PlaceBlocks(remembered.get(), true);
             return;
         }
@@ -1585,13 +1689,17 @@ public class BuildStructureTask extends Task {
                     description, record.anchor(), record.placed(), record.total());
             mod.tellOwner(String.format("Picking up where I left off — %d of %d blocks were already up.",
                     record.placed(), record.total()));
+            planSource = PlanSource.SAVED;
             actuallyRunningTask = new PlaceBlocks(record.plan(), true);
             return;
         }
         // Ordinary rectangular shapes are generated in-process. Only what the generators decline
         // reaches the model, which is where the codegen prompt's token cost is actually warranted.
-        Optional<TemplateLibrary.Match> templated = TemplateLibrary.plan(description, mod);
+        // A template cannot fit itself to what is carried, so a build from inventory always goes to
+        // the model, which can.
+        Optional<TemplateLibrary.Match> templated = inventoryOnly ? Optional.empty() : TemplateLibrary.plan(description, mod);
         if (templated.isPresent()) {
+            planSource = PlanSource.TEMPLATE;
             // Freshly designed, so the species is still up for grabs — see WoodChoice. The two
             // resume paths above deliberately skip this: they must keep the wood they started with.
             actuallyRunningTask = new PlaceBlocks(
@@ -1602,13 +1710,6 @@ public class BuildStructureTask extends Task {
         actuallyRunningTask = new RequestLLMCode();
     }
 
-    /**
-     * Tell the owner how the material gather is going, at most once every
-     * {@link #PROGRESS_INTERVAL_MILLIS}.
-     *
-     * <p>Chat only — the agent is deliberately left out of it. Feeding progress into the model would
-     * spend tokens every half minute and invite it to narrate work the engine is already doing.
-     */
     /** Every stack, by item and count, reduced to one number that changes when anything does. */
     private long inventoryFingerprint() {
         long h = 17;
@@ -1664,6 +1765,13 @@ public class BuildStructureTask extends Task {
         return true;
     }
 
+    /**
+     * Tell the owner how the material gather is going, at most once every
+     * {@link #PROGRESS_INTERVAL_MILLIS}.
+     *
+     * <p>Chat only — the agent is deliberately left out of it. Feeding progress into the model would
+     * spend tokens every half minute and invite it to narrate work the engine is already doing.
+     */
     private void reportGatherProgress() {
         if (gatherTask == null || actuallyRunningTask != gatherTask || pendingBill == null) {
             return;
@@ -1727,6 +1835,8 @@ public class BuildStructureTask extends Task {
             result.mapBoth(
                     code -> {
                         LOGGER.info("LLM returned code={}", code);
+                        lastCode = code;
+                        planSource = PlanSource.MODEL;
                         actuallyRunningTask = new GenerateBlockPlan(code);
                         return null;
                     }, errStr -> {
@@ -1785,6 +1895,31 @@ public class BuildStructureTask extends Task {
         }
         if (actuallyRunningTask instanceof PlaceBlocks placeTask) {
             List<ItemTarget> needed = placeTask.gatherTargets();
+            Map<Item, Integer> short_ = placeTask.shortfall() == null ? Map.of() : placeTask.shortfall();
+            if (!needed.isEmpty() && inventoryOnly) {
+                if (planSource == PlanSource.MODEL && lastCode != null) {
+                    // The model was told what is carried and still drew too much. Send it back once
+                    // more with the overage; the usual error budget stops this repeating.
+                    ++numErrors;
+                    lastError = "the plan needs materials the bot does not carry: " + BuildMaterials.describe(short_);
+                    lastErrorWasModelCall = false;
+                    if (numErrors <= maxNumErrors) {
+                        history.addAssistantMessage(lastCode, service);
+                        history.addUserMessage("That design needs more than the bot carries — still short of "
+                                + BuildMaterials.describe(short_) + ". Write it again using ONLY the carried materials"
+                                + " listed above, smaller if it has to be: " + description, service);
+                        actuallyRunningTask = new RequestLLMCode();
+                        return actuallyRunningTask;
+                    }
+                }
+                return askBeforeGathering(placeTask.plan(), short_,
+                        "you were asked to use only what you carry, and no design that fits was found.");
+            }
+            if (!needed.isEmpty() && !gatherApproved && planSource != PlanSource.SAVED
+                    && total(short_) > ASK_BEFORE_GATHERING_OVER) {
+                return askBeforeGathering(placeTask.plan(), short_,
+                        "gathering this much takes a long time and some of it may not be anywhere near.");
+            }
             if (!needed.isEmpty()) {
                 // Short of materials on the first attempt: go and get everything at once rather than
                 // bouncing back to the model, which fetched one item per round trip and burned three

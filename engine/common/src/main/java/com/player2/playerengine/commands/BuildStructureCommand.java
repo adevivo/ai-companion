@@ -14,7 +14,9 @@ public class BuildStructureCommand extends Command {
                         + //
                         "IMPORTANT: You must put a position into the description. If the player you are talking to doesn't give any hints on where to build it, put in that player's position into the description, or some positional information. You MUST give a coordiante to build at. If you don't know the player's position, then put your own position. \\n"
                         + //
-                        " Example call would be `build_structure a gray modern house with a garden of roses in front of it. Build at position (-305, 406, 72)`",
+                        " Example call would be `build_structure a gray modern house with a garden of roses in front of it. Build at position (-305, 406, 72)`\n"
+                        + //
+                        "TAGS — add to the end of the description when they apply. `[use inventory]`: the player wants it built from what you already carry, however they put it and in whatever language (\"with what you've got\", \"don't go collecting\", \"just use your stuff\"); the build then never gathers and is designed to fit. `[gather ok]`: the player has agreed that you may go and gather the materials for this build, after you asked. Without a tag, a build short of a lot of materials stops and you must ASK the player which they want.",
                 new Arg<>(String.class, "description"));
     }
 

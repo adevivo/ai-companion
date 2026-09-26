@@ -44,6 +44,11 @@ public class ContainerCache {
       }
    }
 
+   /** What was in it when last looked at, read-only. */
+   public java.util.Map<Item, Integer> getItemCounts() {
+      return java.util.Collections.unmodifiableMap(this.itemCounts);
+   }
+
    public int getItemCount(Item... items) {
       int result = 0;
 

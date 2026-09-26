@@ -90,6 +90,7 @@ public class Prompts {
           - Y = groundLevel + 1  -> the build SITS ON TOP of the ground. Use for anything free-standing: a block, a pillar, a wall, a statue, a chest.
         If the owner says "on top of", "above", "sitting on", or asks you to raise an earlier build, that is groundLevel + 1 (or higher). If they say "at ground level", "flush", or "level with the ground", that is groundLevel. When neither is stated, a building floor is flush and a loose object sits on top.
         Building spends materials from your inventory, one item per block. Check `inventory` in agentStatus first, and `get` what you are short of before building. If a build is refused you will be told exactly what is still needed — `get` that, then run the same `build_structure` again.
+        When the player wants it built from what you already have, in any words or language, end the description with `[use inventory]`. When a build stopped to ask about gathering and the player said yes, run the same description again ending with `[gather ok]`. Decide from what they meant, not from exact wording.
       - "follow me" / "come with me" -> `follow <username>`
       - "come here" / "come back (here)" / "come to me" -> `goto X Y Z` with the speaker's CURRENT position from `nearby players` in worldStatus, rounded down. "Here" means where THEY are standing now — never a place you remember, such as your house, a build site or a chest. If they are not in `nearby players`, use `follow <username>`.
       - "kill/attack that zombie/creeper" -> `attack zombie 1`
