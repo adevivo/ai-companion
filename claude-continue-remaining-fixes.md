@@ -18,9 +18,18 @@ Committed on `mc/1.21.11` (not pushed; the user pushes):
 | `ee31043` | `/companion reload` no longer claims it re-applied an edited persona |
 | `db21b90` | Engine `1.21.11-1.0.29`, mod repinned |
 | `1b938a3`, `30e67c9` | Backport ledger entries 13–15 |
+| `577929d` | An interrupted build no longer sends extra plan requests (`RequestLLMCode.isEqual` was comparing empty Optionals) |
+| `95566bf` | A dropped self-triggered command is neither announced nor stored; the model is told it did not run |
+| `576f47c` | Stalled build gather (3 min, no inventory change) stops and asks; mid-gather resume keeps gathering; build gather uses allowed chests; `/companion list` shows subtasks |
+| `6a583f0` | Planner sees inventory and seen allowed containers; `[use inventory]` / `[gather ok]` tags from the turn model; >64 missing items asks first |
+| `551054b` | Engine `1.21.11-1.0.33`, mod repinned |
 
 **Built, not yet deployed:** `aicompanion/build/libs/aicompanion-0.4.0+mc1.21.11.jar` with engine
-1.0.29. The deployed build is still engine 1.0.26. The user deploys to both client and server.
+1.0.33. Deployed on both machines: engine 1.0.29 (from 07:02 on 2026-09-26). The user deploys.
+
+**Verified in play 2026-09-26 (engine 1.0.29):** 120 s turn and 180 s plan timeouts load and a 110 s
+plan was accepted; `chests` sees only the allowed chest and `withdraw` takes from it, reporting the
+other container as not allowed.
 
 **Server config:** `brain.clientTimeoutMs` raised 45000 → 120000 in holly's
 `config/aicompanion-server.json` (backup beside it as `.bak`). It takes effect at the next restart or
@@ -50,7 +59,10 @@ Committed on `mc/1.21.11` (not pushed; the user pushes):
 - **`get` does not look for ingredients in chests.** `get wooden_pickaxe` takes pickaxes from chests,
   not planks. Ingredient lookup would mean turning on `ResourceTask.allowContainers`, whose branch must
   first be moved to the permission-checked, dupe-free path.
-- Low priority, unchanged: `ConversationHistory` summarising on a keyless server; noisy WARN/WARN/ERROR
+- **`ConversationHistory.summarizeHistory` calls a model on the SERVER THREAD** (seen as 401s on the
+  keyless server, 2026-09-26). On a server with a key it blocks the tick loop for the whole request.
+  Move it off-thread or route it to the client.
+- Low priority, unchanged: noisy WARN/WARN/ERROR
   on one client failure; free Nvidia models return 503 often (accepted, do not "fix").
 
 ## Working notes

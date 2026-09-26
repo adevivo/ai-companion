@@ -331,6 +331,28 @@ re-apply the persona there, and the old message is correct.
 
 ---
 
+## 16. Builds: repeated plan requests, false "done", endless gathers, and plans that ignore the inventory
+
+**Status:** not ported. Check each part against 1.20.1's `BuildStructureTask` and
+`AgentConversationData`; the first two are in code the lines share.
+
+**Commits:**
+- `577929d` — `RequestLLMCode.isEqual` compared an `Optional` by reference, so an interrupted build
+  sent up to three plan requests. Now identity, one send per instance, and a resumed build keeps
+  its request.
+- `95566bf` — a self-triggered turn dropped for a user message still said and stored its message,
+  so the next turn claimed the dropped build was finished. Now a history note says it did not run.
+- `576f47c` — a gather with no inventory change for 3 minutes stops, keeps the plan and asks; a
+  build resumed mid-gather keeps gathering; the gather takes from allowed containers first;
+  `/companion list` shows the subtasks.
+- `6a583f0` — the codegen request lists the inventory and seen allowed containers. Tags
+  `[use inventory]` and `[gather ok]`, written by the turn model, control gathering; a plan short
+  of more than 64 items asks first. Tests: `BuildTagsTest`.
+
+**Port:** depends on 14 (`ChestPermissions`, `GetFromStorageFirstTask`) for the container parts.
+
+---
+
 ## Checked and not applicable
 
 - **Client-only mixins crash a dedicated server** (1.21.11 `e3a143a`, 2026-09-03).
