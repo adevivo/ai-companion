@@ -729,6 +729,20 @@ public class Player2APIService {
     * <p>Counts against {@link LlmConfig#maxRequests} like any other call — a per-turn side task is
     * exactly the thing a spend cap exists to bound.
     */
+   /**
+    * The output cap this request was actually sent with. Read back from the body rather than from
+    * {@code LlmConfig}: a slow request can outlive a config change, and the warning then told the
+    * player to raise a limit to the value they had just set. Observed 2026-09-26.
+    */
+   private static String sentMaxTokens(JsonObject requestBody) {
+      for (String key : new String[] {"max_tokens", "max_completion_tokens"}) {
+         if (requestBody.has(key)) {
+            return requestBody.get(key).getAsString();
+         }
+      }
+      return "server default";
+   }
+
    public String completeDeterministicJson(ConversationHistory conversationHistory) throws Exception {
       enforceRequestCap();
       JsonObject requestBody = new JsonObject();
@@ -748,7 +762,7 @@ public class Player2APIService {
                if (wasTruncated(choices)) {
                   LOGGER.warn("Deterministic JSON reply was cut off by the output token limit "
                         + "(llm.maxTokens={}); it will not parse. {}",
-                        LlmConfig.maxTokens, truncationNote(content));
+                        sentMaxTokens(requestBody), truncationNote(content));
                }
                return content;
             }
@@ -786,7 +800,7 @@ public class Player2APIService {
                   // with nothing anywhere saying why it was wrong.
                   LOGGER.warn("Plain-text LLM reply was cut off by the output token limit "
                         + "(llm.maxTokens={}); the result is incomplete. {}",
-                        LlmConfig.maxTokens, truncationNote(messageObject.get("content").getAsString()));
+                        sentMaxTokens(requestBody), truncationNote(messageObject.get("content").getAsString()));
                }
                return messageObject.get("content").getAsString();
             }

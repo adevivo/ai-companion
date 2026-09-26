@@ -24,7 +24,7 @@ public class UseChestCommand extends Command {
    public static UseChestCommand use() throws CommandException {
       return new UseChestCommand(
          "usechest",
-         "Your owner lets you use the chest, barrel or shulker box they are looking at or standing next to. Run it ONLY when your owner tells you to use that container, never on your own. `chests`, `withdraw` and `deposit` only use containers your owner has allowed.",
+         "Allow the container your owner is at. ONLY when they tell you to use it.",
          true
       );
    }
@@ -32,7 +32,7 @@ public class UseChestCommand extends Command {
    public static UseChestCommand forget() throws CommandException {
       return new UseChestCommand(
          "forgetchest",
-         "Stop using the chest, barrel or shulker box your owner is looking at or standing next to, when they tell you to leave it alone.",
+         "Stop using the container your owner is at, when they say so.",
          false
       );
    }

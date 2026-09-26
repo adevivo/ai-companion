@@ -16,7 +16,7 @@ public class GetCommand extends Command {
    public GetCommand() throws CommandException {
       super(
          "get",
-         "Get a resource or Craft an item in Minecraft. Takes it from the containers your owner has allowed first, then gathers or crafts the rest. You can craft item even if you don't have ingredients in inventory already. Examples: `get log 20` gets 20 logs, `get diamond_chestplate 1` gets 1 diamond chestplate. For equipments you have to specify the type of equipments like wooden, stone, iron, golden and diamond.",
+         "Get a resource or Craft an item in Minecraft. Uses allowed containers first. You can craft item even if you don't have ingredients in inventory already. Examples: `get log 20` gets 20 logs, `get diamond_chestplate 1` gets 1 diamond chestplate. For equipments you have to specify the type of equipments like wooden, stone, iron, golden and diamond.",
          new Arg<>(ItemList.class, "items")
       );
    }
