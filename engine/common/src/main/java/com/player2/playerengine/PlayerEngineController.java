@@ -521,6 +521,8 @@ public class PlayerEngineController {
 
    public void setOwner(Player owner) {
       this.owner = owner;
+      // Before the prompt update, so it lands in the history that will actually be used.
+      aiPersistantData.bindHistoryToOwner(owner == null ? null : owner.getUUID());
       aiPersistantData.updateSystemPrompt();
    }
 

@@ -15,13 +15,39 @@ public class AIPersistantData {
     private ConversationHistory conversationHistory;
     private Character character;
     private PlayerEngineController mod;
+    /** Whose file {@link #conversationHistory} reads and writes; null means the shared legacy path. */
+    private java.util.UUID historyOwner;
 
     public AIPersistantData(PlayerEngineController mod, Character character) {
         this.character = character;
         this.mod = mod;
+        this.historyOwner = mod.getOwnerUuid();
         String systemPrompt = Prompts.getAINPCSystemPrompt(character, mod.getCommandExecutor().agentCommands(), mod.getOwnerUsername());
         this.conversationHistory = new ConversationHistory(systemPrompt, character.name(),
-                character.shortName(), mod.getOwnerUuid());
+                character.shortName(), this.historyOwner);
+    }
+
+    /**
+     * Move the history to its owner's own file once the owner is known.
+     *
+     * <p>⚠️ The controller builds this object in its constructor, and the entity only calls
+     * {@code setOwner} on the next line, so the owner was <b>always</b> null here and every
+     * companion on every server used the flat legacy file {@code config/<Name>_<Name>.txt}. Two
+     * players whose companions share a name (the default roster makes that the usual case) then
+     * read each other's conversations into their prompts and overwrote each other's file. Found
+     * 2026-09-26 on holly: {@code config/Ava_Ava.txt}, and no {@code history/} directory at all.
+     *
+     * <p>The shared file's contents are dropped, not adopted: whose they are cannot be known. A
+     * relog with the same owner changes nothing.
+     */
+    public void bindHistoryToOwner(java.util.UUID owner) {
+        if (owner == null || owner.equals(this.historyOwner)) {
+            return;
+        }
+        this.historyOwner = owner;
+        String systemPrompt = Prompts.getAINPCSystemPrompt(character, mod.getCommandExecutor().agentCommands(), mod.getOwnerUsername());
+        this.conversationHistory = new ConversationHistory(systemPrompt, character.name(),
+                character.shortName(), owner);
     }
 
     public void clearHistory() {
