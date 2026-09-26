@@ -33,8 +33,25 @@ public final class BrainWire {
     /** S2C — "think about this turn for me". Carries the ingredients, never the finished prompt. */
     public static final Identifier TURN_REQUEST = id("brain_turn_request");
 
-    /** C2S — the reply, or an error string. */
+    /** C2S — the reply, or an error string. Also carries the answer to a {@link #PLAN_REQUEST}. */
     public static final Identifier TURN_RESULT = id("brain_turn_result");
+
+    /**
+     * S2C — "complete this conversation as plain text for me": the build planner's request.
+     *
+     * <p>⚠️ Without it {@code build_structure} called a model from the SERVER, which on a dedicated
+     * server has no key by design — observed 2026-09-25 as three 401s "Missing Authentication header"
+     * and every new build refused, while turns (already routed here) worked. Unlike a turn, the server
+     * sends the finished messages: the planner's prompt holds no memories, so there is nothing to
+     * assemble client-side. The answer comes back on {@link #TURN_RESULT}, whose shape is the same.
+     */
+    public static final Identifier PLAN_REQUEST = id("brain_plan_request");
+
+    /**
+     * Most a C2S result may carry. The serverbound custom-payload packet is capped at 32767 bytes, and
+     * the request id and error field need room too.
+     */
+    public static final int MAX_RESULT_BYTES = 32000;
 
     /**
      * C2S — "I can think for myself", sent once on join.
@@ -74,6 +91,7 @@ public final class BrainWire {
     public static void registerServerToClientChannels() {
         NetworkManager.registerS2CPayloadType(TURN_REQUEST);
         NetworkManager.registerS2CPayloadType(MEMORY_REMEMBER);
+        NetworkManager.registerS2CPayloadType(PLAN_REQUEST);
     }
 
     /**
@@ -89,6 +107,17 @@ public final class BrainWire {
         buf.writeUUID(requestId);
         buf.writeUUID(companionUuid);
         buf.writeByteArray(context.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static void writePlanRequest(FriendlyByteBuf buf, UUID requestId, JsonArray messages) {
+        buf.writeUUID(requestId);
+        buf.writeByteArray(messages.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static JsonArray readPlanMessages(FriendlyByteBuf buf) {
+        return com.google.gson.JsonParser
+                .parseString(new String(buf.readByteArray(), StandardCharsets.UTF_8))
+                .getAsJsonArray();
     }
 
     public static JsonObject readContext(FriendlyByteBuf buf) {

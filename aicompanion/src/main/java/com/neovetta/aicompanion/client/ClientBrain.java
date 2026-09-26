@@ -94,6 +94,18 @@ public final class ClientBrain {
                     CompletableFuture.runAsync(() -> think(requestId, context));
                 });
 
+        // The build planner's model call. It used to run on the server, which on a dedicated server
+        // has no key, so every new build_structure failed with a 401 while conversation (already
+        // routed here) worked. The server sends the finished messages; nothing here is recalled or
+        // learned, because the planning prompt is about blocks, not about the player.
+        NetworkManager.registerReceiver(NetworkManager.Side.S2C, BrainWire.PLAN_REQUEST,
+                (buf, packet) -> {
+                    markThinkingHere(true);
+                    UUID requestId = buf.readUUID();
+                    com.google.gson.JsonArray messages = BrainWire.readPlanMessages(buf);
+                    CompletableFuture.runAsync(() -> plan(requestId, messages));
+                });
+
         // /companion remember, routed here because this machine holds the corpus. The confirmation
         // is printed from what was actually stored, and printed here — the server cannot report on a
         // write it did not make, and reporting what was submitted would claim success even when the
@@ -248,6 +260,29 @@ public final class ClientBrain {
             // the server will not answer for a client that announced itself — so it is also the only
             // clue the owner gets about WHY their companion went quiet. "Connection refused" alone
             // does not say which address refused it.
+            send(requestId, null, e + " (endpoint: " + LlmConfig.baseUrl + ")");
+        }
+    }
+
+    /** Answer a plan request with this machine's model, or with an error the server can report. */
+    private static void plan(UUID requestId, com.google.gson.JsonArray messages) {
+        try {
+            List<JsonObject> list = new ArrayList<>();
+            for (JsonElement e : messages) {
+                list.add(e.getAsJsonObject());
+            }
+            String text = service().completeConversationToString(ConversationHistory.of(list));
+            int bytes = text == null ? 0 : text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (bytes > BrainWire.MAX_RESULT_BYTES) {
+                // Too big to send back in one serverbound packet. Say so rather than letting the send
+                // fail and the build wait out the timeout with no reason given.
+                send(requestId, null, "the build plan was " + bytes + " bytes, over the "
+                        + BrainWire.MAX_RESULT_BYTES + "-byte limit for sending it back; lower llm.maxTokens or describe a smaller build");
+                return;
+            }
+            send(requestId, text, null);
+        } catch (Throwable e) {
+            AiCompanion.LOGGER.warn("[{}] build plan request failed at {}", AiCompanion.MOD_ID, LlmConfig.baseUrl, e);
             send(requestId, null, e + " (endpoint: " + LlmConfig.baseUrl + ")");
         }
     }

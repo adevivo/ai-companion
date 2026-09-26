@@ -137,6 +137,9 @@ public final class NetworkBrainTransport implements BrainTransport {
     /** In-flight turns, keyed by request id. */
     private static final Map<UUID, Pending> PENDING = new ConcurrentHashMap<>();
 
+    /** In-flight plain-text completions (the build planner), keyed by request id. */
+    private static final Map<UUID, PendingText> PENDING_TEXT = new ConcurrentHashMap<>();
+
     /** One thread, daemon: only ever runs a timeout that has already failed. */
     private static final ScheduledExecutorService TIMEOUTS = newTimeoutPool();
 
@@ -220,10 +223,21 @@ public final class NetworkBrainTransport implements BrainTransport {
                 e.getValue().fail("the owner disconnected");
             }
         }
+        for (Map.Entry<UUID, PendingText> e : PENDING_TEXT.entrySet()) {
+            if (player.equals(e.getValue().owner)) {
+                PENDING_TEXT.remove(e.getKey());
+                e.getValue().fail("the owner disconnected");
+            }
+        }
     }
 
     /** A result came back from a client. Called from the mod's packet receiver. */
     public static void deliver(UUID requestId, String replyJson, String error) {
+        PendingText text = PENDING_TEXT.remove(requestId);
+        if (text != null) {
+            text.complete(replyJson, error);
+            return;
+        }
         Pending p = PENDING.remove(requestId);
         if (p == null) {
             // Already timed out and fell back, or arrived twice. Dropping it is correct: the turn it
@@ -249,6 +263,111 @@ public final class NetworkBrainTransport implements BrainTransport {
     public static boolean canThink(UUID player) {
         return LlmConfig.clientBrain && LlmConfig.localMode
                 && player != null && CAPABLE.contains(player);
+    }
+
+    /**
+     * Complete a conversation as plain text on the owner's client — for model work that is not a
+     * turn, which today means the build planner.
+     *
+     * <p>Same rules as a turn: only a client that announced it can think is asked, exactly one of
+     * reply/error/timeout acts, and a client that announced itself and then fails is NOT silently
+     * answered on the operator's key unless {@link ServerPolicy#serverAnswersWhenClientFails} says so.
+     *
+     * @param owner the companion's owner, or null
+     * @param serverFallback runs the request on this server instead; called only when policy allows
+     * @return false when that client cannot take the request at all, and the caller should run it here
+     */
+    public static boolean completeTextOnClient(Object owner, List<JsonObject> messages,
+            Consumer<String> onText, Consumer<String> onError, Runnable serverFallback) {
+        if (!(owner instanceof ServerPlayer player) || !canThink(player.getUUID())
+                || !NetworkManager.canPlayerReceive(player, BrainWire.PLAN_REQUEST)) {
+            // Not capable, or a client from before this channel existed — sending it an unknown
+            // payload risks a disconnect, so it is treated like any client that cannot think.
+            return false;
+        }
+        UUID requestId = UUID.randomUUID();
+        PendingText pending = new PendingText(requestId, player.getUUID(), onText, onError, serverFallback);
+        PENDING_TEXT.put(requestId, pending);
+        try {
+            JsonArray array = new JsonArray();
+            for (JsonObject m : messages) {
+                array.add(m);
+            }
+            RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), player.registryAccess());
+            BrainWire.writePlanRequest(buf, requestId, array);
+            NetworkManager.sendToPlayer(player, BrainWire.PLAN_REQUEST, buf);
+        } catch (Throwable e) {
+            PENDING_TEXT.remove(requestId);
+            LOGGER.warn("Brain: could not send a plan request to {}.", player.getUUID(), e);
+            pending.fail("the request could not be sent");
+            return true;
+        }
+        pending.timeout = TIMEOUTS.schedule(() -> {
+            PENDING_TEXT.remove(requestId);
+            pending.fail("the client did not answer within " + LlmConfig.clientBrainTimeoutMs + " ms");
+        }, LlmConfig.clientBrainTimeoutMs, TimeUnit.MILLISECONDS);
+        return true;
+    }
+
+    /** One in-flight plain-text completion, answered exactly once. */
+    private static final class PendingText {
+        private final UUID requestId;
+        private final UUID owner;
+        private final Consumer<String> onText;
+        private final Consumer<String> onError;
+        private final Runnable serverFallback;
+        private final AtomicBoolean done = new AtomicBoolean();
+        private volatile java.util.concurrent.ScheduledFuture<?> timeout;
+
+        PendingText(UUID requestId, UUID owner, Consumer<String> onText, Consumer<String> onError,
+                Runnable serverFallback) {
+            this.requestId = requestId;
+            this.owner = owner;
+            this.onText = onText;
+            this.onError = onError;
+            this.serverFallback = serverFallback;
+        }
+
+        void complete(String text, String error) {
+            if (!done.compareAndSet(false, true)) {
+                return;
+            }
+            cancel();
+            if (error != null && !error.isBlank()) {
+                LOGGER.warn("Brain: the client could not complete a plan request ({}).", error);
+                fallBackOrFail(error);
+                return;
+            }
+            onText.accept(text == null ? "" : text);
+        }
+
+        void fail(String why) {
+            if (!done.compareAndSet(false, true)) {
+                return;
+            }
+            cancel();
+            LOGGER.warn("Brain: plan request {}: {}.", requestId, why);
+            fallBackOrFail(why);
+        }
+
+        private void fallBackOrFail(String why) {
+            if (ServerPolicy.serverAnswersWhenClientFails) {
+                LOGGER.warn("Brain: running the plan request for {} on this server's key "
+                        + "(server.serverAnswersWhenClientFails=true).", owner);
+                serverFallback.run();
+            } else {
+                // The error reaches the owner through the build's own failure notice, with this text
+                // in it — so it has to say whose model failed, not just that something did.
+                onError.accept("your client's model could not answer (" + why + ")");
+            }
+        }
+
+        private void cancel() {
+            java.util.concurrent.ScheduledFuture<?> t = this.timeout;
+            if (t != null) {
+                t.cancel(false);
+            }
+        }
     }
 
     /** Whether this companion's owner is online and able to think for it right now. */

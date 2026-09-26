@@ -187,7 +187,9 @@ public class BuildStructureTask extends Task {
 
     private class RequestLLMCode extends Task {
         // outer option: isDone, either: (left=code (success), right=errStr)
-        Optional<Either<String, String>> llmResult = Optional.empty();
+        // volatile: written from the LLM thread, the brain timeout thread or the server thread,
+        // depending on which machine answered; read on the server thread.
+        volatile Optional<Either<String, String>> llmResult = Optional.empty();
 
         @Override
         protected boolean isEqual(Task var1) {
@@ -196,15 +198,24 @@ public class BuildStructureTask extends Task {
 
         @Override
         protected void onStart() {
-            // call LLM and either output err or code result.
-            completer.processToString(service, history, codeResult -> {
+            java.util.function.Consumer<String> onCode = codeResult -> {
                 String code = normalizeCode(codeResult);
                 LOGGER.info("LLM generated code={}", code);
                 llmResult = Optional.of(Either.left(code));
-            }, errStr -> {
+            };
+            java.util.function.Consumer<String> onErr = errStr -> {
                 LOGGER.info("LLM Transport Error={}", errStr);
                 llmResult = Optional.of(Either.right(errStr));
-            });
+            };
+            Runnable here = () -> completer.processToString(service, history, onCode, onErr);
+            // The owner's client first, with the owner's key — the same machine that does the
+            // companion's thinking. On a dedicated server this side has no key at all, so calling
+            // from here was a guaranteed 401 for every new build. Single player, and a server that
+            // does its own thinking, still run it here.
+            if (!com.player2.playerengine.player2api.brain.NetworkBrainTransport.completeTextOnClient(
+                    mod.getOwner(), history.getListJSON(), onCode, onErr, here)) {
+                here.run();
+            }
         }
 
         @Override
