@@ -5,6 +5,18 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.4.1 — Minecraft 1.21.11, memory that listens past "okay"
+
+### Starting a sentence with "okay" no longer switches memory off for that turn
+
+The companion skips its memory on turns that open with a command word, because "build a wall" is an
+instruction and not a question about you. "ok" and "okay" were on that list, so "okay, let's add the
+doors and windows" never looked up what you had told her about doors and windows. Leading filler —
+okay, hm, yeah, alright, and the like — is now skipped, and it is the word after it that decides.
+"okay stop" is still a command.
+
+---
+
 ## 0.4.0 — Minecraft 1.21.11, and a jar that stops carrying other people's mods
 
 The first release on the 1.21.11 line, and the first with a Minecraft version in its filename.
