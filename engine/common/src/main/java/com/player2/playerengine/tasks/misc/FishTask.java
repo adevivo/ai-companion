@@ -6,8 +6,18 @@ import com.player2.playerengine.automaton.process.FishingProcess;
 import net.minecraft.world.item.Items;
 
 public class FishTask extends Task {
+   /**
+    * Ticks to wait before restarting a fishing process that stopped itself. The process gives up on
+    * its own when it finds no water within 8 blocks or cannot path to it, and restarting it on the
+    * very next tick looped: "Fishing process started." about 20 times a second in chat, 793 lines
+    * in 39 s on 2026-10-09, until the owner moved the companion.
+    */
+   private static final int RETRY_DELAY_TICKS = 100;
+   private int retryCooldown = 0;
+
    @Override
    protected void onStart() {
+      this.retryCooldown = 0;
       ((Baritone)this.controller.getBaritone()).getFishingProcess().fish();
    }
 
@@ -19,7 +29,14 @@ public class FishTask extends Task {
          return null;
       } else {
          if (!fishingProcess.isActive()) {
-            this.onStart();
+            if (this.retryCooldown <= 0) {
+               this.retryCooldown = RETRY_DELAY_TICKS;
+               fishingProcess.fish();
+            } else {
+               this.retryCooldown--;
+               this.setDebugState("No reachable water to fish from nearby; trying again shortly");
+               return null;
+            }
          }
 
          this.setDebugState("Fishing with Automatone...");

@@ -77,14 +77,18 @@ public class CustomFishingBobberRenderer extends EntityRenderer<CustomFishingBob
         float f = (float)fishingHookRenderState.lineOriginOffset.x;
         float g = (float)fishingHookRenderState.lineOriginOffset.y;
         float h = (float)fishingHookRenderState.lineOriginOffset.z;
+        // 1.21.11 added a LineWidth element to the lines vertex format; a vertex without it throws
+        // "Missing elements in vertex: LineWidth" and crashes the client the moment a line is drawn.
+        // Same source of width as vanilla FishingHookRenderer.
+        float lineWidth = Minecraft.getInstance().getWindow().getAppropriateLineWidth();
         submitNodeCollector.submitCustomGeometry(poseStack, RenderTypes.lines(), (pose, vertexConsumer) -> {
             int i = 16;
 
             for(int j = 0; j < 16; ++j) {
                 float k = fraction(j, 16);
                 float l = fraction(j + 1, 16);
-                stringVertex(f, g, h, vertexConsumer, pose, k, l);
-                stringVertex(f, g, h, vertexConsumer, pose, l, k);
+                stringVertex(f, g, h, vertexConsumer, pose, k, l, lineWidth);
+                stringVertex(f, g, h, vertexConsumer, pose, l, k, lineWidth);
             }
 
         });
@@ -122,7 +126,7 @@ public class CustomFishingBobberRenderer extends EntityRenderer<CustomFishingBob
       consumer.addVertex(pose, x - 0.5F, (float)y - 0.5F, 0.0F).setColor(-1).setUv((float)u, (float)v).setOverlay(OverlayTexture.NO_OVERLAY).setLight(packedLight).setNormal(pose, 0.0F, 1.0F, 0.0F);
    }
 
-   private static void stringVertex(float x, float y, float z, VertexConsumer consumer, PoseStack.Pose pose, float stringFraction, float nextStringFraction) {
+   private static void stringVertex(float x, float y, float z, VertexConsumer consumer, PoseStack.Pose pose, float stringFraction, float nextStringFraction, float lineWidth) {
       float f = x * stringFraction;
       float g = y * (stringFraction * stringFraction + stringFraction) * 0.5F + 0.25F;
       float h = z * stringFraction;
@@ -133,7 +137,7 @@ public class CustomFishingBobberRenderer extends EntityRenderer<CustomFishingBob
       i /= l;
       j /= l;
       k /= l;
-      consumer.addVertex(pose, f, g, h).setColor(-16777216).setNormal(pose, i, j, k);
+      consumer.addVertex(pose, f, g, h).setColor(-16777216).setNormal(pose, i, j, k).setLineWidth(lineWidth);
    }
 
    public FishingHookRenderState createRenderState() {
