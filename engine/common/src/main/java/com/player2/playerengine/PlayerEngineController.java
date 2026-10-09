@@ -170,7 +170,6 @@ public class PlayerEngineController {
       this.inputControls.onTickPost();
       this.baritone.serverTick();
       com.player2.playerengine.automaton.utils.OpenedDoors.tick(this.getEntity());
-      this.player2apiService.trySendHeartbeat();
    }
 
    static {

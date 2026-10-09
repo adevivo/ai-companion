@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "playerengine",
   "version": "${version}",
-  "name": "PlayerEngine",
-  "description": "Autonomous player-agent engine: pathfinding, world interaction, inventory and task planning for a program-controlled player. A NeoVetta fork of Goodbird-git/PlayerEngine, which builds on Baritone for pathfinding. Bundled inside AI Companion and not intended to be installed on its own.",
+  "name": "AI Companion Engine (PlayerEngine fork)",
+  "description": "Autonomous player-agent engine: pathfinding, world interaction, inventory and task planning for a program-controlled player. A NeoVetta fork of Goodbird-git/PlayerEngine, which builds on Baritone for pathfinding. Player2 cloud services (account login, heartbeat, hosted API) are removed: it sends no telemetry and contacts no service of its own. Its only network requests go to the LLM, embeddings and text-to-speech endpoints the user configures in AI Companion. Bundled inside AI Companion and not intended to be installed on its own.",
   "authors": [
     "NeoVetta"
   ],
