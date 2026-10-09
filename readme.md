@@ -740,7 +740,7 @@ so the app resolves them for players.
 
 **JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`.
 
-The engine jar version comes from `engine/gradle.properties` (currently **1.0.46**). The commands below
+The engine jar version comes from `engine/gradle.properties` (currently **1.0.48**). The commands below
 glob it rather than naming it, and **clear both output directories first** — the consumer depends on
 `PlayerEngine:+`, so a stale jar left alongside a new one is picked up silently, and a rebuilt jar
 carrying the *same* version is served from Loom's remap cache. If a change to engine code does not seem

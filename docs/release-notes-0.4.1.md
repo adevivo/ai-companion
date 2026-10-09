@@ -1,8 +1,8 @@
-# AI Companion 0.4.0 — for Minecraft 1.21.11
+# AI Companion 0.4.1 — for Minecraft 1.21.11
 
 The first release for **Minecraft 1.21.11**. Playing 1.20.1? Version 0.2.9 is still the one for you.
 
-**Coming from 0.2.9?** Two updates in between never made it to CurseForge, so everything below is new to you.
+**Coming from 0.2.9?** Three updates in between (0.3.0, 0.3.1 and 0.4.0) never made it to CurseForge, so everything below is new to you.
 
 ## Highlights
 
@@ -13,6 +13,14 @@ The first release for **Minecraft 1.21.11**. Playing 1.20.1? Version 0.2.9 is st
 - **Builds from what she carries.** Ask for "a small house from what you have" and she designs it around her inventory.
 - **Doors.** She opens and closes them instead of breaking through.
 
+## Privacy: no Player2 code, no telemetry
+
+The engine inside this mod is our fork of PlayerEngine. Until now it still carried upstream's code for the Player2 hosted service: an account login, a background "heartbeat" request to Player2's servers every minute, and a route that could send AI requests there. It was switched off by default and AI Companion never used it, but it was in the jar. **In 0.4.1 it has been deleted.**
+
+- The mod sends no telemetry and contacts no service of its own.
+- The only network requests it makes go to endpoints **you** set in its config: your AI model, and optionally an embeddings model (memory) and a voice server (TTS). The defaults point at your own machine.
+- The bundled engine now appears in your mod list as "AI Companion Engine (PlayerEngine fork)", so it's clear what it is.
+
 ## Also new
 
 - **Better manners in company.** With other players online she only picks up lines that use her name, plus your follow-ups within 30 seconds of talking to her.
@@ -20,7 +28,8 @@ The first release for **Minecraft 1.21.11**. Playing 1.20.1? Version 0.2.9 is st
 - **Cheaper on hosted models.** Most of each request is now cached by the provider.
 - **Cloth Config is optional.** It's only needed for the settings screen. Without it, `/aicompanion config` edits settings from chat.
 - **Local models:** servers that ignore or refuse JSON mode (seen with llama.cpp and LM Studio) are now handled.
-- **Fixes:** item duplication with chests, companions frozen after reconnecting to a dedicated server, conversation lost on logout, getting stuck in powder snow, and many more.
+- **Memory listens past "okay".** A sentence starting with filler like "okay", "hm" or "alright" no longer skips her memory for that turn. "okay stop" is still a command.
+- **Fixes:** a client crash when a companion goes fishing, chat flooded with "Fishing process started", item duplication with chests, companions frozen after reconnecting to a dedicated server, conversation lost on logout, getting stuck in powder snow, and many more.
 
 ## Requirements
 

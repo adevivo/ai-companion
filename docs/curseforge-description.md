@@ -3,7 +3,7 @@
 > Paste-ready copy for the CurseForge project page. The **Summary** goes in the short "Summary"
 > field; everything below the second divider is the long description (CurseForge accepts Markdown).
 > Rewritten for 0.4.0 on 2026-09-26 to cover both lines: 0.4.0 for Minecraft 1.21.11 and 0.2.9 for
-> 1.20.1. Release notes for the file itself are in `release-notes-0.4.0.md`.
+> 1.20.1. Release notes for the file itself are in `release-notes-0.4.1.md`.
 
 ---
 
@@ -26,7 +26,7 @@ The model decides *what* to do and *what to say*. Walking, mining, crafting and 
 
 | Minecraft | Mod version | Notes |
 |---|---|---|
-| **1.21.11** | **0.4.0** | Current. Memory, multiplayer for everyone, bodyguard, chests. |
+| **1.21.11** | **0.4.1** | Current. Memory, multiplayer for everyone, bodyguard, chests. |
 | 1.20.1 | 0.2.9 | Older line. Singleplayer and trusted LAN. |
 
 ## What she can do
@@ -64,6 +64,8 @@ The mod needs an **OpenAI-compatible chat endpoint** to think with:
 **Memory** (optional, off by default) also needs an embedding model. The easy route is Ollama with `nomic-embed-text`.
 
 **Voice** (optional) uses a small Kokoro container. On first launch the mod writes a ready `docker-compose.yml` into `config/aicompanion/tts/`; start it and your companions speak, each in her own voice.
+
+**Where your data goes:** only to the endpoints you configure above, and by default those are on your own machine. The mod sends no telemetry and contacts no service of its own. (From 0.4.1 on 1.21.11, the bundled engine no longer contains upstream PlayerEngine's Player2 cloud code. That code was always off by default.)
 
 > **Hardware note:** a local model on the same PC competes with Minecraft for memory. Overdo it (a huge context, every layer on the GPU) and you can freeze the whole machine, not just the game. Start small, or run the model on another computer on your LAN.
 

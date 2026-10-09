@@ -7,6 +7,22 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ## 0.4.1 — Minecraft 1.21.11, memory that listens past "okay"
 
+### The bundled engine no longer contains any Player2 cloud code
+
+The engine is a fork of PlayerEngine, and it still carried upstream's code for the Player2 hosted
+service: an account login, a background "heartbeat" request every minute, and a route that sent AI
+requests to Player2's servers. It was switched off by default and nothing in AI Companion used it, but
+it was there. It has now been deleted. The engine sends no telemetry and contacts no service of its
+own. The only network requests the mod makes go to the AI, embeddings and voice endpoints you set in
+its config.
+
+### Fishing no longer crashes the game
+
+When a companion cast her line, every player who could see it crashed: Minecraft 1.21.11 changed how
+lines are drawn, and the fishing line had not been updated for it. And when she couldn't find water
+she could reach, she gave up and started over every tick, filling chat with "Fishing process
+started." about 20 times a second. She now waits a few seconds before looking again.
+
 ### Starting a sentence with "okay" no longer switches memory off for that turn
 
 The companion skips its memory on turns that open with a command word, because "build a wall" is an
