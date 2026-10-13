@@ -5,6 +5,7 @@ import com.player2.playerengine.chains.UserTaskChain;
 import com.player2.playerengine.util.Debug;
 import com.player2.playerengine.tasks.entity.KillEntitiesTask;
 import com.player2.playerengine.tasks.base.ITaskRequiresGrounded;
+import com.player2.playerengine.tasks.base.ITaskOpenEnded;
 import com.player2.playerengine.tasks.base.Task;
 import com.player2.playerengine.util.helpers.ItemHelper;
 import com.player2.playerengine.util.helpers.StorageHelper;
@@ -292,6 +293,10 @@ public class TimeoutWanderTask extends Task implements ITaskRequiresGrounded {
       }
 
       Task root = chain.getTasks().get(0);
+      if (root instanceof ITaskOpenEnded) {
+         this.stallStreak = 0;
+         return;
+      }
       this.stallStreak = 0;
       mod.logAgentNotice(
          "Gave up on " + root + ": stood still for about a minute searching for what it needs, and "

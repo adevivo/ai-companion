@@ -1,6 +1,7 @@
 package com.player2.playerengine.tasks.movement;
 
 import com.player2.playerengine.PlayerEngineController;
+import com.player2.playerengine.tasks.base.ITaskOpenEnded;
 import com.player2.playerengine.tasks.base.Task;
 import java.util.Optional;
 import net.minecraft.core.BlockPos;
@@ -8,7 +9,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 
-public class FollowPlayerTask extends Task {
+public class FollowPlayerTask extends Task implements ITaskOpenEnded {
    private final String playerName;
    private final double followDistance;
 

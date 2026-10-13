@@ -5,6 +5,29 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.4.3 — Minecraft 1.21.11, she can see animals and clear blocks
+
+### She sees animals, villagers and more hostiles
+
+Companions only noticed hostile mobs, players and other companions. Ask about cows or chickens and
+she honestly had no idea. She now sees animals, villagers and golems within 24 blocks. She also sees
+slimes, ghasts, phantoms, shulkers and hoglins, which slipped past her before because Minecraft files
+them differently from other hostile mobs.
+
+### She can clear blocks on request
+
+"Get rid of the dirt in the pen" used to get "I can't break blocks". Her command list really did say
+there was no mining action. A new `clear` command removes every block in a box of up to 512, nearest
+first. Chests and other containers, bedrock and fluids are skipped, never broken.
+
+### Bodyguard no longer quits when things are quiet
+
+If she couldn't step any closer to you for about a minute, guard mode gave up as if she'd failed to
+find something, and suggested checking chests. Guarding and following now carry on until you tell her
+to stop.
+
+---
+
 ## 0.4.2 — Minecraft 1.21.11, a fishing crash fix
 
 ### Fishing no longer disconnects players

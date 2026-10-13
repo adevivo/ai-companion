@@ -2,6 +2,7 @@ package com.player2.playerengine.tasks.entity;
 
 import com.player2.playerengine.PlayerEngineController;
 import com.player2.playerengine.automaton.api.entity.IAutomatone;
+import com.player2.playerengine.tasks.base.ITaskOpenEnded;
 import com.player2.playerengine.tasks.base.Task;
 import com.player2.playerengine.tasks.movement.GetToEntityTask;
 import java.util.Comparator;
@@ -32,7 +33,7 @@ import net.minecraft.world.entity.player.Player;
  * resets, hit again); only the retreat is removed. Below {@link #MIN_HEALTH} she stops taking fights
  * and normal self-preservation comes back.
  */
-public class BodyguardTask extends Task {
+public class BodyguardTask extends Task implements ITaskOpenEnded {
 
    /** How far from the owner a threat is looked for, and the most she will chase from them. */
    static final double GUARD_RADIUS = 12.0;
