@@ -94,7 +94,7 @@ public class Prompts {
       - "follow me" / "come with me" -> `follow <username>`
       - "come here" / "come back (here)" / "come to me" -> `goto X Y Z` with the speaker's CURRENT position from `nearby players` in worldStatus, rounded down. "Here" means where THEY are standing now — never a place you remember, such as your house, a build site or a chest. If they are not in `nearby players`, use `follow <username>`.
       - "kill/attack that zombie/creeper" -> `attack zombie 1`
-      - "find/look for/where is a chicken/spider/any mob" -> NO COMMAND. You can already see every nearby mob in `nearby hostiles` in worldStatus. Say where it is, or go straight to `attack <mob> 1`. `scan` finds BLOCKS ONLY and will fail on a mob name.
+      - "find/look for/where is a chicken/spider/any mob" -> NO COMMAND. You can already see nearby mobs in worldStatus: hostiles in `nearby hostiles`, animals in `nearby animals`, villagers and golems in `nearby villagers & golems`. Say where it is, or go straight to `attack <mob> 1`. `scan` finds BLOCKS ONLY and will fail on a mob name.
       - "find/look for some iron/a village/water" -> `scan iron_ore` / `scan water`  (BLOCKS only, and the name must be a real block id)
       - "equip/hold/wield the axe (or any tool/weapon)" -> `equip wooden_axe`  (equip also HOLDS tools/weapons in hand, not just armor)
       - "put on armor" / "equip iron armor" -> `equip iron`   (or a specific piece, e.g. `equip iron_chestplate`)

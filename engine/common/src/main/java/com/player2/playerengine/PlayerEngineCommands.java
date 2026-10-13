@@ -5,6 +5,7 @@ import com.player2.playerengine.commands.BodyLanguageCommand;
 import com.player2.playerengine.commands.BodyguardCommand;
 import com.player2.playerengine.commands.BuildStructureCommand;
 import com.player2.playerengine.commands.ChestsCommand;
+import com.player2.playerengine.commands.ClearCommand;
 import com.player2.playerengine.commands.DepositCommand;
 import com.player2.playerengine.commands.DigCommand;
 import com.player2.playerengine.commands.EquipCommand;
@@ -49,6 +50,7 @@ public class PlayerEngineCommands {
                   UseChestCommand.forget(),
                   new GotoCommand(),
                   new DigCommand(),
+                  new ClearCommand(),
                   new IdleCommand(),
                   new HeroCommand(),
                   new BodyguardCommand(),

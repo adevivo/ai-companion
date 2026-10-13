@@ -21,7 +21,14 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.AgeableMob;
+import net.minecraft.world.entity.Leashable;
+import net.minecraft.world.entity.ambient.AmbientCreature;
+import net.minecraft.world.entity.animal.Animal;
+import net.minecraft.world.entity.animal.fish.WaterAnimal;
+import net.minecraft.world.entity.animal.golem.AbstractGolem;
+import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.npc.villager.AbstractVillager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ShieldItem;
@@ -115,7 +122,9 @@ public class StatusUtils {
       List<String> descriptions = new ArrayList<>();
 
       for (Entity entity : mod.getWorld().getAllEntities()) {
-         if (entity instanceof Monster && entity.distanceTo(mod.getPlayer()) < radius) {
+         // Enemy, not Monster: slimes, ghasts, phantoms, shulkers and hoglins implement Enemy
+         // without extending Monster, and were invisible to the companion as a result.
+         if (entity instanceof Enemy && entity.distanceTo(mod.getPlayer()) < radius) {
             String type = entity.getType().getDescriptionId();
             String niceName = type.replace("entity.minecraft.", "");
             String position = entity.position().align(EnumSet.allOf(Axis.class)).toString();
@@ -126,6 +135,45 @@ public class StatusUtils {
       return descriptions.isEmpty()
             ? String.format("no nearby hostile mobs within %d", radius)
             : "[" + String.join(",", descriptions.stream().map(s -> "\"" + s + "\"").toArray(String[]::new)) + "]";
+   }
+
+   private static final int CREATURE_RADIUS = 24;
+   private static final int MAX_CREATURE_TYPES = 8;
+
+   public static String getNearbyAnimals(PlayerEngineController mod) {
+      return nearbyCreatures(mod, false, "no nearby animals within " + CREATURE_RADIUS);
+   }
+
+   public static String getNearbyVillagersAndGolems(PlayerEngineController mod) {
+      return nearbyCreatures(mod, true, "no villagers or golems within " + CREATURE_RADIUS);
+   }
+
+   /** Villagers/traders/golems when {@code townsfolk}, otherwise passive and neutral animals. */
+   private static String nearbyCreatures(PlayerEngineController mod, boolean townsfolk, String emptyText) {
+      List<NearbyGrouping.Sighting> sightings = new ArrayList<>();
+      for (Entity entity : mod.getWorld().getAllEntities()) {
+         // The companion and any other companion are IAutomatone; neither is scenery.
+         if (!(entity instanceof LivingEntity) || entity instanceof Player || entity instanceof IAutomatone
+               || entity instanceof Enemy || entity.distanceTo(mod.getPlayer()) >= CREATURE_RADIUS) {
+            continue;
+         }
+         // Villagers are AgeableMobs too, so they must be classified first.
+         boolean isTown = entity instanceof AbstractVillager || entity instanceof AbstractGolem;
+         boolean isAnimal = entity instanceof Animal || entity instanceof WaterAnimal
+               || entity instanceof AmbientCreature || entity instanceof AgeableMob;
+         if (townsfolk ? !isTown : (isTown || !isAnimal)) {
+            continue;
+         }
+         String type = entity.getType().getDescriptionId().replace("entity.minecraft.", "");
+         BlockPos pos = entity.blockPosition();
+         sightings.add(new NearbyGrouping.Sighting(
+               type,
+               entity instanceof AgeableMob age && age.isBaby(),
+               entity instanceof Leashable leash && leash.isLeashed(),
+               entity.distanceTo(mod.getPlayer()),
+               pos.getX(), pos.getY(), pos.getZ()));
+      }
+      return NearbyGrouping.describe(sightings, MAX_CREATURE_TYPES, emptyText);
    }
 
    public static String getEquippedArmorStatusString(PlayerEngineController mod) {

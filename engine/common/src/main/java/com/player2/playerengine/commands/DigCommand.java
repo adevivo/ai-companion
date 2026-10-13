@@ -30,8 +30,8 @@ public class DigCommand extends Command {
         super(
             "dig",
             "Cut a staircase DOWN at 45 degrees — one block down per block along — that you can walk back"
-                + " up. This is how you excavate: there is no separate mining action, and build_structure"
-                + " is the opposite (it places blocks and costs materials). Direction is north, south, east"
+                + " up. ONLY for tunnelling down; to break or remove specific blocks use `clear` instead."
+                + " build_structure is the opposite (it places blocks and costs materials). Direction is north, south, east"
                 + " or west and may be omitted to use the way you are facing. Depth is how many blocks BELOW"
                 + " your current position to finish, default 30. Examples: `dig east 30` cuts east and ends"
                 + " 30 blocks lower; `dig 15` does the same 15 blocks down in the direction you face. It"

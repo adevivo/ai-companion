@@ -233,6 +233,11 @@ public final class ClientBrain {
                     memories);
 
             JsonObject reply = service().completeConversation(ConversationHistory.of(assembled));
+            // The server logs the reply it receives, but on a remote server that log is not the
+            // player's; here only the HTTP request was visible, so a delegated turn left no local
+            // record of what the model decided. Same format as the server's line, once per turn.
+            AiCompanion.LOGGER.info("[{}] Processed LLM repsonse: message={} command={}",
+                    AiCompanion.MOD_ID, jsonField(reply, "message"), jsonField(reply, "command"));
             send(requestId, reply == null ? null : reply.toString(), null);
 
             // After the answer is on its way back, never before. Extraction spends a second call and
@@ -285,6 +290,15 @@ public final class ClientBrain {
             AiCompanion.LOGGER.warn("[{}] build plan request failed at {}", AiCompanion.MOD_ID, LlmConfig.baseUrl, e);
             send(requestId, null, e + " (endpoint: " + LlmConfig.baseUrl + ")");
         }
+    }
+
+    private static String jsonField(JsonObject o, String key) {
+        if (o == null || !o.has(key) || o.get(key).isJsonNull()) {
+            return null;
+        }
+        // Never getAsString() on a non-primitive: it throws, and this runs before send(), so a model
+        // that returned an object here would lose the whole turn to a log line.
+        return o.get(key).isJsonPrimitive() ? o.get(key).getAsString() : o.get(key).toString();
     }
 
     private static void send(UUID requestId, String replyJson, String error) {
