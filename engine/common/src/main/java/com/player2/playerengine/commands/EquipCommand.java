@@ -17,7 +17,7 @@ import net.minecraft.world.item.Item;
 
 public class EquipCommand extends Command {
    public EquipCommand() throws CommandException {
-      super("equip", "Equips armor to its slot, or holds a tool/weapon (axe, pickaxe, sword) in hand. Examples: `equip iron_chestplate`, `equip wooden_axe`.", new Arg<>(ItemList.class, "[equippable_items]"));
+      super("equip", "Equips armor to its slot, or holds any other item in hand: a tool/weapon, or an animal's food to lead it. Examples: `equip iron_chestplate`, `equip wooden_axe`, `equip wheat`.", new Arg<>(ItemList.class, "[equippable_items]"));
    }
 
    @Override

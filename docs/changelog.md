@@ -14,6 +14,13 @@ she honestly had no idea. She now sees animals, villagers and golems within 24 b
 slimes, ghasts, phantoms, shulkers and hoglins, which slipped past her before because Minecraft files
 them differently from other hostile mobs.
 
+### She can lead animals with food
+
+Animals only ever followed players holding their food. Ava could hold wheat in front of a cow all day
+and it wouldn't notice. Now any animal a player can lead with food follows a companion holding the
+same food: cows and sheep with wheat, pigs with carrots, chickens with seeds, and so on. She also
+knows she can hold food in her hand, which she used to say she couldn't.
+
 ### She can clear blocks on request
 
 "Get rid of the dirt in the pen" used to get "I can't break blocks". Her command list really did say
