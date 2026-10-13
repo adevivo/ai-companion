@@ -2,7 +2,7 @@
 
 > Paste-ready copy for the Modrinth project, field by field, in the order Modrinth asks for it.
 > Written 2026-10-05 from `curseforge-description.md`. The long description at the bottom is that
-> file's body with the version table moved to 0.4.1; keep the two in step when either changes.
+> file's body with the version table moved to 0.4.3; keep the two in step when either changes.
 > Modrinth's form changes now and then, so a field here may sit under a different heading.
 
 ---
@@ -68,13 +68,13 @@ mark the best one **Featured**: it becomes the card image in search.
 
 ---
 
-## Version 1: 0.4.1 for 1.21.11
+## Version 1: 0.4.3 for 1.21.11
 
 | Field | Value |
 |---|---|
-| File | `aicompanion/build/libs/aicompanion-0.4.1+mc1.21.11.jar` |
-| Version number | `0.4.1+mc1.21.11` |
-| Version title | `0.4.1 for Minecraft 1.21.11` |
+| File | `aicompanion/build/libs/aicompanion-0.4.3+mc1.21.11.jar` |
+| Version number | `0.4.3+mc1.21.11` |
+| Version title | `0.4.3 for Minecraft 1.21.11` |
 | Release channel | Release |
 | Loaders | Fabric |
 | Game versions | 1.21.11 |
@@ -94,6 +94,13 @@ Do **not** add PlayerEngine as a dependency. The modified fork is bundled inside
 
 ```markdown
 The first Modrinth release, and the current release for **Minecraft 1.21.11**. Playing 1.20.1? Use 0.2.9.
+
+## 0.4.3
+- **She sees animals and villagers**, plus slimes, ghasts, phantoms, shulkers and hoglins, which she used to miss.
+- **She leads animals with food.** Cows follow her wheat, pigs her carrots and chickens her seeds, just like they follow you.
+- **`clear` breaks blocks on request**, up to 512 at a time. Chests and other containers are never touched.
+- Bodyguard no longer gives up after a quiet minute.
+- Fixed a second fishing crash that could disconnect you from a server.
 
 ## 0.4.1
 - **No Player2 code, no telemetry.** The bundled engine (our PlayerEngine fork) no longer contains upstream's Player2 cloud login and once-a-minute heartbeat. They were off by default and never used, and are now deleted. The mod only contacts the AI, embeddings and voice endpoints you configure.
@@ -136,7 +143,7 @@ If it's nested, set it to **Embedded**. If not, set it to **Required**.
 **Changelog:**
 
 ```markdown
-The release for **Minecraft 1.20.1**: singleplayer and trusted LAN. For memory, multiplayer for everyone, bodyguard and chests, see 0.4.1 for 1.21.11.
+The release for **Minecraft 1.20.1**: singleplayer and trusted LAN. For memory, multiplayer for everyone, bodyguard and chests, see 0.4.3 for 1.21.11.
 ```
 
 ---
@@ -151,7 +158,7 @@ The model decides *what* to do and *what to say*. Walking, mining, crafting and 
 
 | Minecraft | Mod version | Notes |
 |---|---|---|
-| **1.21.11** | **0.4.1** | Current. Memory, multiplayer for everyone, bodyguard, chests. |
+| **1.21.11** | **0.4.3** | Current. Memory, multiplayer for everyone, bodyguard, chests, animals. |
 | 1.20.1 | 0.2.9 | Older line. Singleplayer and trusted LAN. |
 
 ## What she can do
