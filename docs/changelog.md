@@ -5,6 +5,17 @@ CurseForge changelog field at upload — it renders Markdown there.
 
 ---
 
+## 0.4.2 — Minecraft 1.21.11, a fishing crash fix
+
+### Fishing no longer disconnects players
+
+0.4.1 fixed one fishing crash, but there was a second one. If a companion's fishing line reached a
+player's game before the companion herself did, for example when you walked up while she was already
+fishing, that player was disconnected with "Network Protocol Error". The line is now quietly dropped
+instead, the way vanilla handles the same case, and it shows up properly once the companion does.
+
+---
+
 ## 0.4.1 — Minecraft 1.21.11, memory that listens past "okay"
 
 ### The bundled engine no longer contains any Player2 cloud code

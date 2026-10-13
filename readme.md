@@ -738,9 +738,12 @@ so the app resolves them for players.
 
 ## Building
 
-**JDK 17 is required** — Java 25 fails with `Unsupported class file major version 69`.
+**The JDK depends on the branch.** `main` (1.20.1) needs **JDK 17**; Java 25 fails there with
+`Unsupported class file major version 69`. `mc/1.21.11` needs **JDK 21** installed: the companion
+mod's toolchain asks for exactly 21, and JDK 17 fails at configuration with `requires at least JVM
+runtime version 21`.
 
-The engine jar version comes from `engine/gradle.properties` (currently **1.0.48**). The commands below
+The engine jar version comes from `engine/gradle.properties` (currently **1.0.49**). The commands below
 glob it rather than naming it, and **clear both output directories first** — the consumer depends on
 `PlayerEngine:+`, so a stale jar left alongside a new one is picked up silently, and a rebuilt jar
 carrying the *same* version is served from Loom's remap cache. If a change to engine code does not seem
@@ -752,7 +755,7 @@ new one and leave the consumer resolving between two.
 
 ```bash
 # macOS / Linux
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17          # or your JDK 17 path
+export JAVA_HOME=/path/to/your/jdk   # 21 on mc/1.21.11, 17 on main
 
 # 1. Build the engine (our PlayerEngine fork) and stage its jar for the consumer
 cd engine && rm -f build/libs/*.jar && ./gradlew build \
@@ -762,9 +765,17 @@ cd engine && rm -f build/libs/*.jar && ./gradlew build \
 # 2. Build the companion mod (depends on the staged engine jar)
 cd aicompanion && ./gradlew build      # → build/libs/*.jar
 ```
+
+On `mc/1.21.11` the engine is multi-project, so the jar to stage is the Fabric one, renamed:
+
+```bash
+cd engine && ./gradlew :common:test :fabric:build \
+  && cp fabric/build/libs/playerengine-fabric-1.21.11-<ver>.jar ../aicompanion/libs/PlayerEngine-1.21.11-<ver>.jar \
+  && cd ../aicompanion && ./gradlew build
+```
 ```powershell
 # Windows 11 (PowerShell)
-$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # adjust to your JDK 17 install
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17"   # JDK 21 on mc/1.21.11, 17 on main
 
 # 1. Build the engine fork and stage its jar for the consumer
 cd engine; Remove-Item build\libs\*.jar -ErrorAction SilentlyContinue; .\gradlew.bat build; Remove-Item ..\aicompanion\libs\PlayerEngine-*.jar -ErrorAction SilentlyContinue; Copy-Item build\libs\PlayerEngine-*.jar ..\aicompanion\libs\; cd ..

@@ -539,7 +539,9 @@ public class CustomFishingBobberEntity extends ThrowableProjectile {
       if (this.getPlayerOwner() == null) {
          int i = packet.getData();
          LOGGER.error("Failed to recreate fishing hook on client. {} (id: {}) is not a valid owner.", this.level().getEntity(i), i);
-         this.kill((ServerLevel) level());
+         // Client-side: level() is a ClientLevel, so the 1.21.11 kill(ServerLevel) cast threw and
+         // disconnected the client. Vanilla FishingHook discards here.
+         this.discard();
       }
    }
 
